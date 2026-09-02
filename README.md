@@ -206,8 +206,8 @@ come from the `Fonts` tab of the settings.
 
 | Menu item | Format |
 | --- | --- |
-| Open CSV | Reads a comma separated file into the table. |
-| Save CSV | Writes the table into a comma separated file. |
+| Open data file (CSV, TXT, DAT) | Reads a text data file into the table; the separator is recognised automatically. |
+| Save data file | Writes the table into a text data file. |
 | Open graph (.aplt) | Loads a complete APlot document: the data and the diagrams. |
 | Save graph (.aplt) | Saves the data together with every diagram that is open. |
 
@@ -229,8 +229,34 @@ for each open diagram:
 Loading an `.aplt` file replaces the table and closes the diagrams that are
 open, then reopens the saved ones exactly as they were saved.
 
-The separator and the decimal sign used for CSV files can be changed in the
-settings.
+### Data files with any separator
+
+`Open data file` reads `.csv`, `.txt`, `.dat`, `.tsv` and `.asc` files (and
+anything else, with `All files`).  Nothing has to be prepared by hand:
+
+* the **separator** is recognised from the first lines of the file, in this
+  order: tabulator, semicolon, `|`, comma, then one or more spaces.  It is
+  accepted when it gives the same number of values in most of the lines, so
+  a `;` separated file lands in as many columns as it has values;
+* the **decimal sign** is recognised too: numbers written as `1,5` (with no
+  dotted numbers in the file) are read as decimal comma, and then the comma
+  is never taken for a separator;
+* **comment and header lines** at the top starting with `#`, `%`, `!` or
+  `//` are skipped, and empty lines are ignored everywhere;
+* the **column names** come from the first line when it is not numeric;
+  otherwise the columns are named `X`, `Y1`, `Y2`, ... automatically;
+* **UTF-8** and Latin-1 files are both read, and a line with a wrong number
+  of values is left out with a warning instead of stopping the reading.
+
+The title bar of the spreadsheet window shows the file name together with
+what was recognised, for example
+`APlot - Meas057_Acquisition_Spectrum.csv  [semicolon separated, decimal
+'.', 1296 rows x 3 columns]`.
+
+If a file is unusual, the recognition can be overridden in the settings:
+`Field separator` accepts `auto`, `comma`, `semicolon`, `tab`, `space` or
+`|`, and `Decimal sign` accepts `auto`, `.` or `,`.  These settings are also
+used when a data file is written.
 
 
 ## 4. Settings
@@ -251,7 +277,7 @@ built-in values.
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, and the default size and origin of the axes (as fractions of the window). |
-| CSV files | Field separator and decimal sign. |
+| Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
 
 Window sizes and plot defaults are used by windows opened after saving;
 diagrams that are already open keep their settings.
@@ -259,7 +285,7 @@ diagrams that are already open keep their settings.
 
 ## 5. Typical workflow
 
-1. `Random data`, `Open CSV` or type the numbers by hand.
+1. `Random data`, `Open data file` or type the numbers by hand.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
 3. `Plot`.

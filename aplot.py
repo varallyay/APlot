@@ -24,7 +24,9 @@ Spreadsheet window
 
 Files
 -----
-* CSV for plain data
+* csv / txt / dat / tsv text data files with any separator (tabulator,
+  semicolon, comma, spaces) and both decimal signs - recognised
+  automatically
 * .aplt (JSON) for the data together with every property of every open
   diagram - File > Save graph / Open graph
 * Help > Documentation shows README.md (the same text is in this file)
@@ -65,6 +67,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sys
 import tkinter as tk
 from pathlib import Path
@@ -219,6 +222,153 @@ def to_int(text, default=0):
 
 
 # --------------------------------------------------------------------------
+# reading data files (csv / txt / dat with any separator)
+# --------------------------------------------------------------------------
+
+WHITESPACE_SEP = r"\s+"
+COMMENT_MARKERS = ("#", "%", "!", "//")
+DATA_PATTERNS = [("Data files", "*.csv *.txt *.dat *.tsv *.asc"),
+                 ("CSV files", "*.csv"), ("Text files", "*.txt"),
+                 ("Data files", "*.dat"), ("All files", "*.*")]
+
+# what the "separator" setting may contain
+SEPARATOR_WORDS = {
+    "auto": None, "": None,
+    ",": ",", "comma": ",",
+    ";": ";", "semicolon": ";",
+    "\t": "\t", "\\t": "\t", "tab": "\t",
+    " ": WHITESPACE_SEP, "space": WHITESPACE_SEP, "whitespace": WHITESPACE_SEP,
+    "|": "|", "pipe": "|",
+}
+SEPARATOR_LABELS = {",": "comma", ";": "semicolon", "\t": "tab",
+                    WHITESPACE_SEP: "space", "|": "pipe"}
+
+
+def separator_from_setting(value):
+    """The separator a setting asks for, or None for automatic detection."""
+    key = str(value if value is not None else "").strip().lower()
+    if key in SEPARATOR_WORDS:
+        return SEPARATOR_WORDS[key]
+    return str(value)[0] if str(value) else None
+
+
+def split_fields(line, separator):
+    return line.split() if separator == WHITESPACE_SEP else line.split(separator)
+
+
+def looks_numeric(field, decimal="."):
+    text = str(field).strip().replace(" ", "")
+    if decimal == ",":
+        text = text.replace(".", "").replace(",", ".")
+    if text == "" or text.lower() in ("nan", "inf", "-inf"):
+        return True
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def read_sample(path, limit=60):
+    """Leading lines of a file: (data lines, lines to skip, encoding, comment)."""
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            with open(path, "r", encoding=encoding) as handle:
+                lines, skip, marker, counting = [], 0, None, True
+                for raw in handle:
+                    text = raw.strip()
+                    is_comment = text.startswith(COMMENT_MARKERS)
+                    if not text or is_comment:
+                        if counting:
+                            skip += 1
+                        if is_comment and marker is None:
+                            marker = text[:2] if text.startswith("//") else text[0]
+                        continue
+                    counting = False
+                    lines.append(text)
+                    if len(lines) >= limit:
+                        break
+                return lines, skip, encoding, marker
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    return [], 0, "latin-1", None
+
+
+def _first_consistent(lines, order, agreement=0.6):
+    """First separator of `order` that gives the same field count everywhere."""
+    for separator in order:
+        counts = [len(split_fields(line, separator)) for line in lines]
+        if not counts:
+            continue
+        modal = max(set(counts), key=counts.count)
+        if modal >= 2 and counts.count(modal) >= agreement * len(counts):
+            return separator
+    return None
+
+
+def detect_dialect(lines):
+    """Guess the separator and the decimal sign from a few data lines."""
+    text = "\n".join(lines)
+    # "1,5" style numbers with no dotted numbers anywhere: decimal comma
+    comma_decimal = (bool(re.search(r"\d,\d", text))
+                     and not re.search(r"\d\.\d", text))
+    order = ["\t", ";", "|", ",", WHITESPACE_SEP]
+    separator = _first_consistent(
+        lines, [s for s in order if not (comma_decimal and s == ",")])
+    if separator is None:                 # comma after all (e.g. "1,2,3")
+        separator = _first_consistent(lines, order)
+        comma_decimal = comma_decimal and separator != ","
+    if separator is None:                 # a single column
+        separator, comma_decimal = ",", False
+    return separator, ("," if comma_decimal and separator != "," else ".")
+
+
+def read_table(path, separator="auto", decimal="auto"):
+    """Read a csv/txt/dat file into a DataFrame; returns (frame, info)."""
+    lines, skip, encoding, marker = read_sample(path)
+    if not lines:
+        raise ValueError("the file contains no data")
+
+    chosen = separator_from_setting(separator)
+    wanted = str(decimal if decimal is not None else "").strip().lower()
+    dec = None if wanted in ("auto", "") else wanted[0]
+    if chosen is None or dec is None:
+        auto_separator, auto_decimal = detect_dialect(lines)
+        chosen = chosen if chosen is not None else auto_separator
+        dec = dec if dec is not None else auto_decimal
+
+    fields = split_fields(lines[0], chosen)
+    has_header = not all(looks_numeric(field, dec) for field in fields)
+
+    options = {"sep": chosen, "decimal": dec, "encoding": encoding,
+               "skiprows": skip, "skip_blank_lines": True,
+               "header": 0 if has_header else None}
+    if chosen == WHITESPACE_SEP:
+        options["engine"] = "python"
+    if marker and len(marker) == 1 and marker != chosen:
+        options["comment"] = marker
+
+    try:
+        frame = pd.read_csv(path, **options)
+        skipped = False
+    except Exception:                       # ragged lines: keep the good ones
+        frame = pd.read_csv(path, on_bad_lines="skip", engine="python",
+                            **{k: v for k, v in options.items() if k != "engine"})
+        skipped = True
+
+    frame = frame.dropna(axis="columns", how="all")    # trailing separators
+    if not has_header:
+        frame.columns = (["X"] + [f"Y{i}" for i in range(1, len(frame.columns))])
+    else:
+        frame.columns = [str(name).strip() for name in frame.columns]
+
+    info = {"separator": SEPARATOR_LABELS.get(chosen, chosen), "decimal": dec,
+            "header": has_header, "skipped_lines": skip, "bad_lines": skipped,
+            "rows": len(frame), "columns": len(frame.columns)}
+    return frame, info
+
+
+# --------------------------------------------------------------------------
 # persistent configuration
 # --------------------------------------------------------------------------
 
@@ -255,12 +405,12 @@ DEFAULTS = {
     "frame": {
         "style": "No frame (X and Y only) (default)", "width": 1.8,
         "color": "#000000",
-        "major_tick_length": 4.5, "minor_tick_length": 3.0,
+        "major_tick_length": 5.0, "minor_tick_length": 3.0,
         "left": DEFAULT_POSITION[0], "bottom": DEFAULT_POSITION[1],
         "x_length": DEFAULT_POSITION[2], "y_length": DEFAULT_POSITION[3],
     },
     "csv": {
-        "separator": ",", "decimal": ".",
+        "separator": "auto", "decimal": "auto",
     },
 }
 
@@ -323,9 +473,9 @@ SETTINGS_SPEC = [
         ("left", "Y axis distance from the left", "float"),
         ("bottom", "X axis distance from the bottom", "float"),
     ]),
-    ("csv", "CSV files", [
-        ("separator", "Field separator", "text"),
-        ("decimal", "Decimal sign", "text"),
+    ("csv", "Data files", [
+        ("separator", "Field separator (auto, comma, semicolon, tab, space)", "text"),
+        ("decimal", "Decimal sign (auto, . or ,)", "text"),
     ]),
 ]
 
@@ -2452,8 +2602,8 @@ come from the `Fonts` tab of the settings.
 
 | Menu item | Format |
 | --- | --- |
-| Open CSV | Reads a comma separated file into the table. |
-| Save CSV | Writes the table into a comma separated file. |
+| Open data file (CSV, TXT, DAT) | Reads a text data file into the table; the separator is recognised automatically. |
+| Save data file | Writes the table into a text data file. |
 | Open graph (.aplt) | Loads a complete APlot document: the data and the diagrams. |
 | Save graph (.aplt) | Saves the data together with every diagram that is open. |
 
@@ -2475,8 +2625,34 @@ for each open diagram:
 Loading an `.aplt` file replaces the table and closes the diagrams that are
 open, then reopens the saved ones exactly as they were saved.
 
-The separator and the decimal sign used for CSV files can be changed in the
-settings.
+### Data files with any separator
+
+`Open data file` reads `.csv`, `.txt`, `.dat`, `.tsv` and `.asc` files (and
+anything else, with `All files`).  Nothing has to be prepared by hand:
+
+* the **separator** is recognised from the first lines of the file, in this
+  order: tabulator, semicolon, `|`, comma, then one or more spaces.  It is
+  accepted when it gives the same number of values in most of the lines, so
+  a `;` separated file lands in as many columns as it has values;
+* the **decimal sign** is recognised too: numbers written as `1,5` (with no
+  dotted numbers in the file) are read as decimal comma, and then the comma
+  is never taken for a separator;
+* **comment and header lines** at the top starting with `#`, `%`, `!` or
+  `//` are skipped, and empty lines are ignored everywhere;
+* the **column names** come from the first line when it is not numeric;
+  otherwise the columns are named `X`, `Y1`, `Y2`, ... automatically;
+* **UTF-8** and Latin-1 files are both read, and a line with a wrong number
+  of values is left out with a warning instead of stopping the reading.
+
+The title bar of the spreadsheet window shows the file name together with
+what was recognised, for example
+`APlot - Meas057_Acquisition_Spectrum.csv  [semicolon separated, decimal
+'.', 1296 rows x 3 columns]`.
+
+If a file is unusual, the recognition can be overridden in the settings:
+`Field separator` accepts `auto`, `comma`, `semicolon`, `tab`, `space` or
+`|`, and `Decimal sign` accepts `auto`, `.` or `,`.  These settings are also
+used when a data file is written.
 
 
 ## 4. Settings
@@ -2497,7 +2673,7 @@ built-in values.
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, and the default size and origin of the axes (as fractions of the window). |
-| CSV files | Field separator and decimal sign. |
+| Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
 
 Window sizes and plot defaults are used by windows opened after saving;
 diagrams that are already open keep their settings.
@@ -2505,7 +2681,7 @@ diagrams that are already open keep their settings.
 
 ## 5. Typical workflow
 
-1. `Random data`, `Open CSV` or type the numbers by hand.
+1. `Random data`, `Open data file` or type the numbers by hand.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
 3. `Plot`.
@@ -2658,8 +2834,9 @@ class App:
             menubar.add_cascade(label=APP_NAME, menu=app_menu)
 
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Open CSV", command=self.load_csv)
-        file_menu.add_command(label="Save CSV", command=self.save_csv)
+        file_menu.add_command(label="Open data file (CSV, TXT, DAT)",
+                              command=self.load_csv)
+        file_menu.add_command(label="Save data file", command=self.save_csv)
         file_menu.add_separator()
         file_menu.add_command(label=f"Open graph ({PROJECT_SUFFIX})",
                               command=self.load_project)
@@ -2738,30 +2915,57 @@ class App:
         return name
 
     # -- file I/O ----------------------------------------------------------
-    def load_csv(self):
-        path = filedialog.askopenfilename(filetypes=[("CSV file", "*.csv")])
+    def load_csv(self, path=None):
+        """Open a csv / txt / dat file; the separator is detected by default."""
+        if path is None:
+            path = filedialog.askopenfilename(filetypes=DATA_PATTERNS)
         if not path:
-            return
+            return None
         try:
-            frame = pd.read_csv(path,
-                                sep=self.settings.get("csv", "separator"),
-                                decimal=self.settings.get("csv", "decimal"))
-            self.table.set_dataframe(frame)
+            frame, info = read_table(path,
+                                     separator=self.settings.get("csv", "separator"),
+                                     decimal=self.settings.get("csv", "decimal"))
         except Exception as error:
             messagebox.showerror("Error", f"Could not read the file: {error}")
+            return None
+        if frame.empty or not len(frame.columns):
+            messagebox.showerror("Error", "The file contains no usable data.")
+            return None
+
+        self.table.set_dataframe(frame)
+        self.set_file_title(path, info)
+        if info["bad_lines"]:
+            messagebox.showwarning(
+                "Data file",
+                "Some lines had a different number of values and were skipped.")
+        return info
+
+    def set_file_title(self, path, info=None):
+        """Show the file name (and what was detected) in the window title."""
+        name = Path(path).name
+        if info:
+            self.root.title(f"{APP_NAME} - {name}  "
+                            f"[{info['separator']} separated, "
+                            f"decimal '{info['decimal']}', "
+                            f"{info['rows']} rows x {info['columns']} columns]")
+        else:
+            self.root.title(f"{APP_NAME} - {name}")
 
     def save_csv(self):
         if self.df.empty:
             messagebox.showinfo("Information", "There is no data to save.")
             return
         path = filedialog.asksaveasfilename(defaultextension=".csv",
-                                            filetypes=[("CSV files", "*.csv")])
+                                            filetypes=DATA_PATTERNS)
         if not path:
             return
+        separator = separator_from_setting(self.settings.get("csv", "separator"))
+        if separator in (None, WHITESPACE_SEP):
+            separator = "\t" if str(path).lower().endswith((".txt", ".dat")) else ","
+        decimal = str(self.settings.get("csv", "decimal")).strip().lower()
+        decimal = "." if decimal in ("auto", "") else decimal[0]
         try:
-            self.df.to_csv(path, index=False,
-                           sep=self.settings.get("csv", "separator"),
-                           decimal=self.settings.get("csv", "decimal"))
+            self.df.to_csv(path, index=False, sep=separator, decimal=decimal)
             messagebox.showinfo("Successful", "The file has been saved.")
         except Exception as error:
             messagebox.showerror("Error", f"Could not save the file: {error}")
