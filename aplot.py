@@ -250,7 +250,7 @@ DEFAULTS = {
     },
     "grid": {
         "major": False, "minor": False, "color": "#b0b0b0",
-        "style": "Dotted", "width": 0.8, "minor_ticks": 0,
+        "style": "Dotted", "width": 0.8, "minor_ticks": 1,
     },
     "frame": {
         "style": "No frame (X and Y only) (default)", "width": 1.8,
