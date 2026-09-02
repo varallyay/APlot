@@ -33,7 +33,7 @@ Files
 
 Plot window
 -----------
-* click a curve            -> line and marker properties separately
+* click a curve            -> line, marker and fill properties separately
                               (marker "None" available), legend follows
 * click an axis label/title -> its text, font size and font colour
 * every curve has its own legend box: drag its frame to move it, click its
@@ -79,7 +79,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from matplotlib.colors import to_hex
+from matplotlib.colors import to_hex, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.legend import Legend
 from matplotlib.lines import Line2D
@@ -107,6 +107,17 @@ LINE_STYLES = [
 ]
 
 GRID_STYLES = [("Solid", "-"), ("Dashed", "--"), ("Dash-dot", "-."), ("Dotted", ":")]
+
+HATCH_PATTERNS = [
+    ("None (plain colour)", ""), ("Diagonal /", "/"), ("Back diagonal \\", "\\"),
+    ("Vertical |", "|"), ("Horizontal -", "-"), ("Crossed +", "+"),
+    ("Diagonal cross x", "x"), ("Small circles o", "o"),
+    ("Large circles O", "O"), ("Dots .", "."), ("Stars *", "*"),
+    ("Dense diagonal //", "//"), ("Dense back diagonal \\\\", "\\\\"),
+    ("Dense vertical ||", "||"), ("Dense horizontal --", "--"),
+]
+
+FILL_BASES = [("Zero line", "zero"), ("Bottom of the axes", "bottom")]
 
 FRAME_STYLES = [
     ("No frame (X and Y only) (default)", "none"),
@@ -392,6 +403,11 @@ DEFAULTS = {
         "marker": "Circle", "marker_size": 8.0,
         "marker_edge_width": 1.0, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
+        "legend_frame": False, "legend_edge_color": "#000000",
+        "legend_background": "#ffffff", "legend_transparent": True,
+        "fill_under": False, "fill_color": "#1f77b4", "fill_alpha": 0.35,
+        "fill_pattern": "None (plain colour)", "fill_base": "Zero line",
+        "fill_follows_line": True,
     },
     "fonts": {
         "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
@@ -405,7 +421,9 @@ DEFAULTS = {
     "frame": {
         "style": "No frame (X and Y only) (default)", "width": 1.8,
         "color": "#000000",
-        "major_tick_length": 5.0, "minor_tick_length": 3.0,
+        "major_tick_length": 8.0, "minor_tick_length": 4.0,
+        "background": "#ffffff", "transparent_background": True,
+        "figure_background": "#ffffff",
         "left": DEFAULT_POSITION[0], "bottom": DEFAULT_POSITION[1],
         "x_length": DEFAULT_POSITION[2], "y_length": DEFAULT_POSITION[3],
     },
@@ -443,6 +461,16 @@ SETTINGS_SPEC = [
         ("hollow_markers", "Hollow markers (no fill)", "bool"),
         ("legend_visible", "Show legend", "bool"),
         ("legend_location", "Legend position", "choice", LEGEND_LOCATIONS),
+        ("legend_frame", "Legend box frame", "bool"),
+        ("legend_edge_color", "Legend frame colour", "color"),
+        ("legend_background", "Legend background", "color"),
+        ("legend_transparent", "Transparent legend background", "bool"),
+        ("fill_under", "Fill under the curves", "bool"),
+        ("fill_follows_line", "Fill colour follows the curve", "bool"),
+        ("fill_color", "Fill colour (when it does not)", "color"),
+        ("fill_alpha", "Fill opacity (0-1)", "float"),
+        ("fill_pattern", "Fill pattern", "choice", names(HATCH_PATTERNS)),
+        ("fill_base", "Fill down to", "choice", names(FILL_BASES)),
     ]),
     ("fonts", "Fonts", [
         ("title", "Plot title size", "int"),
@@ -468,6 +496,9 @@ SETTINGS_SPEC = [
         ("color", "Frame colour", "color"),
         ("major_tick_length", "Major tick length", "float"),
         ("minor_tick_length", "Minor tick length", "float"),
+        ("background", "Plot area background", "color"),
+        ("transparent_background", "Transparent plot area", "bool"),
+        ("figure_background", "Window background", "color"),
         ("x_length", "X axis length (fraction of window)", "float"),
         ("y_length", "Y axis length (fraction of window)", "float"),
         ("left", "Y axis distance from the left", "float"),
@@ -775,11 +806,14 @@ class SeriesStyleDialog(ToolDialog):
     """Line and marker properties of one curve; changes are applied live."""
 
     def __init__(self, master, line: Line2D, on_change, on_close=None,
-                 legend_size=None, legend_color="#000000", on_legend_style=None):
+                 legend_size=None, legend_color="#000000", on_legend_style=None,
+                 fill=None, on_fill=None):
         super().__init__(master, "Curve properties", on_close=on_close)
         self.line = line
         self.on_change = on_change
         self.on_legend_style = on_legend_style
+        self.on_fill = on_fill
+        self._fill = dict(fill or {})
         self.legend_size_var = tk.StringVar(
             value=str(int(legend_size if legend_size is not None else 10)))
         self._legend_color = safe_hex(legend_color, "#000000")
@@ -799,10 +833,20 @@ class SeriesStyleDialog(ToolDialog):
         self.hollow_var = tk.BooleanVar(
             value=isinstance(face, str) and face == "none")
 
+        self.fill_on_var = tk.BooleanVar(value=bool(self._fill.get("on")))
+        self.fill_follow_var = tk.BooleanVar(value=bool(self._fill.get("follow", True)))
+        self.fill_alpha_var = tk.StringVar(value=f"{self._fill.get('alpha', 0.35):g}")
+        self.fill_hatch_var = tk.StringVar(
+            value=name_of(HATCH_PATTERNS, self._fill.get("hatch", ""),
+                          names(HATCH_PATTERNS)[0]))
+        self.fill_base_var = tk.StringVar(
+            value=name_of(FILL_BASES, self._fill.get("base", "zero"), "Zero line"))
+
         line_color = safe_hex(line.get_color())
         self._build_legend_box()
         self._build_line_box(line_color)
         self._build_marker_box(line_color, face)
+        self._build_fill_box(line_color)
         self._build_buttons()
         self._loading = False
 
@@ -872,6 +916,35 @@ class SeriesStyleDialog(ToolDialog):
                                textvariable=self.mwidth_var, command=self._apply))
         self.mwidth_var.trace_add("write", self._apply)
 
+    def _build_fill_box(self, line_color):
+        box = ttk.LabelFrame(self.body, text="Fill under the curve", padding=8)
+        box.pack(fill="x", pady=(10, 0))
+
+        self.field(box, 0, "", ttk.Checkbutton(box, text="Fill the area",
+                                               variable=self.fill_on_var,
+                                               command=self._apply))
+        self.field(box, 1, "", ttk.Checkbutton(box, text="Same colour as the curve",
+                                               variable=self.fill_follow_var,
+                                               command=self._apply))
+        self.fill_color = ColorSwatch(box, self._fill.get("color", line_color),
+                                      command=lambda _c: self._apply())
+        self.field(box, 2, "Fill colour:", self.fill_color)
+        self.field(box, 3, "Opacity (0-1):",
+                   ttk.Spinbox(box, from_=0, to=1, increment=0.05, width=8,
+                               textvariable=self.fill_alpha_var, command=self._apply))
+        self.fill_alpha_var.trace_add("write", self._apply)
+
+        pattern = ttk.Combobox(box, textvariable=self.fill_hatch_var,
+                               state="readonly", values=names(HATCH_PATTERNS),
+                               width=22)
+        self.field(box, 4, "Pattern:", pattern)
+        pattern.bind("<<ComboboxSelected>>", self._apply)
+
+        base = ttk.Combobox(box, textvariable=self.fill_base_var, state="readonly",
+                            values=names(FILL_BASES), width=22)
+        self.field(box, 5, "Fill down to:", base)
+        base.bind("<<ComboboxSelected>>", self._apply)
+
     def _build_buttons(self):
         bar = ttk.Frame(self.body)
         bar.pack(fill="x", pady=(12, 0))
@@ -908,6 +981,15 @@ class SeriesStyleDialog(ToolDialog):
         if self.on_legend_style:
             self.on_legend_style(to_int(self.legend_size_var.get(), 10),
                                  self.legend_color.color)
+        if self.on_fill:
+            self.on_fill({
+                "on": self.fill_on_var.get(),
+                "follow": self.fill_follow_var.get(),
+                "color": self.fill_color.color,
+                "alpha": to_float(self.fill_alpha_var.get(), 0.35),
+                "hatch": code_of(HATCH_PATTERNS, self.fill_hatch_var.get(), ""),
+                "base": code_of(FILL_BASES, self.fill_base_var.get(), "zero"),
+            })
         self.on_change()
 
 
@@ -1041,6 +1123,8 @@ class FrameTab(ttk.Frame):
         self.width_var = tk.StringVar(value=f"{cfg['width']:g}")
         self.major_len_var = tk.StringVar(value=f"{cfg['major_tick_length']:g}")
         self.minor_len_var = tk.StringVar(value=f"{cfg['minor_tick_length']:g}")
+        background = cfg.get("background", "#ffffff")
+        self.transparent_var = tk.BooleanVar(value=background == "none")
         self.unit_var = tk.StringVar(value=SIZE_UNITS[0])
         self._unit = SIZE_UNITS[0]
 
@@ -1050,6 +1134,7 @@ class FrameTab(ttk.Frame):
         self.value_vars = {key: tk.StringVar() for key in self._fractions}
 
         self._build_frame_box(cfg["color"])
+        self._build_background_box(cfg)
         self._build_size_box()
         self._show_values()
 
@@ -1077,6 +1162,20 @@ class FrameTab(ttk.Frame):
                        "\"with ticks\" styles put ticks on all four sides.\n"
                        "Clicking any side of the frame opens this dialog.").grid(
             row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _build_background_box(self, cfg):
+        box = ttk.LabelFrame(self, text="Background", padding=8)
+        box.pack(fill="x", pady=(10, 0))
+        background = cfg.get("background", "#ffffff")
+        self.background = ColorSwatch(
+            box, "#ffffff" if background == "none" else background)
+        ToolDialog.field(box, 0, "Plot area:", self.background)
+        ToolDialog.field(box, 1, "",
+                         ttk.Checkbutton(box, text="Transparent plot area",
+                                         variable=self.transparent_var))
+        self.figure_background = ColorSwatch(
+            box, cfg.get("figure_background", "#ffffff"))
+        ToolDialog.field(box, 2, "Around the axes:", self.figure_background)
 
     def _build_size_box(self):
         box = ttk.LabelFrame(self, text="Size and origin of the axes", padding=8)
@@ -1143,6 +1242,9 @@ class FrameTab(ttk.Frame):
             "color": self.color.color,
             "major_tick_length": max(0.0, to_float(self.major_len_var.get(), 3.5)),
             "minor_tick_length": max(0.0, to_float(self.minor_len_var.get(), 2.0)),
+            "background": ("none" if self.transparent_var.get()
+                           else self.background.color),
+            "figure_background": self.figure_background.color,
             "left": self._fractions["left"], "bottom": self._fractions["bottom"],
             "x_length": self._fractions["x_length"],
             "y_length": self._fractions["y_length"],
@@ -1206,6 +1308,80 @@ class AxesDialog(ToolDialog):
     def _ok(self):
         if self.apply():
             self.close()
+
+
+class LegendDialog(ToolDialog):
+    """One legend box: text, font, surrounding box and background."""
+
+    def __init__(self, master, column, text, state, on_apply, on_close=None):
+        super().__init__(master, f"Legend of '{column}'", on_close=on_close)
+        self.on_apply = on_apply
+
+        self.text_var = tk.StringVar(value=text)
+        self.size_var = tk.StringVar(value=str(int(state.get("size", 10))))
+        edge = state.get("edge", "#000000")
+        face = state.get("face", "#ffffff")
+        self.frame_var = tk.BooleanVar(value=edge != "none")
+        self.transparent_var = tk.BooleanVar(value=face == "none")
+
+        box = ttk.LabelFrame(self.body, text="Text", padding=8)
+        box.pack(fill="x")
+        entry = self.field(box, 0, "Text:",
+                           ttk.Entry(box, textvariable=self.text_var, width=32))
+        self.field(box, 1, "Font size:",
+                   ttk.Spinbox(box, from_=4, to=72, increment=1, width=8,
+                               textvariable=self.size_var, command=self.apply))
+        self.color = ColorSwatch(box, state.get("color", "#000000"),
+                                 command=lambda _c: self.apply())
+        self.field(box, 2, "Font colour:", self.color)
+        ttk.Label(box, text="An empty text hides this legend box.",
+                  foreground="#666").grid(row=3, column=0, columnspan=2,
+                                          sticky="w", pady=(4, 0))
+
+        frame_box = ttk.LabelFrame(self.body, text="Surrounding box", padding=8)
+        frame_box.pack(fill="x", pady=(10, 0))
+        self.field(frame_box, 0, "",
+                   ttk.Checkbutton(frame_box, text="Frame around the box",
+                                   variable=self.frame_var, command=self.apply))
+        self.edge_color = ColorSwatch(frame_box, "#000000" if edge == "none" else edge,
+                                      command=lambda _c: self.apply())
+        self.field(frame_box, 1, "Frame colour:", self.edge_color)
+        self.face_color = ColorSwatch(frame_box,
+                                      "#ffffff" if face == "none" else face,
+                                      command=lambda _c: self.apply())
+        self.field(frame_box, 2, "Background colour:", self.face_color)
+        self.field(frame_box, 3, "",
+                   ttk.Checkbutton(frame_box, text="Transparent background",
+                                   variable=self.transparent_var,
+                                   command=self.apply))
+        ttk.Label(frame_box, text="Drag the frame of a box to move it.",
+                  foreground="#666").grid(row=4, column=0, columnspan=2,
+                                          sticky="w", pady=(4, 0))
+
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
+        ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+        ttk.Button(bar, text="OK", command=self._ok).pack(side="right", padx=(0, 6))
+        self.bind("<Return>", lambda _e: self.apply())
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+    def values(self):
+        return {
+            "text": self.text_var.get(),
+            "size": to_int(self.size_var.get(), 10),
+            "color": self.color.color,
+            "edge": self.edge_color.color if self.frame_var.get() else "none",
+            "face": "none" if self.transparent_var.get() else self.face_color.color,
+        }
+
+    def apply(self):
+        self.on_apply(self.values())
+
+    def _ok(self):
+        self.apply()
+        self.close()
 
 
 class TitleFontDialog(ToolDialog):
@@ -1574,9 +1750,29 @@ class DataTable(ttk.Frame):
                                 ("<Tab>", (0, 1)), ("<Shift-Tab>", (0, -1)),
                                 ("<ISO_Left_Tab>", (0, -1))):
             entry.bind(sequence, lambda _e, d=delta: self._move(*d))
+        # Left / Right walk inside the text and step to the neighbouring cell
+        # when the cursor is already at the end of it
+        entry.bind("<Left>", lambda e: self._arrow(e, 0, -1))
+        entry.bind("<Right>", lambda e: self._arrow(e, 0, 1))
+        for prefix in ("Control", "Command", "Alt"):
+            for key, delta in (("Left", (0, -1)), ("Right", (0, 1)),
+                               ("Up", (-1, 0)), ("Down", (1, 0))):
+                entry.bind(f"<{prefix}-{key}>", lambda _e, d=delta: self._move(*d))
         entry.bind("<Escape>", lambda _e: self._cancel_edit())
         entry.bind("<FocusOut>", lambda _e: self._commit_edit())
         self._bind_text_editing(entry)
+
+    def _arrow(self, event, d_row, d_col):
+        """Left/Right: move the text cursor, or jump to the neighbour cell."""
+        entry = event.widget
+        if entry.selection_present():
+            return None                     # let the selection collapse first
+        cursor = entry.index("insert")
+        if d_col < 0 and cursor > 0:
+            return None                     # still text to walk through
+        if d_col > 0 and cursor < len(entry.get()):
+            return None
+        return self._move(d_row, d_col)
 
     def _move(self, d_row, d_col):
         if not self._editor:
@@ -1661,7 +1857,9 @@ class PlotWindow(tk.Toplevel):
         self.series: dict = {}          # Y column name -> curve
         self.x_col = str(df.columns[0]) if len(df.columns) else ""
         self.legends: dict = {}         # Y column name -> its own legend box
-        self.legend_state: dict = {}    # Y column name -> {pos, loc, size}
+        self.legend_state: dict = {}    # Y column name -> {pos, loc, size, ...}
+        self.fills: dict = {}           # Y column name -> filled area
+        self.fill_state: dict = {}      # Y column name -> fill settings
         self._drag = None
         self._cursor = ""
         self._dialogs: dict = {}
@@ -1697,6 +1895,9 @@ class PlotWindow(tk.Toplevel):
             "color": safe_hex(frame["color"], "#000000"),
             "major_tick_length": float(frame["major_tick_length"]),
             "minor_tick_length": float(frame["minor_tick_length"]),
+            "background": ("none" if frame.get("transparent_background")
+                           else safe_hex(frame.get("background"), "#ffffff")),
+            "figure_background": safe_hex(frame.get("figure_background"), "#ffffff"),
             "left": float(frame["left"]), "bottom": float(frame["bottom"]),
             "x_length": float(frame["x_length"]),
             "y_length": float(frame["y_length"]),
@@ -1770,7 +1971,54 @@ class PlotWindow(tk.Toplevel):
         line.aplot_series = str(y_col)  # used to detect custom legend texts
         self.lines.append(line)
         self.series[y_col] = line
+        self.fill_state.setdefault(y_col, self.default_fill_state(plot_cfg))
+        self.refresh_fill(y_col)
         return line
+
+    # -- filled area under a curve -----------------------------------------
+    @staticmethod
+    def default_fill_state(plot_cfg):
+        return {
+            "on": bool(plot_cfg.get("fill_under", False)),
+            "follow": bool(plot_cfg.get("fill_follows_line", True)),
+            "color": safe_hex(plot_cfg.get("fill_color"), PALETTE_FALLBACK),
+            "alpha": float(plot_cfg.get("fill_alpha", 0.35)),
+            "hatch": code_of(HATCH_PATTERNS, plot_cfg.get("fill_pattern"), ""),
+            "base": code_of(FILL_BASES, plot_cfg.get("fill_base"), "zero"),
+        }
+
+    def refresh_fill(self, column):
+        """Draw (or remove) the filled area belonging to one curve."""
+        old = self.fills.pop(column, None)
+        if old is not None:
+            try:
+                old.remove()
+            except (ValueError, AttributeError):
+                pass
+        line = self.series.get(column)
+        cfg = self.fill_state.get(column)
+        if line is None or not cfg or not cfg.get("on"):
+            return None
+        x_data, y_data = line.get_data()
+        if len(x_data) == 0:
+            return None
+
+        color = line.get_color() if cfg.get("follow") else cfg["color"]
+        alpha = min(1.0, max(0.0, float(cfg.get("alpha", 0.35))))
+        hatch = cfg.get("hatch") or None
+        base = 0.0 if cfg.get("base", "zero") == "zero" else self.ax.get_ylim()[0]
+        fill = self.ax.fill_between(
+            x_data, y_data, base,
+            facecolor=to_rgba(color, alpha),
+            edgecolor=to_rgba(color, 1.0) if hatch else "none",
+            hatch=hatch, linewidth=0.0, label="_nolegend_",
+            zorder=line.get_zorder() - 0.5)
+        self.fills[column] = fill
+        return fill
+
+    def refresh_fills(self):
+        for column in list(self.series):
+            self.refresh_fill(column)
 
     def rename_series(self, old, new, is_x_column=False):
         """Follow a column rename in the spreadsheet.
@@ -1793,6 +2041,10 @@ class PlotWindow(tk.Toplevel):
                        for key, value in self.series.items()}
         self.legend_state = {(new if key == old else key): value
                              for key, value in self.legend_state.items()}
+        self.fill_state = {(new if key == old else key): value
+                           for key, value in self.fill_state.items()}
+        self.fills = {(new if key == old else key): value
+                      for key, value in self.fills.items()}
         if line.get_label() == getattr(line, "aplot_series", None):
             line.set_label(str(new))
         line.aplot_series = str(new)
@@ -1837,6 +2089,10 @@ class PlotWindow(tk.Toplevel):
             dialog = self._dialogs.pop(id(line), None)
             if dialog is not None and dialog.winfo_exists():
                 dialog.destroy()
+            fill = self.fills.pop(y_col, None)
+            if fill is not None:
+                fill.remove()
+            self.fill_state.pop(y_col, None)
             line.remove()
 
         auto_x = self.axis_cfg["x"]["auto"]
@@ -1844,6 +2100,7 @@ class PlotWindow(tk.Toplevel):
         if auto_x or auto_y:  # manual ranges are left untouched
             self.ax.relim()
             self.ax.autoscale_view(scalex=auto_x, scaley=auto_y)
+        self.refresh_fills()
         self.refresh_legend()
         self.draw()
         return True
@@ -1871,6 +2128,10 @@ class PlotWindow(tk.Toplevel):
                 "legend_pos": [float(state["pos"][0]), float(state["pos"][1])],
                 "legend_loc": state["loc"], "legend_size": int(state["size"]),
                 "legend_color": safe_hex(state.get("color", "#000000"), "#000000"),
+                "legend_edge": state.get("edge", "#000000"),
+                "legend_face": state.get("face", "#ffffff"),
+                "fill": dict(self.fill_state.get(y_col)
+                             or self.default_fill_state(self.settings.section("plot"))),
                 "auto_label": line.get_label() == getattr(line, "aplot_series", None),
                 "color": store_color(line.get_color()),
                 "linestyle": str(line.get_linestyle()),
@@ -1923,7 +2184,13 @@ class PlotWindow(tk.Toplevel):
                 "loc": entry.get("legend_loc", saved["loc"]),
                 "size": int(entry.get("legend_size", saved["size"])),
                 "color": entry.get("legend_color", saved["color"]),
+                "edge": entry.get("legend_edge", saved["edge"]),
+                "face": entry.get("legend_face", saved["face"]),
             }
+            fill = entry.get("fill")
+            if fill:
+                self.fill_state[column] = {
+                    **self.default_fill_state(self.settings.section("plot")), **fill}
             line.set_label(entry.get("label", line.get_label()))
             line.set_color(entry.get("color", line.get_color()))
             line.set_linestyle(entry.get("linestyle", line.get_linestyle()))
@@ -1960,6 +2227,7 @@ class PlotWindow(tk.Toplevel):
                 self.geometry(geometry)
             except tk.TclError:
                 pass
+        self.refresh_fills()
         self.refresh_legend()
         self.draw()
 
@@ -1994,9 +2262,15 @@ class PlotWindow(tk.Toplevel):
         """Start position of the index-th legend box, from the chosen corner."""
         x, y, loc = LEGEND_ANCHORS.get(self.legend_loc, LEGEND_ANCHORS["best"])
         direction = -1 if y >= 0.5 else 1
+        plot_cfg = self.settings.section("plot")
+        edge = ("none" if not plot_cfg.get("legend_frame", True)
+                else safe_hex(plot_cfg.get("legend_edge_color"), "#000000"))
+        face = ("none" if plot_cfg.get("legend_transparent") else
+                safe_hex(plot_cfg.get("legend_background"), "#ffffff"))
         return {"pos": (x, y + index * LEGEND_STACK_STEP * direction),
                 "loc": loc, "size": int(self.fonts["legend"]),
-                "color": safe_hex(self.fonts["legend_color"], "#000000")}
+                "color": safe_hex(self.fonts["legend_color"], "#000000"),
+                "edge": edge, "face": face}
 
     def reset_legend_positions(self):
         """Stack the legend boxes again from the configured corner."""
@@ -2026,9 +2300,15 @@ class PlotWindow(tk.Toplevel):
             legend = Legend(self.ax, [line], [label], loc=state["loc"],
                             bbox_to_anchor=state["pos"],
                             bbox_transform=self.ax.transAxes,
-                            prop={"size": state["size"]})
+                            prop={"size": state["size"]}, framealpha=1.0)
             for text in legend.get_texts():
                 text.set_color(state.get("color", "#000000"))
+            box = legend.get_frame()            # surrounding box of this legend
+            edge = state.get("edge", "#000000")
+            face = state.get("face", "#ffffff")
+            box.set_edgecolor("none" if edge == "none" else edge)
+            box.set_linewidth(0.0 if edge == "none" else 0.8)
+            box.set_facecolor("none" if face == "none" else face)
             self.ax.add_artist(legend)
             self.legends[y_col] = legend
             index += 1
@@ -2155,11 +2435,19 @@ class PlotWindow(tk.Toplevel):
         self.ax.tick_params(which="major", length=major_length)
         self.ax.tick_params(which="minor", length=minor_length)
 
+        background = cfg.get("background", "#ffffff")
+        figure_background = cfg.get("figure_background", "#ffffff")
+        self.ax.set_facecolor("none" if background == "none" else background)
+        self.fig.set_facecolor("none" if figure_background == "none"
+                               else figure_background)
+
         self.ax.set_position([cfg["left"], cfg["bottom"],
                               cfg["x_length"], cfg["y_length"]])
         self.frame_cfg = {"style": style, "width": width, "color": color,
                           "major_tick_length": major_length,
                           "minor_tick_length": minor_length,
+                          "background": background,
+                          "figure_background": figure_background,
                           "left": float(cfg["left"]), "bottom": float(cfg["bottom"]),
                           "x_length": float(cfg["x_length"]),
                           "y_length": float(cfg["y_length"])}
@@ -2229,6 +2517,10 @@ class PlotWindow(tk.Toplevel):
             "label_color": label_color, "tick_color": tick_color,
             "grid": dict(grid),
         }
+        if which == "y":   # fills reaching the bottom follow the new range
+            for column, fill_cfg in self.fill_state.items():
+                if fill_cfg.get("on") and fill_cfg.get("base") == "bottom":
+                    self.refresh_fill(column)
         if redraw:
             self.draw()
 
@@ -2318,13 +2610,20 @@ class PlotWindow(tk.Toplevel):
                 self.legend_state[column]["size"] = size
                 self.legend_state[column]["color"] = color
 
+        def set_fill(values):
+            if column is not None:
+                self.fill_state[column] = values
+                self.refresh_fill(column)
+
         return self._show_dialog(id(line), lambda: SeriesStyleDialog(
             self, line,
             on_change=lambda: (self.refresh_legend(), self.draw()),
             on_close=lambda _d: self._dialogs.pop(id(line), None),
             legend_size=state.get("size", self.fonts["legend"]),
             legend_color=state.get("color", self.fonts["legend_color"]),
-            on_legend_style=set_legend_style))
+            on_legend_style=set_legend_style,
+            fill=self.fill_state.get(column),
+            on_fill=set_fill))
 
     def open_axes_dialog(self, which="x"):
         existing = self._dialogs.get("axes")
@@ -2373,19 +2672,15 @@ class PlotWindow(tk.Toplevel):
             return None
         state = self.legend_state.setdefault(column, self.default_legend_state(0))
 
-        def apply(text, size, color):
-            text = text.strip()
+        def apply(values):
+            text = values.pop("text", "").strip()
             line.set_label(text if text else "_nolegend_")
-            state["size"] = size
-            state["color"] = color
+            state.update(values)
             self.refresh_legend()
             self.draw()
 
-        return self._show_dialog(f"legend-{column}", lambda: TextStyleDialog(
-            self, f"Legend of '{column}'", line.get_label(), state["size"], apply,
-            color=state.get("color", "#000000"),
-            hint="An empty text hides this legend box.\n"
-                 "Drag the frame of a box to move it.",
+        return self._show_dialog(f"legend-{column}", lambda: LegendDialog(
+            self, column, line.get_label(), state, apply,
             on_close=lambda _d: self._dialogs.pop(f"legend-{column}", None)))
 
 
@@ -2441,7 +2736,11 @@ separate curve.
   wraps to the beginning of the next one.
 * Leaving the last row appends a new row automatically, so the table grows
   as long as you keep typing.  This can be switched off in the settings.
-* `Left` and `Right` move the text cursor inside the cell.
+* `Left` and `Right` move the text cursor inside the cell, and step to the
+  neighbouring cell once the cursor has reached the end of the text (at the
+  end of a row they wrap to the next one, exactly like `Tab`).
+* `Ctrl`, `Cmd` or `Alt` together with any arrow key always jumps to the
+  neighbouring cell, whatever the text cursor is doing.
 * `Esc` cancels the edit and keeps the previous value.
 * Text can be selected with the mouse, with `Shift+Left/Right` and with
   `Shift+Up/Down` (to the beginning / end of the cell).  `Ctrl+A` (`Cmd+A`
@@ -2488,8 +2787,10 @@ independently.
 * Grab a box anywhere on its frame - that is, next to the sample line, not
   on the text - and drag it to a new place.  The pointer turns into a move
   cross over the frame and into a text cursor over the text.
-* Click the text of a box to change the text, the font size and the font
-  colour of that box alone.  An empty text hides the box.
+* Click the text of a box to open its own dialog: the text, the font size
+  and the font colour, the **frame** around the box (its colour, or no
+  frame at all) and the **background** (its colour, or fully transparent).
+  An empty text hides the box.
 * The boxes keep their position when the data is updated, when the curve
   style changes and when a column is renamed, and they are stored in
   `.aplt` files.
@@ -2504,6 +2805,12 @@ independently.
 * **Line**: style (solid, dashed, dash-dot, dotted, none), width, colour.
 * **Marker**: style (13 shapes plus "None"), size, fill colour, "Hollow"
   (unfilled marker), edge colour, edge width.
+* **Fill under the curve**: fills the area between the curve and the zero
+  line (or the bottom of the axes).  The fill takes the colour of the curve
+  or an own colour, has an adjustable opacity, and can carry a **pattern**
+  (diagonal, vertical, horizontal, crossed, circles, dots, stars and their
+  dense variants).  The pattern is drawn in the full colour over the
+  semi-transparent area, so both stay visible.
 * **Marker colour = line colour** copies the line colour into both marker
   colours.
 
@@ -2545,6 +2852,13 @@ The third tab of the axes dialog, also reachable with
   the whole frame stays consistent.
 * **Major tick length** and **Minor tick length** in points.  Zero hides
   that kind of tick mark.
+
+**Background**
+
+* **Plot area**: the colour behind the curves, or **Transparent plot area**
+  to let the colour around the axes show through (a transparent plot area
+  is also saved transparently into a PNG).
+* **Around the axes**: the colour of the rest of the window.
 
 Clicking any side of the frame on the diagram (the X axis line, the Y axis
 line, or the top and right sides when they are drawn) opens this dialog;
@@ -2611,15 +2925,17 @@ An `.aplt` file is a readable JSON document.  Besides the table it stores,
 for each open diagram:
 
 * the curves with their colour, line style and width, marker type, size,
-  fill and edge colour, edge width, visibility, legend text, and the
-  position, corner, font size and font colour of their own legend box,
+  fill and edge colour, edge width, visibility, legend text, the position,
+  corner, font, frame and background of their own legend box, and the
+  settings of the filled area under the curve,
 * the title with its font size and colour, and the visibility, starting
   corner, default font size and colour of the legend boxes,
 * both axes: label, the size and colour of the label and of the numbers,
   automatic or fixed range, step, number of minor ticks, and the grid
   settings of the axis,
-* the frame: style, thickness, colour, major and minor tick length, and the
-  size and origin of the axes inside the window,
+* the frame: style, thickness, colour, major and minor tick length, the
+  background of the plot area and of the window, and the size and origin of
+  the axes inside the window,
 * the figure size, resolution and the window geometry.
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
@@ -2669,10 +2985,10 @@ built-in values.
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
-| Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility and starting corner. |
+| Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
-| Frame | Default frame style, thickness, colour, tick lengths, and the default size and origin of the axes (as fractions of the window). |
+| Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
 | Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
 
 Window sizes and plot defaults are used by windows opened after saving;

@@ -45,7 +45,11 @@ separate curve.
   wraps to the beginning of the next one.
 * Leaving the last row appends a new row automatically, so the table grows
   as long as you keep typing.  This can be switched off in the settings.
-* `Left` and `Right` move the text cursor inside the cell.
+* `Left` and `Right` move the text cursor inside the cell, and step to the
+  neighbouring cell once the cursor has reached the end of the text (at the
+  end of a row they wrap to the next one, exactly like `Tab`).
+* `Ctrl`, `Cmd` or `Alt` together with any arrow key always jumps to the
+  neighbouring cell, whatever the text cursor is doing.
 * `Esc` cancels the edit and keeps the previous value.
 * Text can be selected with the mouse, with `Shift+Left/Right` and with
   `Shift+Up/Down` (to the beginning / end of the cell).  `Ctrl+A` (`Cmd+A`
@@ -92,8 +96,10 @@ independently.
 * Grab a box anywhere on its frame - that is, next to the sample line, not
   on the text - and drag it to a new place.  The pointer turns into a move
   cross over the frame and into a text cursor over the text.
-* Click the text of a box to change the text, the font size and the font
-  colour of that box alone.  An empty text hides the box.
+* Click the text of a box to open its own dialog: the text, the font size
+  and the font colour, the **frame** around the box (its colour, or no
+  frame at all) and the **background** (its colour, or fully transparent).
+  An empty text hides the box.
 * The boxes keep their position when the data is updated, when the curve
   style changes and when a column is renamed, and they are stored in
   `.aplt` files.
@@ -108,6 +114,12 @@ independently.
 * **Line**: style (solid, dashed, dash-dot, dotted, none), width, colour.
 * **Marker**: style (13 shapes plus "None"), size, fill colour, "Hollow"
   (unfilled marker), edge colour, edge width.
+* **Fill under the curve**: fills the area between the curve and the zero
+  line (or the bottom of the axes).  The fill takes the colour of the curve
+  or an own colour, has an adjustable opacity, and can carry a **pattern**
+  (diagonal, vertical, horizontal, crossed, circles, dots, stars and their
+  dense variants).  The pattern is drawn in the full colour over the
+  semi-transparent area, so both stay visible.
 * **Marker colour = line colour** copies the line colour into both marker
   colours.
 
@@ -149,6 +161,13 @@ The third tab of the axes dialog, also reachable with
   the whole frame stays consistent.
 * **Major tick length** and **Minor tick length** in points.  Zero hides
   that kind of tick mark.
+
+**Background**
+
+* **Plot area**: the colour behind the curves, or **Transparent plot area**
+  to let the colour around the axes show through (a transparent plot area
+  is also saved transparently into a PNG).
+* **Around the axes**: the colour of the rest of the window.
 
 Clicking any side of the frame on the diagram (the X axis line, the Y axis
 line, or the top and right sides when they are drawn) opens this dialog;
@@ -215,15 +234,17 @@ An `.aplt` file is a readable JSON document.  Besides the table it stores,
 for each open diagram:
 
 * the curves with their colour, line style and width, marker type, size,
-  fill and edge colour, edge width, visibility, legend text, and the
-  position, corner, font size and font colour of their own legend box,
+  fill and edge colour, edge width, visibility, legend text, the position,
+  corner, font, frame and background of their own legend box, and the
+  settings of the filled area under the curve,
 * the title with its font size and colour, and the visibility, starting
   corner, default font size and colour of the legend boxes,
 * both axes: label, the size and colour of the label and of the numbers,
   automatic or fixed range, step, number of minor ticks, and the grid
   settings of the axis,
-* the frame: style, thickness, colour, major and minor tick length, and the
-  size and origin of the axes inside the window,
+* the frame: style, thickness, colour, major and minor tick length, the
+  background of the plot area and of the window, and the size and origin of
+  the axes inside the window,
 * the figure size, resolution and the window geometry.
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
@@ -273,10 +294,10 @@ built-in values.
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
-| Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility and starting corner. |
+| Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
-| Frame | Default frame style, thickness, colour, tick lengths, and the default size and origin of the axes (as fractions of the window). |
+| Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
 | Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
 
 Window sizes and plot defaults are used by windows opened after saving;
