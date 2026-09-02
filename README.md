@@ -10,6 +10,14 @@ Start it with:
     python3 aplot.py
 
 
+## 0. The name
+
+APlot may mean AlphaPlot or AdvancedPlot or AgilePlot or ArticulatePlot
+and maybe some other word composition can be looked for.  This software
+is an easy to use start (alpha) to create good looking (articulate)
+scientific (advanced) plots quickly (agile).
+
+
 ## 1. The spreadsheet window
 
 The main window holds the data table.  The first column is always the
@@ -67,12 +75,13 @@ Every curve, label and axis reacts to the mouse.
 | Action | Result |
 | --- | --- |
 | Click a curve | Curve properties: line and marker settings separately. |
-| Click the title | Its text and its font size. |
-| Click an axis label | Its text and its font size. |
-| Click the text of a legend box | Its text and its font size (an empty text hides that box). |
+| Click the title | Its text, font size and font colour. |
+| Click an axis label | Its text, font size and font colour. |
+| Click the text of a legend box | Its text, font size and font colour (an empty text hides that box). |
 | Drag the frame of a legend box | Moves that legend box anywhere on the diagram. |
+| Click the frame (any axis line) | Frame and origin settings. |
 | Double-click beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
-| Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing the window. |
+| Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar: pan, zoom, and saving the figure as an image. |
 
 ### Legend boxes
@@ -83,8 +92,8 @@ independently.
 * Grab a box anywhere on its frame - that is, next to the sample line, not
   on the text - and drag it to a new place.  The pointer turns into a move
   cross over the frame and into a text cursor over the text.
-* Click the text of a box to change the text and the font size of that box
-  alone.  An empty text hides the box.
+* Click the text of a box to change the text, the font size and the font
+  colour of that box alone.  An empty text hides the box.
 * The boxes keep their position when the data is updated, when the curve
   style changes and when a column is renamed, and they are stored in
   `.aplt` files.
@@ -94,8 +103,8 @@ independently.
 
 ### Curve properties
 
-* **Legend**: the text of this curve's legend box and its font size.  An
-  empty text removes the box.
+* **Legend**: the text of this curve's legend box with its font size and
+  font colour.  An empty text removes the box.
 * **Line**: style (solid, dashed, dash-dot, dotted, none), width, colour.
 * **Marker**: style (13 shapes plus "None"), size, fill colour, "Hollow"
   (unfilled marker), edge colour, edge width.
@@ -110,8 +119,10 @@ perfectly possible.  The legend always mirrors what the curve looks like.
 One window with an **X axis**, a **Y axis** and a **Frame and origin** tab.
 The two axis tabs have:
 
-* **Axis label and fonts**: the label text, the font size of the label and
-  the font size of the numbers (ticks).
+* **Axis label and fonts**: the label text, the font size and font colour
+  of the label, and the font size and font colour of the numbers (ticks).
+  The colour of the tick *marks* is not set here - it belongs to the frame,
+  so a black frame can carry grey numbers.
 * **Range and ticks**: automatic range, or an explicit `From`, `To` and
   `Step` for the major ticks, plus the number of minor ticks between two
   major ticks.
@@ -126,16 +137,32 @@ The third tab of the axes dialog, also reachable with
 **Frame**
 
 * **Style**:
-  * `No frame (X and Y axes only)` - only the left and the bottom side are
-    drawn, there is no top X axis and no right Y axis,
-  * `Full frame (default)` - all four sides, ticks on the bottom and on the
-    left, as matplotlib draws it by default,
+  * `No frame (X and Y only) (default)` - only the left and the bottom side
+    are drawn, there is no top X axis and no right Y axis,
+  * `Full frame` - all four sides, ticks on the bottom and on the left, as
+    matplotlib draws it by default,
   * `Frame with ticks (inward)` - all four sides with ticks on every side,
     pointing into the diagram,
   * `Frame with ticks (outward)` - all four sides with ticks on every side,
     pointing outwards.
 * **Thickness** and **Colour** of the frame; the tick marks follow them, so
   the whole frame stays consistent.
+* **Major tick length** and **Minor tick length** in points.  Zero hides
+  that kind of tick mark.
+
+Clicking any side of the frame on the diagram (the X axis line, the Y axis
+line, or the top and right sides when they are drawn) opens this dialog;
+the pointer becomes a hand over the frame.
+
+### The menu bar of the diagram window
+
+A diagram window carries the same menu bar as the spreadsheet window
+(`APlot`, `File`, `Plot`, `Help`), so files can be opened and saved and the
+settings and the documentation can be reached without going back to the
+main window.  This matters on macOS, where the menu bar always belongs to
+the window that has the focus.  In a diagram window the `Plot` menu holds
+the commands of that diagram after a separator: `Axes properties...`,
+`Frame and origin...`, `Title and fonts...` and `Close this diagram`.
 
 **Size and origin of the axes**
 
@@ -156,18 +183,23 @@ stay inside the window; the dialog says so if they do not.
 
 ### Title and fonts
 
-Font sizes can be set in three places:
+Font **size** and font **colour** can be set in three places, always
+together:
 
 * the **title**: click it on the diagram, or use
   `Plot > Title and fonts...`,
-* the **axis labels** and the **axis numbers**: click the label, or use the
-  matching tab of the axes dialog,
+* the **axis labels** and the **axis numbers**: click the label (label text,
+  size and colour), or use the matching tab of the axes dialog (label and
+  numbers, size and colour),
 * the **legend boxes**: click the text of a box for that box alone, the
   curve properties dialog for the same box, or
   `Plot > Title and fonts...` for all of them at once.
 
 `Plot > Title and fonts...` also switches the legend boxes on and off,
 chooses the corner where they start, and puts them back into a stack.
+
+The starting colours of all four (title, axis labels, axis numbers, legend)
+come from the `Fonts` tab of the settings.
 
 
 ## 3. Files
@@ -184,13 +216,14 @@ for each open diagram:
 
 * the curves with their colour, line style and width, marker type, size,
   fill and edge colour, edge width, visibility, legend text, and the
-  position, corner and font size of their own legend box,
-* the title and its font size, the visibility, starting corner and default
-  font size of the legend boxes,
-* both axes: label, label and tick font size, automatic or fixed range,
-  step, number of minor ticks, and the grid settings of the axis,
-* the frame: style, thickness, colour, and the size and origin of the axes
-  inside the window,
+  position, corner, font size and font colour of their own legend box,
+* the title with its font size and colour, and the visibility, starting
+  corner, default font size and colour of the legend boxes,
+* both axes: label, the size and colour of the label and of the numbers,
+  automatic or fixed range, step, number of minor ticks, and the grid
+  settings of the axis,
+* the frame: style, thickness, colour, major and minor tick length, and the
+  size and origin of the axes inside the window,
 * the figure size, resolution and the window geometry.
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
@@ -215,9 +248,9 @@ built-in values.
 | Windows | Start size of the main window and of the diagram windows. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility and starting corner. |
-| Font sizes | Title, axis labels, axis numbers, legend boxes. |
+| Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
-| Frame | Default frame style, thickness and colour, and the default size and origin of the axes (as fractions of the window). |
+| Frame | Default frame style, thickness, colour, tick lengths, and the default size and origin of the axes (as fractions of the window). |
 | CSV files | Field separator and decimal sign. |
 
 Window sizes and plot defaults are used by windows opened after saving;

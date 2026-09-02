@@ -140,25 +140,29 @@
   },
   "plots": [
     {
-      "geometry": "960x720+612+103",
+      "geometry": "960x720+60+157",
       "figure": {
         "width": 9.212598425196852,
         "height": 6.160925196850394,
         "dpi": 104.20512820512819
       },
       "title": {
-        "text": "Three independent legend boxes (click twice on axes' numbers)",
-        "size": 18
+        "text": "Three independent legend boxes (click twice on axes' numbers or the graph's frame)",
+        "size": 12,
+        "color": "#ff9300"
       },
       "legend": {
         "visible": true,
         "location": "best",
-        "size": 10
+        "size": 10,
+        "color": "#000000"
       },
       "frame": {
-        "style": "box",
+        "style": "none",
         "width": 2.2,
-        "color": "#ff9300",
+        "color": "#011892",
+        "major_tick_length": 4.5,
+        "minor_tick_length": 3.0,
         "left": 0.125,
         "bottom": 0.11,
         "x_length": 0.775,
@@ -174,8 +178,10 @@
           "minor": 1,
           "label_size": 18,
           "tick_size": 16,
+          "label_color": "#011892",
+          "tick_color": "#011892",
           "grid": {
-            "major": true,
+            "major": false,
             "minor": false,
             "color": "#011892",
             "style": ":",
@@ -184,15 +190,17 @@
         },
         "y": {
           "label": "Function values",
-          "auto": true,
-          "min": 6.004999999999999,
-          "max": 93.89500000000001,
-          "step": null,
-          "minor": 0,
+          "auto": false,
+          "min": 0.0,
+          "max": 100.0,
+          "step": 10.0,
+          "minor": 1,
           "label_size": 18,
           "tick_size": 16,
+          "label_color": "#011892",
+          "tick_color": "#011892",
           "grid": {
-            "major": true,
+            "major": false,
             "minor": false,
             "color": "#b0b0b0",
             "style": ":",
@@ -210,6 +218,7 @@
           ],
           "legend_loc": "upper left",
           "legend_size": 14,
+          "legend_color": "#000000",
           "auto_label": true,
           "color": "#d62728",
           "linestyle": "--",
@@ -230,6 +239,7 @@
           ],
           "legend_loc": "upper left",
           "legend_size": 14,
+          "legend_color": "#000000",
           "auto_label": true,
           "color": "#7f3fbf",
           "linestyle": "-.",
@@ -245,11 +255,12 @@
           "column": "Flow",
           "label": "Flow",
           "legend_pos": [
-            0.3156451612903226,
-            0.6992361532548448
+            0.316989247311828,
+            0.695190354816523
           ],
           "legend_loc": "lower left",
           "legend_size": 14,
+          "legend_color": "#000000",
           "auto_label": true,
           "color": "#1f77b4",
           "linestyle": "-",

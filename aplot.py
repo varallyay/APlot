@@ -33,12 +33,13 @@ Plot window
 -----------
 * click a curve            -> line and marker properties separately
                               (marker "None" available), legend follows
-* click an axis label/title -> its text and its font size
+* click an axis label/title -> its text, font size and font colour
 * every curve has its own legend box: drag its frame to move it, click its
   text to change the text and the font size of that box
 * double-click an axis      -> combined axes dialog (X / Y / Frame tabs) with
                               range, step, minor ticks, grid, font sizes,
                               frame style and the size/origin of the axes
+* click the frame           -> the "Frame and origin" tab of that dialog
 * Plot menu                 -> axes dialog, title and font sizes, legend
 
 Settings
@@ -105,8 +106,8 @@ LINE_STYLES = [
 GRID_STYLES = [("Solid", "-"), ("Dashed", "--"), ("Dash-dot", "-."), ("Dotted", ":")]
 
 FRAME_STYLES = [
-    ("No frame (X and Y axes only)", "none"),
-    ("Full frame (default)", "box"),
+    ("No frame (X and Y only) (default)", "none"),
+    ("Full frame", "box"),
     ("Frame with ticks (inward)", "box_in"),
     ("Frame with ticks (outward)", "box_out"),
 ]
@@ -223,12 +224,12 @@ def to_int(text, default=0):
 
 DEFAULTS = {
     "window": {
-        "main_width": 900, "main_height": 620,
+        "main_width": 950, "main_height": 400,
         "plot_width": 960, "plot_height": 720,
     },
     "table": {
         "rows": 12,
-        "columns": "X,Y1,Y2,Y3,Y4",
+        "columns": "X,Y1,Y2,Y3",
         "column_width": 110,
         "font_size": 10,
         "auto_extend": True,
@@ -237,20 +238,24 @@ DEFAULTS = {
         "fig_width": 6.5, "fig_height": 4.8, "dpi": 100,
         "title_template": "Data visualization as a function of {x}",
         "y_label": "Y values",
-        "line_style": "Solid", "line_width": 1.5,
-        "marker": "Circle", "marker_size": 6.0,
+        "line_style": "Dashed", "line_width": 1.5,
+        "marker": "Circle", "marker_size": 8.0,
         "marker_edge_width": 1.0, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
     },
     "fonts": {
-        "title": 13, "axis_label": 11, "tick_label": 10, "legend": 10,
+        "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
+        "title_color": "#000000", "axis_label_color": "#000000",
+        "tick_label_color": "#000000", "legend_color": "#000000",
     },
     "grid": {
-        "major": True, "minor": False, "color": "#b0b0b0",
+        "major": False, "minor": False, "color": "#b0b0b0",
         "style": "Dotted", "width": 0.8, "minor_ticks": 0,
     },
     "frame": {
-        "style": "Full frame (default)", "width": 1.0, "color": "#000000",
+        "style": "No frame (X and Y only) (default)", "width": 1.8,
+        "color": "#000000",
+        "major_tick_length": 4.5, "minor_tick_length": 3.0,
         "left": DEFAULT_POSITION[0], "bottom": DEFAULT_POSITION[1],
         "x_length": DEFAULT_POSITION[2], "y_length": DEFAULT_POSITION[3],
     },
@@ -289,11 +294,15 @@ SETTINGS_SPEC = [
         ("legend_visible", "Show legend", "bool"),
         ("legend_location", "Legend position", "choice", LEGEND_LOCATIONS),
     ]),
-    ("fonts", "Font sizes", [
-        ("title", "Plot title", "int"),
-        ("axis_label", "Axis labels", "int"),
-        ("tick_label", "Axis numbers (ticks)", "int"),
-        ("legend", "Legend", "int"),
+    ("fonts", "Fonts", [
+        ("title", "Plot title size", "int"),
+        ("title_color", "Plot title colour", "color"),
+        ("axis_label", "Axis label size", "int"),
+        ("axis_label_color", "Axis label colour", "color"),
+        ("tick_label", "Axis numbers (ticks) size", "int"),
+        ("tick_label_color", "Axis numbers (ticks) colour", "color"),
+        ("legend", "Legend size", "int"),
+        ("legend_color", "Legend colour", "color"),
     ]),
     ("grid", "Grid", [
         ("major", "Major grid lines", "bool"),
@@ -307,6 +316,8 @@ SETTINGS_SPEC = [
         ("style", "Frame style", "choice", names(FRAME_STYLES)),
         ("width", "Frame thickness", "float"),
         ("color", "Frame colour", "color"),
+        ("major_tick_length", "Major tick length", "float"),
+        ("minor_tick_length", "Minor tick length", "float"),
         ("x_length", "X axis length (fraction of window)", "float"),
         ("y_length", "Y axis length (fraction of window)", "float"),
         ("left", "Y axis distance from the left", "float"),
@@ -566,10 +577,10 @@ class SettingsDialog(ToolDialog):
 # --------------------------------------------------------------------------
 
 class TextStyleDialog(ToolDialog):
-    """One text and its font size; `on_apply(text, size)` does the work."""
+    """One text with its font size and colour: `on_apply(text, size, colour)`."""
 
     def __init__(self, master, title, text, size, on_apply,
-                 hint=None, on_close=None):
+                 color="#000000", hint=None, on_close=None):
         super().__init__(master, title, on_close=on_close)
         self.on_apply = on_apply
         self.text_var = tk.StringVar(value=text)
@@ -582,6 +593,8 @@ class TextStyleDialog(ToolDialog):
         self.field(box, 1, "Font size:",
                    ttk.Spinbox(box, from_=4, to=72, increment=1, width=8,
                                textvariable=self.size_var, command=self.apply))
+        self.color = ColorSwatch(box, color, command=lambda _c: self.apply())
+        self.field(box, 2, "Font colour:", self.color)
         if hint:
             ttk.Label(self.body, text=hint, foreground="#666").pack(
                 anchor="w", pady=(6, 0))
@@ -596,7 +609,8 @@ class TextStyleDialog(ToolDialog):
         entry.select_range(0, "end")
 
     def apply(self):
-        self.on_apply(self.text_var.get(), to_int(self.size_var.get(), 10))
+        self.on_apply(self.text_var.get(), to_int(self.size_var.get(), 10),
+                      self.color.color)
 
     def _ok(self):
         self.apply()
@@ -611,13 +625,14 @@ class SeriesStyleDialog(ToolDialog):
     """Line and marker properties of one curve; changes are applied live."""
 
     def __init__(self, master, line: Line2D, on_change, on_close=None,
-                 legend_size=None, on_legend_size=None):
+                 legend_size=None, legend_color="#000000", on_legend_style=None):
         super().__init__(master, "Curve properties", on_close=on_close)
         self.line = line
         self.on_change = on_change
-        self.on_legend_size = on_legend_size
+        self.on_legend_style = on_legend_style
         self.legend_size_var = tk.StringVar(
             value=str(int(legend_size if legend_size is not None else 10)))
+        self._legend_color = safe_hex(legend_color, "#000000")
         self._loading = True
 
         label = line.get_label()
@@ -652,8 +667,11 @@ class SeriesStyleDialog(ToolDialog):
                                textvariable=self.legend_size_var,
                                command=self._apply))
         self.legend_size_var.trace_add("write", self._apply)
+        self.legend_color = ColorSwatch(box, self._legend_color,
+                                        command=lambda _c: self._apply())
+        self.field(box, 2, "Font colour:", self.legend_color)
         ttk.Label(box, text="Empty text hides this curve's legend box.",
-                  foreground="#666").grid(row=2, column=0, columnspan=2,
+                  foreground="#666").grid(row=3, column=0, columnspan=2,
                                           sticky="w", pady=(4, 0))
 
     def _build_line_box(self, line_color):
@@ -737,8 +755,9 @@ class SeriesStyleDialog(ToolDialog):
 
         text = self.label_var.get().strip()
         line.set_label(text if text else "_nolegend_")
-        if self.on_legend_size:
-            self.on_legend_size(to_int(self.legend_size_var.get(), 10))
+        if self.on_legend_style:
+            self.on_legend_style(to_int(self.legend_size_var.get(), 10),
+                                 self.legend_color.color)
         self.on_change()
 
 
@@ -761,6 +780,8 @@ class AxisTab(ttk.Frame):
         self.label_var = tk.StringVar(value=plot.axis_label(which))
         self.label_size_var = tk.StringVar(value=str(cfg["label_size"]))
         self.tick_size_var = tk.StringVar(value=str(cfg["tick_size"]))
+        self._label_color = cfg["label_color"]
+        self._tick_color = cfg["tick_color"]
         self.auto_var = tk.BooleanVar(value=cfg["auto"])
         self.min_var = tk.StringVar(value=f"{low:g}")
         self.max_var = tk.StringVar(value=f"{high:g}")
@@ -786,9 +807,13 @@ class AxisTab(ttk.Frame):
         ToolDialog.field(box, 1, "Label font size:",
                          ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
                                      textvariable=self.label_size_var))
-        ToolDialog.field(box, 2, "Numbers (ticks) font size:",
+        self.label_color = ColorSwatch(box, self._label_color)
+        ToolDialog.field(box, 2, "Label font colour:", self.label_color)
+        ToolDialog.field(box, 3, "Numbers (ticks) font size:",
                          ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
                                      textvariable=self.tick_size_var))
+        self.tick_color = ColorSwatch(box, self._tick_color)
+        ToolDialog.field(box, 4, "Numbers (ticks) font colour:", self.tick_color)
 
     def _build_range_box(self):
         box = ttk.LabelFrame(self, text="Range and ticks", padding=8)
@@ -841,6 +866,8 @@ class AxisTab(ttk.Frame):
             "label": self.label_var.get(),
             "label_size": to_int(self.label_size_var.get(), 11),
             "tick_size": to_int(self.tick_size_var.get(), 10),
+            "label_color": self.label_color.color,
+            "tick_color": self.tick_color.color,
             "grid": {
                 "major": self.gmajor_var.get(),
                 "minor": self.gminor_var.get(),
@@ -860,8 +887,10 @@ class FrameTab(ttk.Frame):
         cfg = plot.frame_cfg
 
         self.style_var = tk.StringVar(
-            value=name_of(FRAME_STYLES, cfg["style"], "Full frame (default)"))
+            value=name_of(FRAME_STYLES, cfg["style"], names(FRAME_STYLES)[0]))
         self.width_var = tk.StringVar(value=f"{cfg['width']:g}")
+        self.major_len_var = tk.StringVar(value=f"{cfg['major_tick_length']:g}")
+        self.minor_len_var = tk.StringVar(value=f"{cfg['minor_tick_length']:g}")
         self.unit_var = tk.StringVar(value=SIZE_UNITS[0])
         self._unit = SIZE_UNITS[0]
 
@@ -887,10 +916,17 @@ class FrameTab(ttk.Frame):
                                      textvariable=self.width_var))
         self.color = ColorSwatch(box, color)
         ToolDialog.field(box, 2, "Colour:", self.color)
+        ToolDialog.field(box, 3, "Major tick length:",
+                         ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=8,
+                                     textvariable=self.major_len_var))
+        ToolDialog.field(box, 4, "Minor tick length:",
+                         ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=8,
+                                     textvariable=self.minor_len_var))
         ttk.Label(box, foreground="#666", justify="left",
                   text="\"No frame\" hides the top and the right side; the two\n"
-                       "\"with ticks\" styles put ticks on all four sides.").grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+                       "\"with ticks\" styles put ticks on all four sides.\n"
+                       "Clicking any side of the frame opens this dialog.").grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     def _build_size_box(self):
         box = ttk.LabelFrame(self, text="Size and origin of the axes", padding=8)
@@ -952,9 +988,11 @@ class FrameTab(ttk.Frame):
     def values(self):
         self._read_values()
         return {
-            "style": code_of(FRAME_STYLES, self.style_var.get(), "box"),
+            "style": code_of(FRAME_STYLES, self.style_var.get(), "none"),
             "width": max(0.0, to_float(self.width_var.get(), 1.0)),
             "color": self.color.color,
+            "major_tick_length": max(0.0, to_float(self.major_len_var.get(), 3.5)),
+            "minor_tick_length": max(0.0, to_float(self.minor_len_var.get(), 2.0)),
             "left": self._fractions["left"], "bottom": self._fractions["bottom"],
             "x_length": self._fractions["x_length"],
             "y_length": self._fractions["y_length"],
@@ -1039,6 +1077,9 @@ class TitleFontDialog(ToolDialog):
         self.field(box, 1, "Font size:",
                    ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
                                textvariable=self.title_size_var))
+        self.title_color = ColorSwatch(
+            box, safe_hex(plot.fonts["title_color"], "#000000"))
+        self.field(box, 2, "Font colour:", self.title_color)
 
         legend_box = ttk.LabelFrame(self.body, text="Legend boxes", padding=8)
         legend_box.pack(fill="x", pady=(10, 0))
@@ -1047,16 +1088,19 @@ class TitleFontDialog(ToolDialog):
         self.field(legend_box, 1, "Font size (all):",
                    ttk.Spinbox(legend_box, from_=4, to=72, increment=1, width=8,
                                textvariable=self.legend_size_var))
-        self.field(legend_box, 2, "Start position:",
+        self.legend_color = ColorSwatch(
+            legend_box, safe_hex(plot.fonts["legend_color"], "#000000"))
+        self.field(legend_box, 2, "Font colour (all):", self.legend_color)
+        self.field(legend_box, 3, "Start position:",
                    ttk.Combobox(legend_box, textvariable=self.legend_loc_var,
                                 state="readonly", values=LEGEND_LOCATIONS, width=16))
         ttk.Button(legend_box, text="Reset positions",
-                   command=self._reset_positions).grid(row=3, column=1, sticky="w",
+                   command=self._reset_positions).grid(row=4, column=1, sticky="w",
                                                        pady=(6, 0))
         ttk.Label(legend_box, foreground="#666", justify="left",
-                  text="Every curve has its own legend box: drag its frame to\n"
-                       "move it, click its text to change the text and size.").grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+                  text="Every curve has its own legend box: drag its frame to move\n"
+                       "it, click its text to change its text, size and colour.").grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         bar = ttk.Frame(self.body)
         bar.pack(fill="x", pady=(12, 0))
@@ -1067,13 +1111,18 @@ class TitleFontDialog(ToolDialog):
     def apply(self):
         plot = self.plot
         plot.fonts["title"] = to_int(self.title_size_var.get(), plot.fonts["title"])
+        plot.fonts["title_color"] = self.title_color.color
         size = to_int(self.legend_size_var.get(), plot.fonts["legend"])
+        color = self.legend_color.color
         plot.fonts["legend"] = size
-        for state in plot.legend_state.values():   # one size for every box
+        plot.fonts["legend_color"] = color
+        for state in plot.legend_state.values():   # one size/colour for all
             state["size"] = size
+            state["color"] = color
         plot.legend_loc = self.legend_loc_var.get()
         plot.legend_visible = self.legend_visible_var.get()
-        plot.ax.set_title(self.title_var.get(), fontsize=plot.fonts["title"])
+        plot.ax.set_title(self.title_var.get(), fontsize=plot.fonts["title"],
+                          color=plot.fonts["title_color"])
         plot.ax.title.set_picker(True)
         plot.refresh_legend()
         plot.draw()
@@ -1442,14 +1491,16 @@ class PlotWindow(tk.Toplevel):
     """Figure window: all plot related interaction lives here."""
 
     HINT = ("Click a curve: line and marker properties   |   "
-            "Click the title, an axis label or a legend text: text and font size\n"
+            "Click the title, an axis label or a legend text: text, size, colour\n"
             "Drag the frame of a legend box: move it   |   "
+            "Click the frame: frame and origin   |   "
             "Double-click next to an axis: axes properties")
 
-    def __init__(self, master, df: pd.DataFrame, config: Config):
+    def __init__(self, master, df: pd.DataFrame, config: Config, app=None):
         super().__init__(master)
         self.title("Interactive Graph")
         self.settings = config
+        self.app = app          # gives this window the full application menu
         plot_cfg = config.section("plot")
         grid_cfg = config.section("grid")
         self.geometry(f"{config.get('window', 'plot_width')}x"
@@ -1479,6 +1530,8 @@ class PlotWindow(tk.Toplevel):
                     "minor": max(0, int(grid_cfg["minor_ticks"])),
                     "label_size": int(self.fonts["axis_label"]),
                     "tick_size": int(self.fonts["tick_label"]),
+                    "label_color": safe_hex(self.fonts["axis_label_color"], "#000000"),
+                    "tick_color": safe_hex(self.fonts["tick_label_color"], "#000000"),
                     "grid": dict(grid_defaults)}
             for which in ("x", "y")
         }
@@ -1489,9 +1542,11 @@ class PlotWindow(tk.Toplevel):
         self.default_position = DEFAULT_POSITION
         frame = config.section("frame")
         self.frame_cfg = {
-            "style": code_of(FRAME_STYLES, frame["style"], "box"),
+            "style": code_of(FRAME_STYLES, frame["style"], "none"),
             "width": float(frame["width"]),
             "color": safe_hex(frame["color"], "#000000"),
+            "major_tick_length": float(frame["major_tick_length"]),
+            "minor_tick_length": float(frame["minor_tick_length"]),
             "left": float(frame["left"]), "bottom": float(frame["bottom"]),
             "x_length": float(frame["x_length"]),
             "y_length": float(frame["y_length"]),
@@ -1511,18 +1566,23 @@ class PlotWindow(tk.Toplevel):
 
     # -- construction ------------------------------------------------------
     def _build_widgets(self):
-        menubar = tk.Menu(self)
-        plot_menu = tk.Menu(menubar, tearoff=0)
-        plot_menu.add_command(label="Axes properties...",
-                              command=lambda: self.open_axes_dialog("x"))
-        plot_menu.add_command(label="Frame and origin...",
-                              command=lambda: self.open_axes_dialog("frame"))
-        plot_menu.add_command(label="Title and fonts...",
-                              command=self.open_title_dialog)
-        plot_menu.add_separator()
-        plot_menu.add_command(label="Close", command=self.destroy)
-        menubar.add_cascade(label="Plot", menu=plot_menu)
-        self.configure(menu=menubar)
+        if self.app is not None:
+            # the same menu bar as the spreadsheet window, plus this
+            # diagram's own commands in the Plot menu
+            self.app.build_menubar(self, plot=self)
+        else:                       # stand-alone window without the App
+            menubar = tk.Menu(self, tearoff=0)
+            plot_menu = tk.Menu(menubar, tearoff=0)
+            plot_menu.add_command(label="Axes properties...",
+                                  command=lambda: self.open_axes_dialog("x"))
+            plot_menu.add_command(label="Frame and origin...",
+                                  command=lambda: self.open_axes_dialog("frame"))
+            plot_menu.add_command(label="Title and fonts...",
+                                  command=self.open_title_dialog)
+            plot_menu.add_separator()
+            plot_menu.add_command(label="Close", command=self.destroy)
+            menubar.add_cascade(label="Plot", menu=plot_menu)
+            self.configure(menu=menubar)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
@@ -1650,6 +1710,7 @@ class PlotWindow(tk.Toplevel):
                 "min": float(low), "max": float(high),
                 "step": cfg["step"], "minor": cfg["minor"],
                 "label_size": cfg["label_size"], "tick_size": cfg["tick_size"],
+                "label_color": cfg["label_color"], "tick_color": cfg["tick_color"],
                 "grid": dict(cfg["grid"]),
             }
         series = []
@@ -1659,6 +1720,7 @@ class PlotWindow(tk.Toplevel):
                 "column": str(y_col), "label": line.get_label(),
                 "legend_pos": [float(state["pos"][0]), float(state["pos"][1])],
                 "legend_loc": state["loc"], "legend_size": int(state["size"]),
+                "legend_color": safe_hex(state.get("color", "#000000"), "#000000"),
                 "auto_label": line.get_label() == getattr(line, "aplot_series", None),
                 "color": store_color(line.get_color()),
                 "linestyle": str(line.get_linestyle()),
@@ -1675,9 +1737,11 @@ class PlotWindow(tk.Toplevel):
             "figure": {"width": float(self.fig.get_figwidth()),
                        "height": float(self.fig.get_figheight()),
                        "dpi": float(self.fig.get_dpi())},
-            "title": {"text": self.ax.get_title(), "size": self.fonts["title"]},
+            "title": {"text": self.ax.get_title(), "size": self.fonts["title"],
+                      "color": safe_hex(self.fonts["title_color"], "#000000")},
             "legend": {"visible": self.legend_visible, "location": self.legend_loc,
-                       "size": self.fonts["legend"]},
+                       "size": self.fonts["legend"],
+                       "color": safe_hex(self.fonts["legend_color"], "#000000")},
             "frame": dict(self.frame_cfg),
             "axes": axes,
             "series": series,
@@ -1695,6 +1759,7 @@ class PlotWindow(tk.Toplevel):
         self.legend_visible = bool(legend.get("visible", self.legend_visible))
         self.legend_loc = legend.get("location", self.legend_loc)
         self.fonts["legend"] = int(legend.get("size", self.fonts["legend"]))
+        self.fonts["legend_color"] = legend.get("color", self.fonts["legend_color"])
 
         for index, entry in enumerate(state.get("series", [])):
             column = entry.get("column")
@@ -1707,6 +1772,7 @@ class PlotWindow(tk.Toplevel):
                 "pos": tuple(position) if position else saved["pos"],
                 "loc": entry.get("legend_loc", saved["loc"]),
                 "size": int(entry.get("legend_size", saved["size"])),
+                "color": entry.get("legend_color", saved["color"]),
             }
             line.set_label(entry.get("label", line.get_label()))
             line.set_color(entry.get("color", line.get_color()))
@@ -1732,8 +1798,10 @@ class PlotWindow(tk.Toplevel):
 
         title = state.get("title") or {}
         self.fonts["title"] = int(title.get("size", self.fonts["title"]))
+        self.fonts["title_color"] = title.get("color", self.fonts["title_color"])
         self.ax.set_title(title.get("text", self.ax.get_title()),
-                          fontsize=self.fonts["title"])
+                          fontsize=self.fonts["title"],
+                          color=safe_hex(self.fonts["title_color"], "#000000"))
         self.ax.title.set_picker(True)
 
         geometry = state.get("geometry")
@@ -1751,7 +1819,8 @@ class PlotWindow(tk.Toplevel):
             title = str(plot_cfg["title_template"]).format(x=x_col)
         except (KeyError, IndexError, ValueError):
             title = str(plot_cfg["title_template"])
-        self.ax.set_title(title, fontsize=self.fonts["title"])
+        self.ax.set_title(title, fontsize=self.fonts["title"],
+                          color=safe_hex(self.fonts["title_color"], "#000000"))
         self.ax.set_xlabel(x_col)
         self.ax.set_ylabel(str(plot_cfg["y_label"]))
         for which in ("x", "y"):
@@ -1776,7 +1845,8 @@ class PlotWindow(tk.Toplevel):
         x, y, loc = LEGEND_ANCHORS.get(self.legend_loc, LEGEND_ANCHORS["best"])
         direction = -1 if y >= 0.5 else 1
         return {"pos": (x, y + index * LEGEND_STACK_STEP * direction),
-                "loc": loc, "size": int(self.fonts["legend"])}
+                "loc": loc, "size": int(self.fonts["legend"]),
+                "color": safe_hex(self.fonts["legend_color"], "#000000")}
 
     def reset_legend_positions(self):
         """Stack the legend boxes again from the configured corner."""
@@ -1807,6 +1877,8 @@ class PlotWindow(tk.Toplevel):
                             bbox_to_anchor=state["pos"],
                             bbox_transform=self.ax.transAxes,
                             prop={"size": state["size"]})
+            for text in legend.get_texts():
+                text.set_color(state.get("color", "#000000"))
             self.ax.add_artist(legend)
             self.legends[y_col] = legend
             index += 1
@@ -1878,6 +1950,8 @@ class PlotWindow(tk.Toplevel):
         if legend is not None:
             cursor = ("xterm" if self._legend_text_hit(legend, event.x, event.y)
                       else "fleur")
+        elif self.frame_hit(event.x, event.y):
+            cursor = "hand2"
         if cursor != self._cursor:
             self._cursor = cursor
             try:
@@ -1913,22 +1987,29 @@ class PlotWindow(tk.Toplevel):
         style = cfg.get("style", "box")
         width = float(cfg.get("width", 1.0))
         color = cfg.get("color", "#000000")
+        major_length = max(0.0, to_float(cfg.get("major_tick_length"), 3.5))
+        minor_length = max(0.0, to_float(cfg.get("minor_tick_length"), 2.0))
         closed = style != "none"
 
         for name, spine in self.ax.spines.items():
             spine.set_visible(closed or name in ("left", "bottom"))
             spine.set_linewidth(width)
             spine.set_color(color)
+            spine.set_picker(6)          # clicking the frame opens this dialog
 
         self.ax.tick_params(
             which="both", color=color, width=width,
             top=(style == "box_in" or style == "box_out"),
             right=(style == "box_in" or style == "box_out"),
             direction="in" if style == "box_in" else "out")
+        self.ax.tick_params(which="major", length=major_length)
+        self.ax.tick_params(which="minor", length=minor_length)
 
         self.ax.set_position([cfg["left"], cfg["bottom"],
                               cfg["x_length"], cfg["y_length"]])
         self.frame_cfg = {"style": style, "width": width, "color": color,
+                          "major_tick_length": major_length,
+                          "minor_tick_length": minor_length,
                           "left": float(cfg["left"]), "bottom": float(cfg["bottom"]),
                           "x_length": float(cfg["x_length"]),
                           "y_length": float(cfg["y_length"])}
@@ -1944,9 +2025,17 @@ class PlotWindow(tk.Toplevel):
             (ax.set_xlabel if which == "x" else ax.set_ylabel)(cfg["label"])
         label_size = int(cfg.get("label_size", self.fonts["axis_label"]))
         tick_size = int(cfg.get("tick_size", self.fonts["tick_label"]))
+        # font colours: 'labelcolor' is the text of the numbers, while the
+        # colour of the tick marks themselves belongs to the frame
+        label_color = safe_hex(cfg.get("label_color",
+                                       self.fonts["axis_label_color"]), "#000000")
+        tick_color = safe_hex(cfg.get("tick_color",
+                                      self.fonts["tick_label_color"]), "#000000")
         axis.label.set_fontsize(label_size)
+        axis.label.set_color(label_color)
         axis.label.set_picker(True)
-        ax.tick_params(axis=which, which="both", labelsize=tick_size)
+        ax.tick_params(axis=which, which="both", labelsize=tick_size,
+                       labelcolor=tick_color)
 
         if cfg["auto"]:
             axis.set_major_locator(AutoLocator())
@@ -1987,6 +2076,7 @@ class PlotWindow(tk.Toplevel):
         self.axis_cfg[which] = {
             "auto": cfg["auto"], "step": cfg.get("step"), "minor": minor,
             "label_size": label_size, "tick_size": tick_size,
+            "label_color": label_color, "tick_color": tick_color,
             "grid": dict(grid),
         }
         if redraw:
@@ -2001,7 +2091,9 @@ class PlotWindow(tk.Toplevel):
             return  # the legend boxes are handled by the press handler
         artist = event.artist
 
-        if artist is self.ax.title:
+        if artist in self.ax.spines.values() or self.frame_hit(mouse.x, mouse.y):
+            self.open_axes_dialog("frame")
+        elif artist is self.ax.title:
             self.edit_title()
         elif artist is self.ax.xaxis.label:
             self.edit_axis_label("x")
@@ -2020,12 +2112,30 @@ class PlotWindow(tk.Toplevel):
             return
         y_col, legend = self.legend_at(event.x, event.y)
         if legend is None:
+            if self.frame_hit(event.x, event.y):
+                # a click on any side of the frame: frame and origin settings
+                self.after(1, lambda: self.open_axes_dialog("frame"))
             return
         if self._legend_text_hit(legend, event.x, event.y):
             # clicking the text edits it; the frame around it moves the box
             self.after(1, lambda column=y_col: self.edit_legend_entry(column))
             return
         self._start_legend_drag(y_col, event)
+
+    def frame_hit(self, x, y):
+        """True when the pointer is on one of the visible frame sides."""
+        if x is None or y is None:
+            return False
+        box = self.ax.get_window_extent()
+        tolerance = max(4.0, self.frame_cfg["width"] + 3.0)
+        vertical = box.y0 - tolerance <= y <= box.y1 + tolerance
+        horizontal = box.x0 - tolerance <= x <= box.x1 + tolerance
+        sides = {"left": horizontal and vertical and abs(x - box.x0) <= tolerance,
+                 "right": horizontal and vertical and abs(x - box.x1) <= tolerance,
+                 "bottom": horizontal and vertical and abs(y - box.y0) <= tolerance,
+                 "top": horizontal and vertical and abs(y - box.y1) <= tolerance}
+        return any(hit and self.ax.spines[name].get_visible()
+                   for name, hit in sides.items())
 
     def _axis_hit(self, event):
         """Which axis region (tick labels / axis label) was clicked?"""
@@ -2053,16 +2163,18 @@ class PlotWindow(tk.Toplevel):
         column = getattr(line, "aplot_series", None)
         state = self.legend_state.get(column) or {}
 
-        def set_legend_size(size):
+        def set_legend_style(size, color):
             if column in self.legend_state:
                 self.legend_state[column]["size"] = size
+                self.legend_state[column]["color"] = color
 
-        self._show_dialog(id(line), lambda: SeriesStyleDialog(
+        return self._show_dialog(id(line), lambda: SeriesStyleDialog(
             self, line,
             on_change=lambda: (self.refresh_legend(), self.draw()),
             on_close=lambda _d: self._dialogs.pop(id(line), None),
             legend_size=state.get("size", self.fonts["legend"]),
-            on_legend_size=set_legend_size))
+            legend_color=state.get("color", self.fonts["legend_color"]),
+            on_legend_style=set_legend_style))
 
     def open_axes_dialog(self, which="x"):
         existing = self._dialogs.get("axes")
@@ -2075,29 +2187,34 @@ class PlotWindow(tk.Toplevel):
             self, self, which, on_close=lambda _d: self._dialogs.pop("axes", None)))
 
     def open_title_dialog(self):
-        self._show_dialog("title", lambda: TitleFontDialog(
+        return self._show_dialog("title", lambda: TitleFontDialog(
             self, self, on_close=lambda _d: self._dialogs.pop("title", None)))
 
     def edit_title(self):
-        def apply(text, size):
+        def apply(text, size, color):
             self.fonts["title"] = size
-            self.ax.set_title(text, fontsize=size)
+            self.fonts["title_color"] = color
+            self.ax.set_title(text, fontsize=size, color=color)
             self.ax.title.set_picker(True)
             self.draw()
 
         return self._show_dialog("title-text", lambda: TextStyleDialog(
             self, "Plot title", self.ax.get_title(), self.fonts["title"], apply,
+            color=safe_hex(self.fonts["title_color"], "#000000"),
             on_close=lambda _d: self._dialogs.pop("title-text", None)))
 
     def edit_axis_label(self, which):
-        def apply(text, size):
+        def apply(text, size, color):
             cfg = dict(self.axis_cfg[which])
-            cfg.update({"label": text, "label_size": size})
+            cfg.update({"label": text, "label_size": size, "label_color": color})
             self.apply_axis(which, cfg)
 
         return self._show_dialog(f"label-{which}", lambda: TextStyleDialog(
             self, f"{which.upper()} axis label", self.axis_label(which),
             self.axis_cfg[which]["label_size"], apply,
+            color=self.axis_cfg[which]["label_color"],
+            hint="The colour of the numbers is on the axis tab of the\n"
+                 "axes properties dialog.",
             on_close=lambda _d: self._dialogs.pop(f"label-{which}", None)))
 
     def edit_legend_entry(self, column):
@@ -2106,15 +2223,17 @@ class PlotWindow(tk.Toplevel):
             return None
         state = self.legend_state.setdefault(column, self.default_legend_state(0))
 
-        def apply(text, size):
+        def apply(text, size, color):
             text = text.strip()
             line.set_label(text if text else "_nolegend_")
             state["size"] = size
+            state["color"] = color
             self.refresh_legend()
             self.draw()
 
         return self._show_dialog(f"legend-{column}", lambda: TextStyleDialog(
             self, f"Legend of '{column}'", line.get_label(), state["size"], apply,
+            color=state.get("color", "#000000"),
             hint="An empty text hides this legend box.\n"
                  "Drag the frame of a box to move it.",
             on_close=lambda _d: self._dialogs.pop(f"legend-{column}", None)))
@@ -2135,6 +2254,14 @@ clicking on it.  It is a single Python file and needs only `tkinter`,
 Start it with:
 
     python3 aplot.py
+
+
+## 0. The name
+
+APlot may mean AlphaPlot or AdvancedPlot or AgilePlot or ArticulatePlot
+and maybe some other word composition can be looked for.  This software
+is an easy to use start (alpha) to create good looking (articulate)
+scientific (advanced) plots quickly (agile).
 
 
 ## 1. The spreadsheet window
@@ -2194,12 +2321,13 @@ Every curve, label and axis reacts to the mouse.
 | Action | Result |
 | --- | --- |
 | Click a curve | Curve properties: line and marker settings separately. |
-| Click the title | Its text and its font size. |
-| Click an axis label | Its text and its font size. |
-| Click the text of a legend box | Its text and its font size (an empty text hides that box). |
+| Click the title | Its text, font size and font colour. |
+| Click an axis label | Its text, font size and font colour. |
+| Click the text of a legend box | Its text, font size and font colour (an empty text hides that box). |
 | Drag the frame of a legend box | Moves that legend box anywhere on the diagram. |
+| Click the frame (any axis line) | Frame and origin settings. |
 | Double-click beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
-| Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing the window. |
+| Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar: pan, zoom, and saving the figure as an image. |
 
 ### Legend boxes
@@ -2210,8 +2338,8 @@ independently.
 * Grab a box anywhere on its frame - that is, next to the sample line, not
   on the text - and drag it to a new place.  The pointer turns into a move
   cross over the frame and into a text cursor over the text.
-* Click the text of a box to change the text and the font size of that box
-  alone.  An empty text hides the box.
+* Click the text of a box to change the text, the font size and the font
+  colour of that box alone.  An empty text hides the box.
 * The boxes keep their position when the data is updated, when the curve
   style changes and when a column is renamed, and they are stored in
   `.aplt` files.
@@ -2221,8 +2349,8 @@ independently.
 
 ### Curve properties
 
-* **Legend**: the text of this curve's legend box and its font size.  An
-  empty text removes the box.
+* **Legend**: the text of this curve's legend box with its font size and
+  font colour.  An empty text removes the box.
 * **Line**: style (solid, dashed, dash-dot, dotted, none), width, colour.
 * **Marker**: style (13 shapes plus "None"), size, fill colour, "Hollow"
   (unfilled marker), edge colour, edge width.
@@ -2237,8 +2365,10 @@ perfectly possible.  The legend always mirrors what the curve looks like.
 One window with an **X axis**, a **Y axis** and a **Frame and origin** tab.
 The two axis tabs have:
 
-* **Axis label and fonts**: the label text, the font size of the label and
-  the font size of the numbers (ticks).
+* **Axis label and fonts**: the label text, the font size and font colour
+  of the label, and the font size and font colour of the numbers (ticks).
+  The colour of the tick *marks* is not set here - it belongs to the frame,
+  so a black frame can carry grey numbers.
 * **Range and ticks**: automatic range, or an explicit `From`, `To` and
   `Step` for the major ticks, plus the number of minor ticks between two
   major ticks.
@@ -2253,16 +2383,32 @@ The third tab of the axes dialog, also reachable with
 **Frame**
 
 * **Style**:
-  * `No frame (X and Y axes only)` - only the left and the bottom side are
-    drawn, there is no top X axis and no right Y axis,
-  * `Full frame (default)` - all four sides, ticks on the bottom and on the
-    left, as matplotlib draws it by default,
+  * `No frame (X and Y only) (default)` - only the left and the bottom side
+    are drawn, there is no top X axis and no right Y axis,
+  * `Full frame` - all four sides, ticks on the bottom and on the left, as
+    matplotlib draws it by default,
   * `Frame with ticks (inward)` - all four sides with ticks on every side,
     pointing into the diagram,
   * `Frame with ticks (outward)` - all four sides with ticks on every side,
     pointing outwards.
 * **Thickness** and **Colour** of the frame; the tick marks follow them, so
   the whole frame stays consistent.
+* **Major tick length** and **Minor tick length** in points.  Zero hides
+  that kind of tick mark.
+
+Clicking any side of the frame on the diagram (the X axis line, the Y axis
+line, or the top and right sides when they are drawn) opens this dialog;
+the pointer becomes a hand over the frame.
+
+### The menu bar of the diagram window
+
+A diagram window carries the same menu bar as the spreadsheet window
+(`APlot`, `File`, `Plot`, `Help`), so files can be opened and saved and the
+settings and the documentation can be reached without going back to the
+main window.  This matters on macOS, where the menu bar always belongs to
+the window that has the focus.  In a diagram window the `Plot` menu holds
+the commands of that diagram after a separator: `Axes properties...`,
+`Frame and origin...`, `Title and fonts...` and `Close this diagram`.
 
 **Size and origin of the axes**
 
@@ -2283,18 +2429,23 @@ stay inside the window; the dialog says so if they do not.
 
 ### Title and fonts
 
-Font sizes can be set in three places:
+Font **size** and font **colour** can be set in three places, always
+together:
 
 * the **title**: click it on the diagram, or use
   `Plot > Title and fonts...`,
-* the **axis labels** and the **axis numbers**: click the label, or use the
-  matching tab of the axes dialog,
+* the **axis labels** and the **axis numbers**: click the label (label text,
+  size and colour), or use the matching tab of the axes dialog (label and
+  numbers, size and colour),
 * the **legend boxes**: click the text of a box for that box alone, the
   curve properties dialog for the same box, or
   `Plot > Title and fonts...` for all of them at once.
 
 `Plot > Title and fonts...` also switches the legend boxes on and off,
 chooses the corner where they start, and puts them back into a stack.
+
+The starting colours of all four (title, axis labels, axis numbers, legend)
+come from the `Fonts` tab of the settings.
 
 
 ## 3. Files
@@ -2311,13 +2462,14 @@ for each open diagram:
 
 * the curves with their colour, line style and width, marker type, size,
   fill and edge colour, edge width, visibility, legend text, and the
-  position, corner and font size of their own legend box,
-* the title and its font size, the visibility, starting corner and default
-  font size of the legend boxes,
-* both axes: label, label and tick font size, automatic or fixed range,
-  step, number of minor ticks, and the grid settings of the axis,
-* the frame: style, thickness, colour, and the size and origin of the axes
-  inside the window,
+  position, corner, font size and font colour of their own legend box,
+* the title with its font size and colour, and the visibility, starting
+  corner, default font size and colour of the legend boxes,
+* both axes: label, the size and colour of the label and of the numbers,
+  automatic or fixed range, step, number of minor ticks, and the grid
+  settings of the axis,
+* the frame: style, thickness, colour, major and minor tick length, and the
+  size and origin of the axes inside the window,
 * the figure size, resolution and the window geometry.
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
@@ -2342,9 +2494,9 @@ built-in values.
 | Windows | Start size of the main window and of the diagram windows. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility and starting corner. |
-| Font sizes | Title, axis labels, axis numbers, legend boxes. |
+| Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
-| Frame | Default frame style, thickness and colour, and the default size and origin of the axes (as fractions of the window). |
+| Frame | Default frame style, thickness, colour, tick lengths, and the default size and origin of the axes (as fractions of the window). |
 | CSV files | Field separator and decimal sign. |
 
 Window sizes and plot defaults are used by windows opened after saving;
@@ -2475,7 +2627,16 @@ class App:
         ttk.Button(bar, text="Settings...", command=self.open_settings).pack(side="right")
 
     def _build_menu(self):
-        menubar = tk.Menu(self.root, tearoff=0)
+        self.build_menubar(self.root)
+
+    def build_menubar(self, window, plot=None):
+        """The application menu bar, attached to `window`.
+
+        Every window gets its own copy with the same items, because on macOS
+        the menu bar belongs to the window that has the focus.  For a diagram
+        window the Plot menu carries that diagram's own commands as well.
+        """
+        menubar = tk.Menu(window, tearoff=0)
 
         if sys.platform == "darwin":
             # the bold application menu: About + Settings (Cmd+,) live there,
@@ -2484,7 +2645,7 @@ class App:
             apple.add_command(label=f"About {APP_NAME}", command=self.show_about)
             apple.add_separator()
             menubar.add_cascade(menu=apple)
-            try:
+            try:  # interpreter wide, so only the first window registers it
                 self.root.createcommand("tk::mac::ShowPreferences", self.open_settings)
             except tk.TclError:
                 pass
@@ -2514,6 +2675,16 @@ class App:
         plot_menu.add_command(label="Open diagram", command=self.open_plot)
         plot_menu.add_command(label="Update diagram (keep style)",
                               command=self.update_plot)
+        if plot is not None:            # commands of this diagram window
+            plot_menu.add_separator()
+            plot_menu.add_command(label="Axes properties...",
+                                  command=lambda: plot.open_axes_dialog("x"))
+            plot_menu.add_command(label="Frame and origin...",
+                                  command=lambda: plot.open_axes_dialog("frame"))
+            plot_menu.add_command(label="Title and fonts...",
+                                  command=plot.open_title_dialog)
+            plot_menu.add_separator()
+            plot_menu.add_command(label="Close this diagram", command=plot.destroy)
         menubar.add_cascade(label="Plot", menu=plot_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0, name="help")
@@ -2521,7 +2692,8 @@ class App:
         help_menu.add_command(label=f"About {APP_NAME}", command=self.show_about)
         menubar.add_cascade(label="Help", menu=help_menu)
 
-        self.root.config(menu=menubar)
+        window.configure(menu=menubar)
+        return menubar
 
     def show_documentation(self):
         if self._help_window is not None and self._help_window.winfo_exists():
@@ -2660,7 +2832,7 @@ class App:
             window.destroy()
         self.plot_windows = []
         for state in document.get("plots") or []:
-            window = PlotWindow(self.root, self.df.copy(), self.settings)
+            window = PlotWindow(self.root, self.df.copy(), self.settings, app=self)
             if not window.winfo_exists():
                 continue
             window.apply_state(state)
@@ -2748,7 +2920,7 @@ class App:
         """Open a new diagram with the default style."""
         if not self._plottable():
             return None
-        window = PlotWindow(self.root, self.df.copy(), self.settings)
+        window = PlotWindow(self.root, self.df.copy(), self.settings, app=self)
         if window.winfo_exists():
             self.plot_windows.append(window)
             return window
