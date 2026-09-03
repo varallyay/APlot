@@ -128,6 +128,23 @@ independently.
   where new boxes start, and can stack all boxes again with
   `Reset positions`.
 
+### The property windows
+
+The dialogs (curve properties, axes properties, title and fonts, legend)
+are ordinary windows:
+
+* they open **next to** the diagram window, not on top of it (to the right
+  if there is room on the screen, otherwise to the left),
+* the diagram can be **clicked in front of them** while they stay open, so
+  a change can be looked at without a dialog covering the curves,
+* clicking the same curve, axis or legend again brings its window back to
+  the front,
+* they stay open until they are closed, and several of them can be open at
+  the same time.
+
+If the old behaviour is preferred, `Property windows always on top` in the
+`Windows` tab of the settings keeps them above the diagram again.
+
 ### Curve properties
 
 * **Legend**: the text of this curve's legend box with its font size and
@@ -325,7 +342,7 @@ built-in values.
 
 | Tab | Contents |
 | --- | --- |
-| Windows | Start size of the main window and of the diagram windows. |
+| Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |

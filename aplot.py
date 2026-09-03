@@ -129,7 +129,7 @@ FRAME_STYLES = [
 ]
 
 # matplotlib's own subplot position: left, bottom, width, height
-DEFAULT_POSITION = (0.125, 0.11, 0.775, 0.77)
+DEFAULT_POSITION = (0.128, 0.11, 0.775, 0.77)
 SIZE_UNITS = ["Fraction of window", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
@@ -389,6 +389,7 @@ DEFAULTS = {
     "window": {
         "main_width": 950, "main_height": 400,
         "plot_width": 960, "plot_height": 720,
+        "dialogs_on_top": False,
     },
     "table": {
         "rows": 12,
@@ -412,7 +413,7 @@ DEFAULTS = {
         "fill_follows_line": True,
     },
     "fonts": {
-        "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
+        "title": 20, "axis_label": 18, "tick_label": 16, "legend": 16,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
         "title_pad": 8.0, "axis_label_pad": 5.5, "tick_label_pad": 5.0,
@@ -442,6 +443,7 @@ SETTINGS_SPEC = [
         ("main_height", "Main window height [px]", "int"),
         ("plot_width", "Plot window width [px]", "int"),
         ("plot_height", "Plot window height [px]", "int"),
+        ("dialogs_on_top", "Property windows always on top", "bool"),
     ]),
     ("table", "Spreadsheet", [
         ("rows", "Number of rows at start", "int"),
@@ -623,18 +625,54 @@ class ColorSwatch(ttk.Frame):
 
 
 class ToolDialog(tk.Toplevel):
-    """Base class of the small property windows."""
+    """Base class of the small property windows.
+
+    These windows are ordinary windows, not transient children, so the
+    diagram can be brought in front of them while the settings stay open.
+    `Property windows always on top` in the settings restores the old
+    behaviour for those who prefer it.
+    """
 
     def __init__(self, master, title, on_close=None):
         super().__init__(master)
         self.title(title)
-        self.transient(master)
         self.resizable(False, False)
         self._on_close = on_close
+        if self.keep_on_top(master):
+            self.transient(master)      # stays above the diagram window
         self.body = ttk.Frame(self, padding=12)
         self.body.pack(fill="both", expand=True)
         self.bind("<Escape>", lambda _e: self.close())
         self.protocol("WM_DELETE_WINDOW", self.close)
+        self.after_idle(self.place_beside_parent)
+
+    @staticmethod
+    def keep_on_top(master):
+        settings = getattr(master, "settings", None)
+        try:
+            return bool(settings.get("window", "dialogs_on_top"))
+        except (AttributeError, KeyError, TypeError):
+            return False
+
+    def place_beside_parent(self):
+        """Open next to the parent window instead of on top of it."""
+        try:
+            self.update_idletasks()
+            parent = self.master.winfo_toplevel()
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            width, height = self.winfo_width(), self.winfo_height()
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+
+            x = px + parent.winfo_width() + 12          # to the right
+            if x + width > screen_w - 8:
+                x = px - width - 12                     # or to the left
+            if x < 8:
+                x = max(8, screen_w - width - 8)
+            y = min(max(8, py + 24), max(8, screen_h - height - 48))
+            self.geometry(f"+{int(x)}+{int(y)}")
+        except tk.TclError:
+            pass
 
     def close(self):
         if self._on_close:
@@ -3022,6 +3060,23 @@ independently.
   where new boxes start, and can stack all boxes again with
   `Reset positions`.
 
+### The property windows
+
+The dialogs (curve properties, axes properties, title and fonts, legend)
+are ordinary windows:
+
+* they open **next to** the diagram window, not on top of it (to the right
+  if there is room on the screen, otherwise to the left),
+* the diagram can be **clicked in front of them** while they stay open, so
+  a change can be looked at without a dialog covering the curves,
+* clicking the same curve, axis or legend again brings its window back to
+  the front,
+* they stay open until they are closed, and several of them can be open at
+  the same time.
+
+If the old behaviour is preferred, `Property windows always on top` in the
+`Windows` tab of the settings keeps them above the diagram again.
+
 ### Curve properties
 
 * **Legend**: the text of this curve's legend box with its font size and
@@ -3219,7 +3274,7 @@ built-in values.
 
 | Tab | Contents |
 | --- | --- |
-| Windows | Start size of the main window and of the diagram windows. |
+| Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
