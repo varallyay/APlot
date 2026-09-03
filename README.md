@@ -79,14 +79,35 @@ Every curve, label and axis reacts to the mouse.
 | Action | Result |
 | --- | --- |
 | Click a curve | Curve properties: line and marker settings separately. |
-| Click the title | Its text, font size and font colour. |
-| Click an axis label | Its text, font size and font colour. |
+| Click the title | Its text, font size, font colour and its distance from the top of the plot area. |
+| Drag the title | Moves it freely anywhere on the diagram. |
+| Click an axis label | Its text, font size, font colour and its distance from the axis. |
+| Drag an axis label | Moves it freely anywhere on the diagram. |
 | Click the text of a legend box | Its text, font size and font colour (an empty text hides that box). |
 | Drag the frame of a legend box | Moves that legend box anywhere on the diagram. |
 | Click the frame (any axis line) | Frame and origin settings. |
 | Double-click beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
 | Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar: pan, zoom, and saving the figure as an image. |
+
+### Moving the title and the axis labels
+
+The title and both axis labels can be dragged with the pointer, just like
+the legend boxes: press on the text, move it, release it.  The pointer
+becomes a move cross over them.  Pressing and releasing without moving is
+still a click, so the dialog of that text opens as before.
+
+The drag is stored as a shift in pixels **on top of** the automatic
+placement, which has two useful consequences:
+
+* the text keeps following the diagram - it stays in place when the window
+  is resized, when the axes are moved in `Frame and origin`, or when longer
+  numbers appear next to the axis,
+* the **distance** setting still works: it moves the text with respect to
+  the axis, and the drag is added to that.
+
+`Plot > Title and fonts... > Reset dragged texts` puts the title and both
+labels back to their automatic places.
 
 ### Legend boxes
 
@@ -131,10 +152,14 @@ perfectly possible.  The legend always mirrors what the curve looks like.
 One window with an **X axis**, a **Y axis** and a **Frame and origin** tab.
 The two axis tabs have:
 
-* **Axis label and fonts**: the label text, the font size and font colour
-  of the label, and the font size and font colour of the numbers (ticks).
-  The colour of the tick *marks* is not set here - it belongs to the frame,
-  so a black frame can carry grey numbers.
+* **Axis label and fonts**: the label text, the font size, font colour and
+  **distance** of the label, and the font size, font colour and
+  **distance** of the numbers (ticks).  Both distances are given in pixels
+  and are measured from the axis (from the end of the tick marks in the
+  case of the numbers); larger values push the text away from the diagram,
+  negative values pull it inwards.  The colour of the tick *marks* is not
+  set here - it belongs to the frame, so a black frame can carry grey
+  numbers.
 * **Range and ticks**: automatic range, or an explicit `From`, `To` and
   `Step` for the major ticks, plus the number of minor ticks between two
   major ticks.
@@ -202,8 +227,14 @@ stay inside the window; the dialog says so if they do not.
 
 ### Title and fonts
 
-Font **size** and font **colour** can be set in three places, always
-together:
+Every text around the diagram has a **distance** in pixels next to its font
+size and colour: the title from the top of the plot area, the axis labels
+from their axis, and the axis numbers from the end of the tick marks.  The
+values are converted to the units matplotlib works in with the resolution
+of the figure, so a distance of 10 px really is ten pixels on the screen.
+
+Font **size**, font **colour** and **distance** can be set in three places,
+always together:
 
 * the **title**: click it on the diagram, or use
   `Plot > Title and fonts...`,
@@ -212,7 +243,8 @@ together:
   numbers, size and colour),
 * the **legend boxes**: click the text of a box for that box alone, the
   curve properties dialog for the same box, or
-  `Plot > Title and fonts...` for all of them at once.
+  `Plot > Title and fonts...` for all of them at once (legend boxes have no
+  distance: they are placed by dragging them).
 
 `Plot > Title and fonts...` also switches the legend boxes on and off,
 chooses the corner where they start, and puts them back into a stack.
@@ -237,11 +269,12 @@ for each open diagram:
   fill and edge colour, edge width, visibility, legend text, the position,
   corner, font, frame and background of their own legend box, and the
   settings of the filled area under the curve,
-* the title with its font size and colour, and the visibility, starting
+* the title with its font size, colour and distance, the dragged positions
+  of the title and of both axis labels, and the visibility, starting
   corner, default font size and colour of the legend boxes,
-* both axes: label, the size and colour of the label and of the numbers,
-  automatic or fixed range, step, number of minor ticks, and the grid
-  settings of the axis,
+* both axes: label, the size, colour and distance of the label and of the
+  numbers, automatic or fixed range, step, number of minor ticks, and the
+  grid settings of the axis,
 * the frame: style, thickness, colour, major and minor tick length, the
   background of the plot area and of the window, and the size and origin of
   the axes inside the window,
@@ -295,7 +328,7 @@ built-in values.
 | Windows | Start size of the main window and of the diagram windows. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
-| Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes. |
+| Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
 | Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
