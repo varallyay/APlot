@@ -91,6 +91,10 @@ Every curve, label and axis reacts to the mouse.
 | Drag a text box | Moves it; clicking it opens its properties. |
 | Drag a drawn object | Moves it; dragging a control point resizes it, clicking it opens its properties. |
 | Drag an arrow | Moves it; dragging the control point at its tip or its tail changes its length and direction, clicking it opens its properties. |
+| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
+| Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
+| `Delete` / `Backspace` | Removes the selected object. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
 
 ### Drawing rectangles, triangles, circles and ellipses
@@ -146,12 +150,20 @@ and it is finished by releasing the button at the **tip**.  A plain click
 without dragging gives a short horizontal arrow.  `Esc` or clicking the
 icon again cancels.
 
+Holding **Shift** while the arrow is drawn - or later while its tip or tail
+is dragged - snaps it to the nearest 45 degrees, so it becomes exactly
+horizontal, exactly vertical or an exact diagonal (45, 135, 225, 315
+degrees).  The angle is measured on the screen, so the arrow really looks
+that way whatever the proportions of the plot area.  The end that is not
+dragged stays where it is.
+
 An arrow behaves like the drawn objects:
 
 * it is **selected** when it is clicked, and two **control points** appear,
   one on the tip and one on the tail; dragging either of them changes the
   length, the direction and the position of that end,
-* dragging the shaft or the head **moves** the whole arrow,
+* dragging the shaft or the head **moves** the whole arrow (the arrow keys
+  move it by one pixel, with `Shift` by ten),
 * clicking it without moving opens its **properties**: the arrow head
   (`Triangle`, `Chevron`, `Concave`, `Convex`), the head size in pixels,
   the line style, the line thickness, the colour and a `Delete` button,
@@ -161,6 +173,35 @@ The tip and the tail are kept in the coordinates of the plot area, so the
 arrows follow the diagram when the window is resized, while the head keeps
 its size in pixels.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
+
+### Copying, moving and deleting the objects
+
+Text boxes, drawings and arrows all work the same way once one of them is
+**selected** - a single click on the object selects it (a drawing and an
+arrow also show their control points):
+
+| Keys | What happens |
+| --- | --- |
+| `Ctrl+C` / `Cmd+C` | The selected object goes to the clipboard with every one of its properties. |
+| `Ctrl+V` / `Cmd+V` | Another copy appears a little to the lower right of the original and is selected; each further paste steps further, so a series of copies does not pile up. |
+| Left / Right / Up / Down | Moves the selected object by one pixel. |
+| `Shift` + an arrow key | Moves it by ten pixels. |
+| `Delete` or `Backspace` | Removes it. |
+
+The same commands are in the `Plot` menu as `Copy object`, `Paste object`
+and `Delete object`.
+
+So a circle that has its final line style, thickness, line colour, fill and
+opacity does not have to be built again: select it, `Ctrl/Cmd+C`, then
+`Ctrl/Cmd+V` as many times as needed and move the copies where they belong
+- with the pointer or with the arrow keys.  The same holds for arrows (head
+type, head size, thickness, colour) and for text boxes (text, font, frame,
+background).
+
+The clipboard belongs to the program, not to one window, so an object can
+be copied in one diagram and pasted into another one.  It is not the
+clipboard of the operating system: `Ctrl/Cmd+C` in the diagram does not
+disturb text that was copied elsewhere.
 
 ### Text boxes on the diagram
 
@@ -470,7 +511,9 @@ diagrams that are already open keep their settings.
 3. `Plot`.
 4. Click the curves, the labels and the axes until the diagram looks right,
    and drag the legend boxes where they do not cover the data.  Add text
-   boxes, drawings and arrows to point out what matters.
+   boxes, drawings and arrows to point out what matters - style one of them
+   and copy it (`Ctrl/Cmd+C`, `Ctrl/Cmd+V`) instead of building the next
+   one from the beginning.
 5. Correct or extend the data in the table and press `Update plot`; the
    diagram keeps its appearance and only the values change.
 6. `Save graph (.aplt)` to be able to continue later, or the save button of

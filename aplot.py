@@ -43,6 +43,11 @@ Plot window
   drawing tool next to it adds rectangles, triangles, circles and ellipses
   and the arrow tool adds arrows with triangle, chevron, concave or convex
   heads - all of them can be moved, resized and styled
+* a selected text box, drawing or arrow can be copied and pasted with all
+  of its properties (Ctrl/Cmd+C, Ctrl/Cmd+V), moved with the arrow keys
+  (Shift: ten pixels) and removed with Delete
+* Shift while drawing or resizing an arrow keeps it horizontal, vertical or
+  at 45, 135, 225, 315 degrees
 * double-click an axis      -> combined axes dialog (X / Y / Frame tabs) with
                               range, step, minor ticks, grid, font sizes,
                               frame style and the size/origin of the axes
@@ -168,6 +173,16 @@ ARROW_HEADS = [("Triangle head", "triangle"), ("Chevron head", "chevron"),
 # corners first, then the middle of the sides
 HANDLE_COUNT = 8
 MIN_SHAPE_SIZE = 0.01       # in axes coordinates
+
+# copy / paste and the keyboard
+CLIPBOARD_NAMES = {"shape": "Drawing", "arrow": "Arrow", "note": "Text box"}
+PASTE_STEP = 14.0           # pixels: how far a pasted copy sits from the original
+NUDGE_STEP = 1.0            # pixels: one press of an arrow key
+NUDGE_BIG_STEP = 10.0       # pixels: with Shift
+SNAP_ANGLE = np.pi / 4      # arrows snap to 45 degrees while Shift is held
+MODIFIER = "Command" if sys.platform == "darwin" else "Control"
+PASTE_HINT = "Cmd+V" if sys.platform == "darwin" else "Ctrl+V"
+ACCEL_NAME = "Cmd" if sys.platform == "darwin" else "Ctrl"
 
 PALETTE_FALLBACK = "#1f77b4"
 
@@ -2218,10 +2233,16 @@ class DataTable(ttk.Frame):
 class PlotWindow(tk.Toplevel):
     """Figure window: all plot related interaction lives here."""
 
+    # the copied object, shared by every diagram window of the program
+    _clipboard = None
+
     HINT = ("Click a curve, a text, a drawing or an arrow: its properties   |   "
             "Drag it: move it   |   Drag a control point: resize it\n"
             "\"T\", the shape and the arrow button: add text, drawings and "
-            "arrows   |   Click the frame: frame and origin   |   "
+            "arrows   |   Shift: arrows at 45 deg steps   |   "
+            f"{ACCEL_NAME}+C / {ACCEL_NAME}+V: copy and paste   |   "
+            "Arrow keys: move   |   Delete: remove\n"
+            "Click the frame: frame and origin   |   "
             "Double-click next to an axis: axes properties")
 
     def __init__(self, master, df: pd.DataFrame, config: Config, app=None):
@@ -2253,7 +2274,8 @@ class PlotWindow(tk.Toplevel):
         self._shape_counter = 0
         self._pending_shape = False
         self._shape_drag = None
-        self.selection = None           # ("shape"|"arrow", key)
+        self.selection = None           # ("shape"|"arrow"|"note", key)
+        self._shift_down = False        # Shift snaps the arrows to 45 degrees
         self._handles = None
         self.shape_kind = code_of(SHAPE_KINDS,
                                   config.get("shape", "kind"), "rect")
@@ -2339,6 +2361,15 @@ class PlotWindow(tk.Toplevel):
             plot_menu.add_command(label="Title and fonts...",
                                   command=self.open_title_dialog)
             plot_menu.add_separator()
+            plot_menu.add_command(label="Copy object",
+                                  accelerator=f"{ACCEL_NAME}+C",
+                                  command=self.copy_selection)
+            plot_menu.add_command(label="Paste object",
+                                  accelerator=f"{ACCEL_NAME}+V",
+                                  command=self.paste_clipboard)
+            plot_menu.add_command(label="Delete object", accelerator="Del",
+                                  command=self.delete_selection)
+            plot_menu.add_separator()
             plot_menu.add_command(label="Close", command=self.destroy)
             menubar.add_cascade(label="Plot", menu=plot_menu)
             self.configure(menu=menubar)
@@ -2388,10 +2419,43 @@ class PlotWindow(tk.Toplevel):
                                add="+")
 
         self.bind("<Escape>", lambda _e: self.cancel_tools())
+        self._bind_keys()
         toolbar.pack(side="top", fill="x")
         self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
         ttk.Label(self, text=self.HINT, anchor="center", justify="center",
                   padding=4, foreground="#444").pack(side="bottom", fill="x")
+
+    def _bind_keys(self):
+        """Copy, paste, deleting and moving the selected object."""
+        def wrap(function, *args):
+            def handler(_event=None):
+                function(*args)
+                return "break"
+            return handler
+
+        for modifier in ("Control", "Command"):
+            for letter in ("c", "C"):
+                self.bind(f"<{modifier}-{letter}>", wrap(self.copy_selection))
+            for letter in ("v", "V"):
+                self.bind(f"<{modifier}-{letter}>", wrap(self.paste_clipboard))
+        for sequence in ("<Delete>", "<BackSpace>"):
+            self.bind(sequence, wrap(self.delete_selection))
+
+        steps = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, 1), "Down": (0, -1)}
+        for name, (sx, sy) in steps.items():
+            self.bind(f"<{name}>",
+                      wrap(self.nudge_selection, sx * NUDGE_STEP, sy * NUDGE_STEP))
+            self.bind(f"<Shift-{name}>",
+                      wrap(self.nudge_selection,
+                           sx * NUDGE_BIG_STEP, sy * NUDGE_BIG_STEP))
+
+        # Shift snaps the arrows: remember whether it is held down
+        for sequence in ("<KeyPress-Shift_L>", "<KeyPress-Shift_R>"):
+            self.bind(sequence, lambda _e: setattr(self, "_shift_down", True))
+        for sequence in ("<KeyRelease-Shift_L>", "<KeyRelease-Shift_R>"):
+            self.bind(sequence, lambda _e: setattr(self, "_shift_down", False))
+        self.bind("<FocusOut>", lambda _e: setattr(self, "_shift_down", False),
+                  add="+")
 
     @staticmethod
     def _series_data(df, x_col, y_col):
@@ -3172,13 +3236,116 @@ class PlotWindow(tk.Toplevel):
         self.select_object("shape", key)
 
     def select_object(self, kind, key):
-        if kind == "shape" and key in self.shape_state:
-            self.selection = ("shape", key)
-        elif kind == "arrow" and key in self.arrow_state:
-            self.selection = ("arrow", key)
+        """Remember the object the keyboard commands work on."""
+        store = {"shape": self.shape_state, "arrow": self.arrow_state,
+                 "note": self.note_state}.get(kind)
+        if store is not None and key in store:
+            self.selection = (kind, key)
         else:
             self.selection = None
         self._refresh_handles()
+
+    def selected_state(self):
+        """The dictionary of the selected object, or None."""
+        kind, key = self.selection or (None, None)
+        store = {"shape": self.shape_state, "arrow": self.arrow_state,
+                 "note": self.note_state}.get(kind)
+        return None if store is None else store.get(key)
+
+    # -- clipboard, keyboard moving and deleting ---------------------------
+    def _axes_delta(self, dx_pixels, dy_pixels):
+        """A pixel offset as an offset in the coordinates of the plot area."""
+        inverse = self.ax.transAxes.inverted()
+        origin = inverse.transform((0.0, 0.0))
+        moved = inverse.transform((float(dx_pixels), float(dy_pixels)))
+        return (float(moved[0] - origin[0]), float(moved[1] - origin[1]))
+
+    @staticmethod
+    def _shifted_state(kind, state, dx, dy):
+        """A copy of one object state moved by (dx, dy) in axes coordinates."""
+        moved = copy.deepcopy(state)
+        if kind == "shape":
+            moved["x"] = float(moved["x"]) + dx
+            moved["y"] = float(moved["y"]) + dy
+        elif kind == "arrow":
+            for end in ("tail", "tip"):
+                moved[end] = (float(moved[end][0]) + dx,
+                              float(moved[end][1]) + dy)
+        else:                                   # a text box
+            moved["pos"] = (float(moved["pos"][0]) + dx,
+                            float(moved["pos"][1]) + dy)
+        return moved
+
+    def copy_selection(self, _event=None):
+        """Ctrl/Cmd+C: keep the selected object with all of its properties."""
+        kind, _key = self.selection or (None, None)
+        state = self.selected_state()
+        if state is None:
+            self.flash("Select an object first, then copy it")
+            return None
+        PlotWindow._clipboard = {"kind": kind, "pasted": 0,
+                                 "state": copy.deepcopy(state)}
+        self.flash(f"{CLIPBOARD_NAMES.get(kind, kind)} copied - "
+                   f"paste it with {PASTE_HINT}")
+        return kind
+
+    def paste_clipboard(self, _event=None):
+        """Ctrl/Cmd+V: another copy of it, a little beside the original."""
+        data = PlotWindow._clipboard
+        if not data:
+            self.flash("Nothing has been copied yet")
+            return None
+        data["pasted"] += 1                     # repeated pastes cascade
+        step = PASTE_STEP * data["pasted"]
+        dx, dy = self._axes_delta(step, -step)
+        kind = data["kind"]
+        state = self._shifted_state(kind, data["state"], dx, dy)
+        if kind == "shape":
+            key = self.add_shape(state=state)
+        elif kind == "arrow":
+            key = self.add_arrow(state=state)
+        else:
+            key = self.add_note(state["pos"], state=state)
+        self.select_object(kind, key)
+        self.draw()
+        self.flash(f"{CLIPBOARD_NAMES.get(kind, kind)} pasted")
+        return key
+
+    def nudge_selection(self, dx_pixels, dy_pixels):
+        """Move the selected object with the arrow keys."""
+        kind, key = self.selection or (None, None)
+        state = self.selected_state()
+        if state is None:
+            return False
+        dx, dy = self._axes_delta(dx_pixels, dy_pixels)
+        state.update(self._shifted_state(kind, state, dx, dy))
+        if kind == "shape":
+            self.refresh_shape(key)
+        elif kind == "arrow":
+            self.refresh_arrow(key)
+        else:
+            self._move_note(key, state["pos"])
+        self._refresh_handles()
+        self.draw()
+        return True
+
+    def delete_selection(self, _event=None):
+        """Delete or Backspace: remove the selected object."""
+        kind, key = self.selection or (None, None)
+        remover = {"shape": self.remove_shape, "arrow": self.remove_arrow,
+                   "note": self.remove_note}.get(kind)
+        if remover is None:
+            return False
+        remover(key)
+        return True
+
+    def flash(self, message):
+        """A short note in the message area of the toolbar."""
+        try:
+            self.toolbar.set_message(message)
+            self.after(2500, lambda: self.toolbar.set_message(""))
+        except (tk.TclError, AttributeError):
+            pass
 
     def selected_handle_positions(self):
         kind, key = self.selection or (None, None)
@@ -3280,6 +3447,36 @@ class PlotWindow(tk.Toplevel):
         except (tk.TclError, AttributeError):
             pass
         return self._pending_text
+
+    def _shift_active(self, event=None):
+        """True while Shift is held down (from Tk or from the mouse event)."""
+        if self._shift_down:
+            return True
+        modifiers = getattr(event, "modifiers", None) or ()
+        try:
+            if "shift" in modifiers:
+                return True
+        except TypeError:
+            pass
+        return "shift" in str(getattr(event, "key", "") or "")
+
+    def _snap_point(self, anchor, point):
+        """`point` pulled onto the nearest 45 degree direction from `anchor`.
+
+        The angles are measured on the screen, so a snapped arrow really is
+        vertical, horizontal or diagonal whatever the size of the plot area.
+        """
+        transform = self.ax.transAxes
+        start = np.array(transform.transform(anchor), dtype=float)
+        end = np.array(transform.transform(point), dtype=float)
+        vector = end - start
+        if float(np.hypot(*vector)) < 1e-6:
+            return (float(point[0]), float(point[1]))
+        angle = np.round(np.arctan2(vector[1], vector[0]) / SNAP_ANGLE) * SNAP_ANGLE
+        unit = np.array([np.cos(angle), np.sin(angle)])
+        length = max(2.0, float(np.dot(vector, unit)))
+        snapped = transform.inverted().transform(start + unit * length)
+        return (float(snapped[0]), float(snapped[1]))
 
     def cancel_tools(self):
         """Escape: none of the three toolbar tools stays armed."""
@@ -3507,10 +3704,15 @@ class PlotWindow(tk.Toplevel):
                     return
                 point = self._axes_point(event)
                 state = self.arrow_state[key]
+                snap = self._shift_active(event)
                 if mode == "arrow-new":
-                    state["tip"] = point
+                    state["tip"] = (self._snap_point(state["tail"], point)
+                                    if snap else point)
                 elif mode == "arrow-end":
-                    state["tail" if drag["index"] == 0 else "tip"] = point
+                    moving = "tail" if drag["index"] == 0 else "tip"
+                    fixed = "tip" if drag["index"] == 0 else "tail"
+                    state[moving] = (self._snap_point(state[fixed], point)
+                                     if snap else point)
                 else:
                     shift = (point[0] - drag["start"][0],
                              point[1] - drag["start"][1])
@@ -3834,6 +4036,10 @@ class PlotWindow(tk.Toplevel):
             self.open_series_dialog(artist)
 
     def _on_button_press(self, event):
+        try:                    # the keyboard commands need the focus here
+            self.canvas.get_tk_widget().focus_set()
+        except tk.TclError:
+            pass
         if event.dblclick:
             which = self._axis_hit(event)
             if which:
@@ -3890,14 +4096,15 @@ class PlotWindow(tk.Toplevel):
                                 "start": self._axes_point(event),
                                 "origin": (state["x"], state["y"])}
             return
+        key = self.note_at(event.x, event.y)
+        if key is not None:               # drag an existing text box, or edit it
+            self.select_object("note", key)
+            self.draw()
+            self._start_text_drag(f"{NOTE_KEY}{key}", event)
+            return
         if self.selection is not None:
             self.select_object(None, None)   # clicking elsewhere deselects
             self.draw()
-
-        key = self.note_at(event.x, event.y)
-        if key is not None:               # drag an existing text box, or edit it
-            self._start_text_drag(f"{NOTE_KEY}{key}", event)
-            return
         name = self.text_at(event.x, event.y)
         if name is not None:      # drag the title / an axis label, or click it
             self._start_text_drag(name, event)
@@ -4144,6 +4351,10 @@ Every curve, label and axis reacts to the mouse.
 | Drag a text box | Moves it; clicking it opens its properties. |
 | Drag a drawn object | Moves it; dragging a control point resizes it, clicking it opens its properties. |
 | Drag an arrow | Moves it; dragging the control point at its tip or its tail changes its length and direction, clicking it opens its properties. |
+| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
+| Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
+| `Delete` / `Backspace` | Removes the selected object. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
 
 ### Drawing rectangles, triangles, circles and ellipses
@@ -4199,12 +4410,20 @@ and it is finished by releasing the button at the **tip**.  A plain click
 without dragging gives a short horizontal arrow.  `Esc` or clicking the
 icon again cancels.
 
+Holding **Shift** while the arrow is drawn - or later while its tip or tail
+is dragged - snaps it to the nearest 45 degrees, so it becomes exactly
+horizontal, exactly vertical or an exact diagonal (45, 135, 225, 315
+degrees).  The angle is measured on the screen, so the arrow really looks
+that way whatever the proportions of the plot area.  The end that is not
+dragged stays where it is.
+
 An arrow behaves like the drawn objects:
 
 * it is **selected** when it is clicked, and two **control points** appear,
   one on the tip and one on the tail; dragging either of them changes the
   length, the direction and the position of that end,
-* dragging the shaft or the head **moves** the whole arrow,
+* dragging the shaft or the head **moves** the whole arrow (the arrow keys
+  move it by one pixel, with `Shift` by ten),
 * clicking it without moving opens its **properties**: the arrow head
   (`Triangle`, `Chevron`, `Concave`, `Convex`), the head size in pixels,
   the line style, the line thickness, the colour and a `Delete` button,
@@ -4214,6 +4433,35 @@ The tip and the tail are kept in the coordinates of the plot area, so the
 arrows follow the diagram when the window is resized, while the head keeps
 its size in pixels.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
+
+### Copying, moving and deleting the objects
+
+Text boxes, drawings and arrows all work the same way once one of them is
+**selected** - a single click on the object selects it (a drawing and an
+arrow also show their control points):
+
+| Keys | What happens |
+| --- | --- |
+| `Ctrl+C` / `Cmd+C` | The selected object goes to the clipboard with every one of its properties. |
+| `Ctrl+V` / `Cmd+V` | Another copy appears a little to the lower right of the original and is selected; each further paste steps further, so a series of copies does not pile up. |
+| Left / Right / Up / Down | Moves the selected object by one pixel. |
+| `Shift` + an arrow key | Moves it by ten pixels. |
+| `Delete` or `Backspace` | Removes it. |
+
+The same commands are in the `Plot` menu as `Copy object`, `Paste object`
+and `Delete object`.
+
+So a circle that has its final line style, thickness, line colour, fill and
+opacity does not have to be built again: select it, `Ctrl/Cmd+C`, then
+`Ctrl/Cmd+V` as many times as needed and move the copies where they belong
+- with the pointer or with the arrow keys.  The same holds for arrows (head
+type, head size, thickness, colour) and for text boxes (text, font, frame,
+background).
+
+The clipboard belongs to the program, not to one window, so an object can
+be copied in one diagram and pasted into another one.  It is not the
+clipboard of the operating system: `Ctrl/Cmd+C` in the diagram does not
+disturb text that was copied elsewhere.
 
 ### Text boxes on the diagram
 
@@ -4523,7 +4771,9 @@ diagrams that are already open keep their settings.
 3. `Plot`.
 4. Click the curves, the labels and the axes until the diagram looks right,
    and drag the legend boxes where they do not cover the data.  Add text
-   boxes, drawings and arrows to point out what matters.
+   boxes, drawings and arrows to point out what matters - style one of them
+   and copy it (`Ctrl/Cmd+C`, `Ctrl/Cmd+V`) instead of building the next
+   one from the beginning.
 5. Correct or extend the data in the table and press `Update plot`; the
    diagram keeps its appearance and only the values change.
 6. `Save graph (.aplt)` to be able to continue later, or the save button of
@@ -4700,6 +4950,15 @@ class App:
                                   command=lambda: plot.open_axes_dialog("frame"))
             plot_menu.add_command(label="Title and fonts...",
                                   command=plot.open_title_dialog)
+            plot_menu.add_separator()
+            plot_menu.add_command(label="Copy object",
+                                  accelerator=f"{ACCEL_NAME}+C",
+                                  command=plot.copy_selection)
+            plot_menu.add_command(label="Paste object",
+                                  accelerator=f"{ACCEL_NAME}+V",
+                                  command=plot.paste_clipboard)
+            plot_menu.add_command(label="Delete object", accelerator="Del",
+                                  command=plot.delete_selection)
             plot_menu.add_separator()
             plot_menu.add_command(label="Close this diagram", command=plot.destroy)
         menubar.add_cascade(label="Plot", menu=plot_menu)
