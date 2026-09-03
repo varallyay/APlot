@@ -88,7 +88,109 @@ Every curve, label and axis reacts to the mouse.
 | Click the frame (any axis line) | Frame and origin settings. |
 | Double-click beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
 | Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing this diagram. |
-| Toolbar | The standard Matplotlib toolbar: pan, zoom, and saving the figure as an image. |
+| Drag a text box | Moves it; clicking it opens its properties. |
+| Drag a drawn object | Moves it; dragging a control point resizes it, clicking it opens its properties. |
+| Drag an arrow | Moves it; dragging the control point at its tip or its tail changes its length and direction, clicking it opens its properties. |
+| Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
+
+### Drawing rectangles, triangles, circles and ellipses
+
+The button next to **T** is the drawing tool.  Its icon shows the shape
+that will be drawn, with a small arrow in its lower right corner:
+
+* clicking the **icon** starts drawing with the shape that is shown (a
+  rectangle at the first start, later whatever was used last),
+* clicking the **arrow** opens the list `Rectangle`, `Triangle`, `Circle`,
+  `Ellipse`; after choosing one the tool is armed with it and the icon
+  changes to that shape.
+
+While the tool is armed the button stays pressed and the pointer becomes a
+cross.  Press in the diagram and drag: the object is drawn between the
+press and the release point with the default line and fill.  A plain click
+without dragging gives an object of a comfortable default size.  `Esc` or
+clicking the icon again cancels.
+
+An object that was drawn behaves like the other decorations:
+
+* it is **selected** when it is clicked, and eight small square **control
+  points** appear on its corners and on the middle of its sides; dragging
+  one of them **resizes** the object (the pointer becomes a resize cross),
+* dragging the object itself **moves** it,
+* clicking it without moving opens its **properties**: line style (solid,
+  dashed, dash-dot, dotted, none), line thickness, line colour, fill colour
+  with an opacity, or `No fill (outline only)`, and a `Delete` button,
+* clicking an empty part of the diagram deselects it,
+* a circle keeps its round shape: its height follows its width and the
+  proportions of the plot area.
+
+The positions and sizes are kept in the coordinates of the plot area, so
+the objects follow the diagram when the window is resized, and they are
+stored in `.aplt` files.  The starting line and fill of new objects come
+from the `Drawings` tab of the settings.
+
+### Arrows
+
+The third button of the group is the arrow tool.  Its icon is an arrow head
+pointing to the right - the head that will be drawn - with the same small
+arrow in its lower right corner:
+
+* clicking the **icon** arms the tool with the head that is shown (a
+  triangle head at the first start, later whatever was used last),
+* clicking the **arrow** in the corner opens the list `Triangle head`,
+  `Chevron head`, `Concave head`, `Convex head`; the icon changes to the
+  chosen one.
+
+Press in the diagram at the **tail** of the arrow and drag: the arrow
+follows the pointer, so its length and its direction are drawn immediately,
+and it is finished by releasing the button at the **tip**.  A plain click
+without dragging gives a short horizontal arrow.  `Esc` or clicking the
+icon again cancels.
+
+An arrow behaves like the drawn objects:
+
+* it is **selected** when it is clicked, and two **control points** appear,
+  one on the tip and one on the tail; dragging either of them changes the
+  length, the direction and the position of that end,
+* dragging the shaft or the head **moves** the whole arrow,
+* clicking it without moving opens its **properties**: the arrow head
+  (`Triangle`, `Chevron`, `Concave`, `Convex`), the head size in pixels,
+  the line style, the line thickness, the colour and a `Delete` button,
+* clicking an empty part of the diagram deselects it.
+
+The tip and the tail are kept in the coordinates of the plot area, so the
+arrows follow the diagram when the window is resized, while the head keeps
+its size in pixels.  They are stored in `.aplt` files, and the head, size,
+line and colour of new arrows come from the `Arrows` tab of the settings.
+
+### Text boxes on the diagram
+
+The **T** button on the right end of the toolbar, a little apart from the
+save button, adds free text to the diagram:
+
+1. press **T** - the button stays pressed and the pointer becomes a
+   vertical line,
+2. click in the diagram where the text should be - a text box appears there
+   and its dialog opens,
+3. type the text and press `OK`.
+
+`Esc` or pressing **T** again cancels the placement without adding
+anything.
+
+A text box behaves like a legend box:
+
+* **drag** it with the pointer to move it (the pointer becomes a move
+  cross over it),
+* **click** it to open its dialog again: text, font size, font colour, the
+  frame around it (its colour, or no frame) and the background (a colour,
+  or fully transparent),
+* `Delete` in that dialog - or an empty text - removes the box,
+* the position is kept in the coordinates of the plot area, so the box
+  follows the diagram when the window is resized,
+* any number of text boxes can be added, and they are all stored in
+  `.aplt` files.
+
+The starting font, frame and background of new boxes come from the
+`Text boxes` tab of the settings.
 
 ### Moving the title and the axis labels
 
@@ -295,6 +397,9 @@ for each open diagram:
 * the frame: style, thickness, colour, major and minor tick length, the
   background of the plot area and of the window, and the size and origin of
   the axes inside the window,
+* every text box with its text, position, font, frame and background,
+* every drawn object with its shape, position, size, line and fill,
+* every arrow with its head type and size, tip, tail, line and colour,
 * the figure size, resolution and the window geometry.
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
@@ -348,6 +453,9 @@ built-in values.
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
+| Text boxes | Font size and colour, frame and background of the text boxes added with the **T** button. |
+| Drawings | The shape the drawing tool starts with, and the line style, thickness, colour, fill colour and opacity of new objects. |
+| Arrows | The head type the arrow tool starts with, the head size in pixels, and the line style, thickness and colour of new arrows. |
 | Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
 
 Window sizes and plot defaults are used by windows opened after saving;
@@ -361,7 +469,8 @@ diagrams that are already open keep their settings.
    legend texts and the X axis label.
 3. `Plot`.
 4. Click the curves, the labels and the axes until the diagram looks right,
-   and drag the legend boxes where they do not cover the data.
+   and drag the legend boxes where they do not cover the data.  Add text
+   boxes, drawings and arrows to point out what matters.
 5. Correct or extend the data in the table and press `Update plot`; the
    diagram keeps its appearance and only the values change.
 6. `Save graph (.aplt)` to be able to continue later, or the save button of
@@ -378,5 +487,8 @@ diagrams that are already open keep their settings.
   the curve.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
+* The three tools of the toolbar (**T**, the shape and the arrow button)
+  are exclusive: arming one cancels the others, and `Esc` cancels all of
+  them.
 * A legend box can be dragged outside the axes area (for example beside the
   diagram); `Reset positions` brings every box back.

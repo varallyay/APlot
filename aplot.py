@@ -39,6 +39,10 @@ Plot window
 * drag an axis label/title  -> moves it freely, like the legend boxes
 * every curve has its own legend box: drag its frame to move it, click its
   text to change the text and the font size of that box
+* the "T" button of the toolbar adds a movable text box anywhere, the
+  drawing tool next to it adds rectangles, triangles, circles and ellipses
+  and the arrow tool adds arrows with triangle, chevron, concave or convex
+  heads - all of them can be moved, resized and styled
 * double-click an axis      -> combined axes dialog (X / Y / Frame tabs) with
                               range, step, minor ticks, grid, font sizes,
                               frame style and the size/origin of the axes
@@ -84,6 +88,7 @@ from matplotlib.colors import to_hex, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.legend import Legend
 from matplotlib.lines import Line2D
+from matplotlib.patches import Ellipse, Polygon, Rectangle
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                MultipleLocator, NullLocator)
 from matplotlib.transforms import Affine2D
@@ -129,7 +134,7 @@ FRAME_STYLES = [
 ]
 
 # matplotlib's own subplot position: left, bottom, width, height
-DEFAULT_POSITION = (0.128, 0.11, 0.775, 0.77)
+DEFAULT_POSITION = (0.125, 0.11, 0.775, 0.77)
 SIZE_UNITS = ["Fraction of window", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
@@ -152,6 +157,17 @@ LEGEND_ANCHORS = {
     "center": (0.50, 0.50, "center"),
 }
 LEGEND_STACK_STEP = 0.085
+
+NOTE_KEY = "note:"          # prefix that marks a free text box while dragging
+
+SHAPE_KINDS = [("Rectangle", "rect"), ("Triangle", "triangle"),
+               ("Circle", "circle"), ("Ellipse", "ellipse")]
+
+ARROW_HEADS = [("Triangle head", "triangle"), ("Chevron head", "chevron"),
+               ("Concave head", "concave"), ("Convex head", "convex")]
+# corners first, then the middle of the sides
+HANDLE_COUNT = 8
+MIN_SHAPE_SIZE = 0.01       # in axes coordinates
 
 PALETTE_FALLBACK = "#1f77b4"
 
@@ -192,6 +208,20 @@ def store_color(color):
     if isinstance(color, str) and color.lower() == "none":
         return "none"
     return safe_hex(color)
+
+
+def make_letter_icon(letter="T", size=24, color="#000000"):
+    """A small toolbar icon drawn as a letter, in the style of the others."""
+    icon = tk.PhotoImage(width=size, height=size)
+    thick = max(2, size // 8)
+    left, right = size // 5, size - size // 5
+    top, bottom = size // 5, size - size // 5
+    middle = size // 2
+    if letter == "T":
+        icon.put(color, to=(left, top, right, top + thick))          # the bar
+        icon.put(color, to=(middle - thick // 2 - 1, top,            # the stem
+                            middle + thick // 2 + 1, bottom))
+    return icon
 
 
 def json_default(value):
@@ -413,7 +443,7 @@ DEFAULTS = {
         "fill_follows_line": True,
     },
     "fonts": {
-        "title": 20, "axis_label": 18, "tick_label": 16, "legend": 16,
+        "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
         "title_pad": 8.0, "axis_label_pad": 5.5, "tick_label_pad": 5.0,
@@ -430,6 +460,19 @@ DEFAULTS = {
         "figure_background": "#ffffff",
         "left": DEFAULT_POSITION[0], "bottom": DEFAULT_POSITION[1],
         "x_length": DEFAULT_POSITION[2], "y_length": DEFAULT_POSITION[3],
+    },
+    "text": {
+        "size": 14, "color": "#000000", "frame": True,
+        "edge_color": "#000000", "background": "#ffffff", "transparent": False,
+    },
+    "shape": {
+        "kind": "Rectangle", "line_style": "Solid", "line_width": 1.5,
+        "line_color": "#000000", "fill_color": "#cfe3f7", "no_fill": False,
+        "fill_alpha": 0.6,
+    },
+    "arrow": {
+        "head": "Triangle head", "head_size": 14.0, "line_style": "Solid",
+        "line_width": 1.6, "color": "#000000",
     },
     "csv": {
         "separator": "auto", "decimal": "auto",
@@ -511,6 +554,30 @@ SETTINGS_SPEC = [
         ("y_length", "Y axis length (fraction of window)", "float"),
         ("left", "Y axis distance from the left", "float"),
         ("bottom", "X axis distance from the bottom", "float"),
+    ]),
+    ("text", "Text boxes", [
+        ("size", "Font size", "int"),
+        ("color", "Font colour", "color"),
+        ("frame", "Frame around the box", "bool"),
+        ("edge_color", "Frame colour", "color"),
+        ("background", "Background colour", "color"),
+        ("transparent", "Transparent background", "bool"),
+    ]),
+    ("shape", "Drawings", [
+        ("kind", "Shape of the drawing tool", "choice", names(SHAPE_KINDS)),
+        ("line_style", "Line style", "choice", names(LINE_STYLES)),
+        ("line_width", "Line thickness", "float"),
+        ("line_color", "Line colour", "color"),
+        ("fill_color", "Fill colour", "color"),
+        ("no_fill", "No fill (outline only)", "bool"),
+        ("fill_alpha", "Fill opacity (0-1)", "float"),
+    ]),
+    ("arrow", "Arrows", [
+        ("head", "Arrow head", "choice", names(ARROW_HEADS)),
+        ("head_size", "Head size [px]", "float"),
+        ("line_style", "Line style", "choice", names(LINE_STYLES)),
+        ("line_width", "Line thickness", "float"),
+        ("color", "Colour", "color"),
     ]),
     ("csv", "Data files", [
         ("separator", "Field separator (auto, comma, semicolon, tab, space)", "text"),
@@ -624,6 +691,94 @@ class ColorSwatch(ttk.Frame):
             self.set_color(hex_value, notify=True)
 
 
+class ShapeToolButton(tk.Canvas):
+    """Toolbar button with an icon and a small menu arrow on its right.
+
+    Clicking the icon starts drawing with the object that is shown; clicking
+    the arrow opens the list of the available objects.  `family` selects
+    what the icon draws: the shapes or the arrow heads.
+    """
+
+    ARROW_ZONE = 12
+
+    def __init__(self, master, kind="rect", size=24, family="shape",
+                 background=None, on_draw=None, on_menu=None):
+        self._background = background or master.cget("background")
+        super().__init__(master, width=size + ShapeToolButton.ARROW_ZONE,
+                         height=size, highlightthickness=0, borderwidth=0,
+                         background=self._background, cursor="hand2")
+        self._size = size
+        self.family = family
+        self.kind = kind
+        self._on_draw = on_draw
+        self._on_menu = on_menu
+        self.bind("<Button-1>", self._clicked)
+        self.set_shape(kind)
+
+    # -- drawing the icon --------------------------------------------------
+    def set_shape(self, kind):
+        self.kind = kind
+        self.delete("icon")
+        pad = 4
+        x0, y0 = pad, pad
+        x1, y1 = self._size - pad, self._size - pad
+        style = {"outline": "#000000", "width": 2, "fill": "", "tags": "icon"}
+        if self.family == "arrow":
+            self._draw_arrow_icon(kind, x0, y0, x1, y1)
+        elif kind == "triangle":
+            self.create_polygon([(x0 + x1) / 2, y0, x0, y1, x1, y1],
+                                outline="#000000", fill="", width=2, tags="icon")
+        elif kind == "circle":
+            self.create_oval(x0, y0, x1, y1, **style)
+        elif kind == "ellipse":
+            self.create_oval(x0, y0 + 3, x1, y1 - 3, **style)
+        else:
+            self.create_rectangle(x0, y0 + 2, x1, y1 - 2, **style)
+        self._draw_menu_arrow()
+
+    def _draw_arrow_icon(self, kind, x0, y0, x1, y1):
+        """A right pointing arrow whose head shows the selected type."""
+        middle = (y0 + y1) / 2
+        tip, back = x1, x1 - 8
+        half = 5
+        self.create_line(x0, middle, back, middle, fill="#000000", width=2,
+                         tags="icon")
+        if kind == "chevron":
+            self.create_line(back, middle - half, tip, middle, back,
+                             middle + half, fill="#000000", width=2, tags="icon")
+            return
+        if kind == "concave":
+            points = [tip, middle, back, middle - half,
+                      back + 3, middle, back, middle + half]
+        elif kind == "convex":
+            points = [tip, middle, back, middle - half,
+                      back - 2, middle, back, middle + half]
+        else:                                    # triangle
+            points = [tip, middle, back, middle - half, back, middle + half]
+        self.create_polygon(points, fill="#000000", outline="#000000",
+                            tags="icon")
+
+    def _draw_menu_arrow(self):
+        self.delete("arrow")
+        width = int(self["width"])
+        height = int(self["height"])
+        x, y = width - 4, height - 4
+        self.create_polygon([x - 7, y - 5, x, y - 5, x - 3.5, y],
+                            fill="#000000", outline="#000000", tags="arrow")
+
+    def set_active(self, active):
+        self.configure(background="#b8b8b8" if active else self._background)
+
+    # -- behaviour ---------------------------------------------------------
+    def _clicked(self, event):
+        if event.x >= int(self["width"]) - ShapeToolButton.ARROW_ZONE:
+            if self._on_menu:
+                self._on_menu(event)
+        elif self._on_draw:
+            self._on_draw()
+        return "break"
+
+
 class ToolDialog(tk.Toplevel):
     """Base class of the small property windows.
 
@@ -687,6 +842,146 @@ class ToolDialog(tk.Toplevel):
         return widget
 
 
+class ArrowDialog(ToolDialog):
+    """Head, line and colour of one arrow."""
+
+    def __init__(self, master, state, on_apply, on_delete=None, on_close=None):
+        super().__init__(master, "Arrow properties", on_close=on_close)
+        self.on_apply = on_apply
+        self.on_delete = on_delete
+
+        self.head_var = tk.StringVar(
+            value=name_of(ARROW_HEADS, state["head"], "Triangle head"))
+        self.size_var = tk.StringVar(value=f"{state['size']:g}")
+        self.style_var = tk.StringVar(
+            value=name_of(LINE_STYLES, state["style"], "Solid"))
+        self.width_var = tk.StringVar(value=f"{state['width']:g}")
+
+        head = ttk.LabelFrame(self.body, text="Arrow head", padding=8)
+        head.pack(fill="x")
+        combo = ttk.Combobox(head, textvariable=self.head_var, state="readonly",
+                             values=names(ARROW_HEADS), width=16)
+        self.field(head, 0, "Type:", combo)
+        combo.bind("<<ComboboxSelected>>", lambda _e: self.apply())
+        self.field(head, 1, "Size [px]:",
+                   ttk.Spinbox(head, from_=2, to=80, increment=1, width=8,
+                               textvariable=self.size_var, command=self.apply))
+
+        line = ttk.LabelFrame(self.body, text="Line", padding=8)
+        line.pack(fill="x", pady=(10, 0))
+        style = ttk.Combobox(line, textvariable=self.style_var, state="readonly",
+                             values=names(LINE_STYLES), width=16)
+        self.field(line, 0, "Style:", style)
+        style.bind("<<ComboboxSelected>>", lambda _e: self.apply())
+        self.field(line, 1, "Thickness:",
+                   ttk.Spinbox(line, from_=0.2, to=20, increment=0.2, width=8,
+                               textvariable=self.width_var, command=self.apply))
+        self.color = ColorSwatch(line, state["color"],
+                                 command=lambda _c: self.apply())
+        self.field(line, 2, "Colour:", self.color)
+
+        ttk.Label(self.body, foreground="#666", justify="left",
+                  text="Drag the arrow to move it, drag the handle on its tip\n"
+                       "or on its tail to change the direction and length."
+                  ).pack(anchor="w", pady=(8, 0))
+
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
+        if on_delete is not None:
+            ttk.Button(bar, text="Delete", command=self._delete).pack(
+                side="left", padx=(6, 0))
+        ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+
+    def values(self):
+        return {
+            "head": code_of(ARROW_HEADS, self.head_var.get(), "triangle"),
+            "size": max(2.0, to_float(self.size_var.get(), 14.0)),
+            "style": code_of(LINE_STYLES, self.style_var.get(), "-"),
+            "width": max(0.2, to_float(self.width_var.get(), 1.6)),
+            "color": self.color.color,
+        }
+
+    def apply(self):
+        self.on_apply(self.values())
+
+    def _delete(self):
+        if self.on_delete:
+            self.on_delete()
+        self.close()
+
+
+class ShapeDialog(ToolDialog):
+    """Line and fill properties of one drawn object."""
+
+    def __init__(self, master, state, on_apply, on_delete=None, on_close=None):
+        super().__init__(master, f"{name_of(SHAPE_KINDS, state['kind'], 'Shape')}"
+                                 " properties", on_close=on_close)
+        self.on_apply = on_apply
+        self.on_delete = on_delete
+
+        self.style_var = tk.StringVar(
+            value=name_of(LINE_STYLES, state["style"], "Solid"))
+        self.width_var = tk.StringVar(value=f"{state['width']:g}")
+        self.alpha_var = tk.StringVar(value=f"{state.get('alpha', 0.6):g}")
+        self.no_fill_var = tk.BooleanVar(value=state["face"] == "none")
+
+        line = ttk.LabelFrame(self.body, text="Line", padding=8)
+        line.pack(fill="x")
+        combo = ttk.Combobox(line, textvariable=self.style_var, state="readonly",
+                             values=names(LINE_STYLES), width=14)
+        self.field(line, 0, "Style:", combo)
+        combo.bind("<<ComboboxSelected>>", lambda _e: self.apply())
+        self.field(line, 1, "Thickness:",
+                   ttk.Spinbox(line, from_=0, to=20, increment=0.5, width=8,
+                               textvariable=self.width_var, command=self.apply))
+        self.edge_color = ColorSwatch(line, state["edge"],
+                                      command=lambda _c: self.apply())
+        self.field(line, 2, "Colour:", self.edge_color)
+
+        fill = ttk.LabelFrame(self.body, text="Fill", padding=8)
+        fill.pack(fill="x", pady=(10, 0))
+        self.face_color = ColorSwatch(
+            fill, "#cfe3f7" if state["face"] == "none" else state["face"],
+            command=lambda _c: self.apply())
+        self.field(fill, 0, "Colour:", self.face_color)
+        self.field(fill, 1, "", ttk.Checkbutton(fill, text="No fill (outline only)",
+                                                variable=self.no_fill_var,
+                                                command=self.apply))
+        self.field(fill, 2, "Opacity (0-1):",
+                   ttk.Spinbox(fill, from_=0, to=1, increment=0.05, width=8,
+                               textvariable=self.alpha_var, command=self.apply))
+
+        ttk.Label(self.body, foreground="#666", justify="left",
+                  text="Drag the object to move it, drag one of its handles\n"
+                       "to resize it.").pack(anchor="w", pady=(8, 0))
+
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
+        if on_delete is not None:
+            ttk.Button(bar, text="Delete", command=self._delete).pack(
+                side="left", padx=(6, 0))
+        ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+
+    def values(self):
+        return {
+            "style": code_of(LINE_STYLES, self.style_var.get(), "-"),
+            "width": max(0.0, to_float(self.width_var.get(), 1.5)),
+            "edge": self.edge_color.color,
+            "face": "none" if self.no_fill_var.get() else self.face_color.color,
+            "alpha": min(1.0, max(0.0, to_float(self.alpha_var.get(), 0.6))),
+        }
+
+    def apply(self):
+        self.on_apply(self.values())
+
+    def _delete(self):
+        if self.on_delete:
+            self.on_delete()
+        self.close()
+
+
 # --------------------------------------------------------------------------
 # settings (configuration file editor)
 # --------------------------------------------------------------------------
@@ -702,6 +997,7 @@ class SettingsDialog(ToolDialog):
 
         notebook = ttk.Notebook(self.body)
         notebook.pack(fill="both", expand=True)
+        self.notebook = notebook
         for section, title, fields in SETTINGS_SPEC:
             page = ttk.Frame(notebook, padding=12)
             notebook.add(page, text=title)
@@ -1374,12 +1670,14 @@ class AxesDialog(ToolDialog):
             self.close()
 
 
-class LegendDialog(ToolDialog):
-    """One legend box: text, font, surrounding box and background."""
+class TextBoxDialog(ToolDialog):
+    """A legend box or a free text box: text, font, frame and background."""
 
-    def __init__(self, master, column, text, state, on_apply, on_close=None):
-        super().__init__(master, f"Legend of '{column}'", on_close=on_close)
+    def __init__(self, master, title, text, state, on_apply, on_close=None,
+                 hint=None, on_delete=None):
+        super().__init__(master, title, on_close=on_close)
         self.on_apply = on_apply
+        self.on_delete = on_delete
 
         self.text_var = tk.StringVar(value=text)
         self.size_var = tk.StringVar(value=str(int(state.get("size", 10))))
@@ -1398,9 +1696,9 @@ class LegendDialog(ToolDialog):
         self.color = ColorSwatch(box, state.get("color", "#000000"),
                                  command=lambda _c: self.apply())
         self.field(box, 2, "Font colour:", self.color)
-        ttk.Label(box, text="An empty text hides this legend box.",
-                  foreground="#666").grid(row=3, column=0, columnspan=2,
-                                          sticky="w", pady=(4, 0))
+        ttk.Label(box, text=hint or "An empty text hides this box.",
+                  foreground="#666", justify="left").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         frame_box = ttk.LabelFrame(self.body, text="Surrounding box", padding=8)
         frame_box.pack(fill="x", pady=(10, 0))
@@ -1418,13 +1716,16 @@ class LegendDialog(ToolDialog):
                    ttk.Checkbutton(frame_box, text="Transparent background",
                                    variable=self.transparent_var,
                                    command=self.apply))
-        ttk.Label(frame_box, text="Drag the frame of a box to move it.",
+        ttk.Label(frame_box, text="Drag the box with the pointer to move it.",
                   foreground="#666").grid(row=4, column=0, columnspan=2,
                                           sticky="w", pady=(4, 0))
 
         bar = ttk.Frame(self.body)
         bar.pack(fill="x", pady=(12, 0))
         ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
+        if on_delete is not None:
+            ttk.Button(bar, text="Delete", command=self._delete).pack(side="left",
+                                                                      padx=(6, 0))
         ttk.Button(bar, text="Close", command=self.close).pack(side="right")
         ttk.Button(bar, text="OK", command=self._ok).pack(side="right", padx=(0, 6))
         self.bind("<Return>", lambda _e: self.apply())
@@ -1442,6 +1743,11 @@ class LegendDialog(ToolDialog):
 
     def apply(self):
         self.on_apply(self.values())
+
+    def _delete(self):
+        if self.on_delete:
+            self.on_delete()
+        self.close()
 
     def _ok(self):
         self.apply()
@@ -1912,11 +2218,11 @@ class DataTable(ttk.Frame):
 class PlotWindow(tk.Toplevel):
     """Figure window: all plot related interaction lives here."""
 
-    HINT = ("Click a curve: line, marker and fill   |   "
-            "Click the title, an axis label or a legend text: text, size, colour\n"
-            "Drag the title, an axis label or the frame of a legend box: move it"
-            "   |   Click the frame: frame and origin"
-            "   |   Double-click next to an axis: axes properties")
+    HINT = ("Click a curve, a text, a drawing or an arrow: its properties   |   "
+            "Drag it: move it   |   Drag a control point: resize it\n"
+            "\"T\", the shape and the arrow button: add text, drawings and "
+            "arrows   |   Click the frame: frame and origin   |   "
+            "Double-click next to an axis: axes properties")
 
     def __init__(self, master, df: pd.DataFrame, config: Config, app=None):
         super().__init__(master)
@@ -1938,6 +2244,25 @@ class PlotWindow(tk.Toplevel):
         self.fill_state: dict = {}      # Y column name -> fill settings
         self._drag = None
         self._text_drag = None
+        self.notes: dict = {}           # key -> free text box
+        self.note_state: dict = {}      # key -> {text, pos, size, colour, box}
+        self._note_counter = 0
+        self._pending_text = False
+        self.shapes: dict = {}          # key -> drawn patch
+        self.shape_state: dict = {}     # key -> {kind, x, y, w, h, line, fill}
+        self._shape_counter = 0
+        self._pending_shape = False
+        self._shape_drag = None
+        self.selection = None           # ("shape"|"arrow", key)
+        self._handles = None
+        self.shape_kind = code_of(SHAPE_KINDS,
+                                  config.get("shape", "kind"), "rect")
+        self.arrows: dict = {}          # key -> [shaft, head]
+        self.arrow_state: dict = {}     # key -> {head, tail, tip, size, line}
+        self._arrow_counter = 0
+        self._pending_arrow = False
+        self.arrow_head = code_of(ARROW_HEADS,
+                                  config.get("arrow", "head"), "triangle")
         # how far the title and the axis labels were dragged, in pixels
         self.text_offset = {"title": (0.0, 0.0), "x": (0.0, 0.0), "y": (0.0, 0.0)}
         self._text_base = {}
@@ -2021,6 +2346,48 @@ class PlotWindow(tk.Toplevel):
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
         toolbar.update()
+        self.toolbar = toolbar
+        # "add text" button, a little away from the save button
+        tk.Frame(toolbar, width=26, height=1).pack(side="left")
+        self._text_icon = make_letter_icon("T")
+        self.text_button = tk.Button(toolbar, image=self._text_icon,
+                                     command=self.arm_text_placement,
+                                     relief="flat", borderwidth=1,
+                                     highlightthickness=0)
+        self.text_button.pack(side="left", padx=2, pady=2)
+        self.text_button.bind(
+            "<Enter>", lambda _e: toolbar.set_message(
+                "Add text: click in the diagram to place a text box"))
+        self.text_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
+
+        button_background = self.text_button.cget("background")
+        self.shape_button = ShapeToolButton(
+            toolbar, kind=self.shape_kind, family="shape",
+            background=button_background,
+            on_draw=lambda: self.arm_shape_drawing(armed=True),
+            on_menu=self.show_shape_menu)
+        self.shape_button.pack(side="left", padx=(4, 2), pady=2)
+        self.shape_button.bind(
+            "<Enter>", lambda _e: toolbar.set_message(
+                "Draw: click the icon and drag in the diagram, "
+                "the arrow selects the shape"), add="+")
+        self.shape_button.bind("<Leave>", lambda _e: toolbar.set_message(""),
+                               add="+")
+
+        self.arrow_button = ShapeToolButton(
+            toolbar, kind=self.arrow_head, family="arrow",
+            background=button_background,
+            on_draw=lambda: self.arm_arrow_drawing(armed=True),
+            on_menu=self.show_arrow_menu)
+        self.arrow_button.pack(side="left", padx=(4, 2), pady=2)
+        self.arrow_button.bind(
+            "<Enter>", lambda _e: toolbar.set_message(
+                "Arrow: click the icon and drag in the diagram, "
+                "the small arrow selects the head"), add="+")
+        self.arrow_button.bind("<Leave>", lambda _e: toolbar.set_message(""),
+                               add="+")
+
+        self.bind("<Escape>", lambda _e: self.cancel_tools())
         toolbar.pack(side="top", fill="x")
         self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
         ttk.Label(self, text=self.HINT, anchor="center", justify="center",
@@ -2241,6 +2608,22 @@ class PlotWindow(tk.Toplevel):
             "frame": dict(self.frame_cfg),
             "text_offsets": {name: [float(value[0]), float(value[1])]
                              for name, value in self.text_offset.items()},
+            "shapes": [{key_: (float(value) if key_ in ("x", "y", "w", "h",
+                                                        "width", "alpha")
+                               else value)
+                        for key_, value in state.items()}
+                       for state in self.shape_state.values()],
+            "arrows": [{"head": state["head"],
+                        "tail": [float(state["tail"][0]), float(state["tail"][1])],
+                        "tip": [float(state["tip"][0]), float(state["tip"][1])],
+                        "size": float(state["size"]), "style": state["style"],
+                        "width": float(state["width"]), "color": state["color"]}
+                       for state in self.arrow_state.values()],
+            "notes": [{"text": state["text"],
+                       "pos": [float(state["pos"][0]), float(state["pos"][1])],
+                       "size": int(state["size"]), "color": state["color"],
+                       "edge": state["edge"], "face": state["face"]}
+                      for state in self.note_state.values()],
             "axes": axes,
             "series": series,
         }
@@ -2315,6 +2698,33 @@ class PlotWindow(tk.Toplevel):
                 self.text_offset[name] = (float(value[0]), float(value[1]))
         self.apply_text_offsets()
 
+        for key in list(self.shape_state):          # replace the drawings
+            self.remove_shape(key)
+        for shape in state.get("shapes") or []:
+            kind = shape.get("kind", "rect")
+            base = self.default_shape_state(kind, 0.4, 0.4, 0.2, 0.15)
+            self.add_shape(state={**base, **shape, "kind": kind})
+
+        for key in list(self.arrow_state):           # replace the arrows
+            self.remove_arrow(key)
+        for arrow in state.get("arrows") or []:
+            head = arrow.get("head", "triangle")
+            base = self.default_arrow_state(head, arrow.get("tail", (0.3, 0.3)),
+                                            arrow.get("tip", (0.5, 0.5)))
+            merged = {**base, **arrow, "head": head}
+            merged["tail"] = (float(merged["tail"][0]), float(merged["tail"][1]))
+            merged["tip"] = (float(merged["tip"][0]), float(merged["tip"][1]))
+            self.add_arrow(state=merged)
+
+        for key in list(self.note_state):          # replace the text boxes
+            self.remove_note(key)
+        for note in state.get("notes") or []:
+            position = note.get("pos") or (0.5, 0.5)
+            self.add_note(position, state={
+                **self.default_note_state(position),
+                **{k: v for k, v in note.items() if k != "pos"},
+                "pos": (float(position[0]), float(position[1]))})
+
         geometry = state.get("geometry")
         if geometry:
             try:
@@ -2366,7 +2776,11 @@ class PlotWindow(tk.Toplevel):
         if abs(dpi - self._dpi) > 0.01:
             self._dpi = dpi
             self._reapply_distances()
-            self.draw()
+        # circles keep their shape and the arrow heads their size only if the
+        # geometry is rebuilt for the new aspect ratio
+        self.refresh_shapes()
+        self.refresh_arrows()
+        self.draw()
 
     def _connect_events(self):
         self._dpi = self.fig.get_dpi()
@@ -2435,6 +2849,533 @@ class PlotWindow(tk.Toplevel):
             self.legends[y_col] = legend
             index += 1
 
+    # -- drawn objects (rectangle, triangle, circle, ellipse) --------------
+    def arm_shape_drawing(self, kind=None, armed=None):
+        """Wait for a press-drag in the diagram and draw a shape there."""
+        if kind is not None:
+            self.shape_kind = kind
+            self.settings.set("shape", "kind",
+                              name_of(SHAPE_KINDS, kind, "Rectangle"))
+            try:                       # remember it for the next start as well
+                self.settings.save()
+            except OSError:
+                pass
+            self.shape_button.set_shape(kind)
+        wanted = (not self._pending_shape) if armed is None else armed
+        self._pending_shape = bool(wanted)
+        if self._pending_shape:                  # only one tool at a time
+            self.arm_text_placement(False)
+            self.arm_arrow_drawing(armed=False)
+        widget = self.canvas.get_tk_widget()
+        try:
+            self.shape_button.set_active(self._pending_shape)
+            widget.configure(cursor="tcross" if self._pending_shape else "")
+            self.toolbar.set_message(
+                "Draw: press and drag in the diagram" if self._pending_shape else "")
+        except (tk.TclError, AttributeError):
+            pass
+        if not self._pending_shape:
+            self._cursor = ""
+        return self._pending_shape
+
+    def show_shape_menu(self, event=None):
+        """The popup list of the drawing objects."""
+        menu = tk.Menu(self, tearoff=0)
+        for label, code in SHAPE_KINDS:
+            menu.add_command(label=label,
+                             command=lambda c=code: self.arm_shape_drawing(c, True))
+        try:
+            x = self.shape_button.winfo_rootx()
+            y = self.shape_button.winfo_rooty() + self.shape_button.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+        return menu
+
+    def default_shape_state(self, kind, x, y, width=0.0, height=0.0):
+        cfg = self.settings.section("shape")
+        return {
+            "kind": kind, "x": float(x), "y": float(y),
+            "w": float(width), "h": float(height),
+            "style": code_of(LINE_STYLES, cfg["line_style"], "-"),
+            "width": float(cfg["line_width"]),
+            "edge": safe_hex(cfg["line_color"], "#000000"),
+            "face": ("none" if cfg["no_fill"]
+                     else safe_hex(cfg["fill_color"], "#cfe3f7")),
+            "alpha": float(cfg["fill_alpha"]),
+        }
+
+    def add_shape(self, kind=None, position=(0.4, 0.4), size=(0.2, 0.15),
+                  state=None):
+        self._shape_counter += 1
+        key = f"shape{self._shape_counter}"
+        self.shape_state[key] = state or self.default_shape_state(
+            kind or self.shape_kind, position[0], position[1], size[0], size[1])
+        self.refresh_shape(key)
+        self.draw()
+        return key
+
+    def remove_shape(self, key):
+        patch = self.shapes.pop(key, None)
+        if patch is not None:
+            patch.remove()
+        self.shape_state.pop(key, None)
+        if self.selected_shape == key:
+            self.select_shape(None)
+        dialog = self._dialogs.pop(f"shape-{key}", None)
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()
+        self.draw()
+
+    def _axes_aspect(self):
+        box = self.ax.get_window_extent()
+        return (box.width / box.height) if box.height else 1.0
+
+    def refresh_shape(self, key):
+        """Build the patch of one drawn object from its state."""
+        patch = self.shapes.pop(key, None)
+        if patch is not None:
+            patch.remove()
+        state = self.shape_state.get(key)
+        if state is None:
+            return None
+        x, y = state["x"], state["y"]
+        w = max(MIN_SHAPE_SIZE, state["w"])
+        h = max(MIN_SHAPE_SIZE, state["h"])
+        if state["kind"] == "circle":      # keep it round on the screen
+            h = w * self._axes_aspect()
+            state["h"] = h
+        face = state.get("face", "none")
+        common = {
+            "transform": self.ax.transAxes, "clip_on": False, "zorder": 5,
+            "edgecolor": state["edge"], "linestyle": state["style"],
+            "linewidth": state["width"],
+            "facecolor": ("none" if face == "none"
+                          else to_rgba(face, state.get("alpha", 0.6))),
+        }
+        if state["kind"] == "triangle":
+            patch = Polygon([[x + w / 2, y + h], [x, y], [x + w, y]],
+                            closed=True, **common)
+        elif state["kind"] in ("circle", "ellipse"):
+            patch = Ellipse((x + w / 2, y + h / 2), w, h, **common)
+        else:
+            patch = Rectangle((x, y), w, h, **common)
+        self.ax.add_patch(patch)
+        self.shapes[key] = patch
+        if self.selected_shape == key:
+            self._refresh_handles()
+        return patch
+
+    def refresh_shapes(self):
+        for key in list(self.shape_state):
+            self.refresh_shape(key)
+
+    # -- arrows ------------------------------------------------------------
+    def arm_arrow_drawing(self, head=None, armed=None):
+        """Wait for a press-drag in the diagram and draw an arrow there."""
+        if head is not None:
+            self.arrow_head = head
+            self.settings.set("arrow", "head",
+                              name_of(ARROW_HEADS, head, "Triangle head"))
+            try:
+                self.settings.save()
+            except OSError:
+                pass
+            self.arrow_button.set_shape(head)
+        wanted = (not self._pending_arrow) if armed is None else armed
+        self._pending_arrow = bool(wanted)
+        if self._pending_arrow:
+            self.arm_text_placement(False)
+            self.arm_shape_drawing(armed=False)
+        widget = self.canvas.get_tk_widget()
+        try:
+            self.arrow_button.set_active(self._pending_arrow)
+            widget.configure(cursor="tcross" if self._pending_arrow else "")
+            self.toolbar.set_message(
+                "Arrow: press at the tail and drag to the tip"
+                if self._pending_arrow else "")
+        except (tk.TclError, AttributeError):
+            pass
+        if not self._pending_arrow:
+            self._cursor = ""
+        return self._pending_arrow
+
+    def show_arrow_menu(self, event=None):
+        menu = tk.Menu(self, tearoff=0)
+        for label, code in ARROW_HEADS:
+            menu.add_command(label=label,
+                             command=lambda c=code: self.arm_arrow_drawing(c, True))
+        try:
+            x = self.arrow_button.winfo_rootx()
+            y = self.arrow_button.winfo_rooty() + self.arrow_button.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+        return menu
+
+    def default_arrow_state(self, head, tail, tip):
+        cfg = self.settings.section("arrow")
+        return {
+            "head": head, "tail": (float(tail[0]), float(tail[1])),
+            "tip": (float(tip[0]), float(tip[1])),
+            "size": float(cfg["head_size"]),
+            "style": code_of(LINE_STYLES, cfg["line_style"], "-"),
+            "width": float(cfg["line_width"]),
+            "color": safe_hex(cfg["color"], "#000000"),
+        }
+
+    def add_arrow(self, head=None, tail=(0.3, 0.3), tip=(0.5, 0.5), state=None):
+        self._arrow_counter += 1
+        key = f"arrow{self._arrow_counter}"
+        self.arrow_state[key] = state or self.default_arrow_state(
+            head or self.arrow_head, tail, tip)
+        self.refresh_arrow(key)
+        self.draw()
+        return key
+
+    def remove_arrow(self, key):
+        for artist in self.arrows.pop(key, ()):
+            artist.remove()
+        self.arrow_state.pop(key, None)
+        if self.selection == ("arrow", key):
+            self.select_object(None, None)
+        dialog = self._dialogs.pop(f"arrow-{key}", None)
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()
+        self.draw()
+
+    def _head_polygon(self, state):
+        """Head corners in axes coordinates, built in pixels so it is true."""
+        transform = self.ax.transAxes
+        inverse = transform.inverted()
+        tail = np.array(transform.transform(state["tail"]), dtype=float)
+        tip = np.array(transform.transform(state["tip"]), dtype=float)
+        direction = tip - tail
+        length = float(np.hypot(*direction))
+        if length < 1e-6:
+            return None, state["tip"]
+        unit = direction / length
+        normal = np.array([-unit[1], unit[0]])
+        size = min(float(state["size"]), max(4.0, length))
+        half = size * 0.42
+        base = tip - unit * size
+        left, right = base + normal * half, base - normal * half
+        kind = state["head"]
+        if kind == "chevron":
+            points = [left, tip, right]
+        elif kind == "concave":
+            points = [tip, left, base + unit * size * 0.35, right]
+        elif kind == "convex":
+            points = [tip, left, base - unit * size * 0.22, right]
+        else:
+            points = [tip, left, right]
+        shaft_end = tip if kind == "chevron" else base + unit * size * 0.15
+        return ([inverse.transform(point) for point in points],
+                inverse.transform(shaft_end))
+
+    def refresh_arrow(self, key):
+        for artist in self.arrows.pop(key, ()):
+            artist.remove()
+        state = self.arrow_state.get(key)
+        if state is None:
+            return None
+        points, shaft_end = self._head_polygon(state)
+        shaft, = self.ax.plot(
+            [state["tail"][0], shaft_end[0]], [state["tail"][1], shaft_end[1]],
+            transform=self.ax.transAxes, color=state["color"],
+            linestyle=state["style"], linewidth=state["width"],
+            solid_capstyle="butt", clip_on=False, zorder=5,
+            label="_nolegend_")
+        artists = [shaft]
+        if points is not None:
+            if state["head"] == "chevron":
+                head, = self.ax.plot(
+                    [p[0] for p in points], [p[1] for p in points],
+                    transform=self.ax.transAxes, color=state["color"],
+                    linestyle="-", linewidth=state["width"],
+                    solid_joinstyle="miter", clip_on=False, zorder=5,
+                    label="_nolegend_")
+            else:
+                head = Polygon(points, closed=True, transform=self.ax.transAxes,
+                               facecolor=state["color"],
+                               edgecolor=state["color"],
+                               linewidth=max(0.2, state["width"] * 0.5),
+                               clip_on=False, zorder=5)
+                self.ax.add_patch(head)
+            artists.append(head)
+        self.arrows[key] = artists
+        if self.selection == ("arrow", key):
+            self._refresh_handles()
+        return artists
+
+    def refresh_arrows(self):
+        for key in list(self.arrow_state):
+            self.refresh_arrow(key)
+
+    @staticmethod
+    def arrow_handle_positions(state):
+        return [tuple(state["tail"]), tuple(state["tip"])]
+
+    def arrow_at(self, x, y, tolerance=6.0):
+        """Key of the arrow under the pointer, or None."""
+        if x is None or y is None:
+            return None
+        point = np.array([x, y], dtype=float)
+        for key in reversed(list(self.arrow_state)):
+            state = self.arrow_state[key]
+            tail = np.array(self.ax.transAxes.transform(state["tail"]))
+            tip = np.array(self.ax.transAxes.transform(state["tip"]))
+            segment = tip - tail
+            length = float(np.hypot(*segment))
+            if length < 1e-6:
+                continue
+            position = float(np.clip(np.dot(point - tail, segment) / length ** 2,
+                                     0.0, 1.0))
+            distance = float(np.hypot(*(point - (tail + position * segment))))
+            if distance <= tolerance + state["width"] + state["size"] * 0.25:
+                return key
+        return None
+
+    def edit_arrow(self, key):
+        state = self.arrow_state.get(key)
+        if state is None:
+            return None
+
+        def apply(values):
+            state.update(values)
+            self.refresh_arrow(key)
+            self.draw()
+
+        return self._show_dialog(f"arrow-{key}", lambda: ArrowDialog(
+            self, state, apply, on_delete=lambda: self.remove_arrow(key),
+            on_close=lambda _d: self._dialogs.pop(f"arrow-{key}", None)))
+
+    # -- selection and control points --------------------------------------
+    @staticmethod
+    def handle_positions(state):
+        x, y, w, h = state["x"], state["y"], state["w"], state["h"]
+        return [(x, y), (x + w, y), (x + w, y + h), (x, y + h),
+                (x + w / 2, y), (x + w, y + h / 2),
+                (x + w / 2, y + h), (x, y + h / 2)]
+
+    @property
+    def selected_shape(self):
+        kind, key = self.selection or (None, None)
+        return key if kind == "shape" else None
+
+    @property
+    def selected_arrow(self):
+        kind, key = self.selection or (None, None)
+        return key if kind == "arrow" else None
+
+    def select_shape(self, key):
+        self.select_object("shape", key)
+
+    def select_object(self, kind, key):
+        if kind == "shape" and key in self.shape_state:
+            self.selection = ("shape", key)
+        elif kind == "arrow" and key in self.arrow_state:
+            self.selection = ("arrow", key)
+        else:
+            self.selection = None
+        self._refresh_handles()
+
+    def selected_handle_positions(self):
+        kind, key = self.selection or (None, None)
+        if kind == "shape" and key in self.shape_state:
+            return self.handle_positions(self.shape_state[key])
+        if kind == "arrow" and key in self.arrow_state:
+            return self.arrow_handle_positions(self.arrow_state[key])
+        return None
+
+    def _refresh_handles(self):
+        points = self.selected_handle_positions()
+        if points is None:
+            if self._handles is not None:
+                self._handles.set_data([], [])
+            return
+        if self._handles is None:
+            self._handles, = self.ax.plot(
+                [], [], linestyle="none", marker="s", markersize=7,
+                markerfacecolor="#ffffff", markeredgecolor="#1a5fb4",
+                markeredgewidth=1.2, transform=self.ax.transAxes,
+                clip_on=False, zorder=8, label="_nolegend_")
+        self._handles.set_data([p[0] for p in points], [p[1] for p in points])
+
+    def handle_at(self, x, y, tolerance=8.0):
+        """Index of the control point of the selected object, or None."""
+        points = self.selected_handle_positions()
+        if points is None or x is None or y is None:
+            return None
+        for index, point in enumerate(points):
+            px, py = self.ax.transAxes.transform(point)
+            if abs(px - x) <= tolerance and abs(py - y) <= tolerance:
+                return index
+        return None
+
+    def shape_at(self, x, y):
+        """Key of the drawn object under the pointer, or None."""
+        if x is None or y is None:
+            return None
+        for key in reversed(list(self.shapes)):        # topmost first
+            patch = self.shapes[key]
+            try:
+                inside = patch.get_path().contains_point(
+                    (x, y), patch.get_transform(),
+                    radius=max(3.0, patch.get_linewidth()))
+            except (ValueError, AttributeError):
+                continue
+            if inside:
+                return key
+        return None
+
+    def _resize_shape(self, key, index, point):
+        state = self.shape_state[key]
+        x0, y0 = state["x"], state["y"]
+        x1, y1 = x0 + state["w"], y0 + state["h"]
+        if index in (0, 3, 7):
+            x0 = point[0]
+        elif index in (1, 2, 5):
+            x1 = point[0]
+        if index in (0, 1, 4):
+            y0 = point[1]
+        elif index in (2, 3, 6):
+            y1 = point[1]
+        state["x"], state["w"] = min(x0, x1), max(MIN_SHAPE_SIZE, abs(x1 - x0))
+        state["y"], state["h"] = min(y0, y1), max(MIN_SHAPE_SIZE, abs(y1 - y0))
+        self.refresh_shape(key)
+
+    def edit_shape(self, key):
+        state = self.shape_state.get(key)
+        if state is None:
+            return None
+
+        def apply(values):
+            state.update(values)
+            self.refresh_shape(key)
+            self.draw()
+
+        return self._show_dialog(f"shape-{key}", lambda: ShapeDialog(
+            self, state, apply, on_delete=lambda: self.remove_shape(key),
+            on_close=lambda _d: self._dialogs.pop(f"shape-{key}", None)))
+
+    # -- free text boxes ---------------------------------------------------
+    def arm_text_placement(self, armed=None):
+        """Wait for a click in the diagram and put a new text box there."""
+        self._pending_text = (not self._pending_text) if armed is None else armed
+        if self._pending_text:                   # only one tool at a time
+            self.arm_shape_drawing(armed=False)
+            self.arm_arrow_drawing(armed=False)
+        widget = self.canvas.get_tk_widget()
+        try:
+            if self._pending_text:
+                self.text_button.configure(relief="sunken")
+                widget.configure(cursor="xterm")     # a vertical line
+                self.toolbar.set_message("Click in the diagram to place the text")
+            else:
+                self.text_button.configure(relief="flat")
+                widget.configure(cursor="")
+                self._cursor = ""
+                self.toolbar.set_message("")
+        except (tk.TclError, AttributeError):
+            pass
+        return self._pending_text
+
+    def cancel_tools(self):
+        """Escape: none of the three toolbar tools stays armed."""
+        self.arm_text_placement(False)
+        self.arm_shape_drawing(armed=False)
+        self.arm_arrow_drawing(armed=False)
+
+    def default_note_state(self, position):
+        cfg = self.settings.section("text")
+        return {
+            "text": "Text", "pos": (float(position[0]), float(position[1])),
+            "size": int(cfg["size"]), "color": safe_hex(cfg["color"], "#000000"),
+            "edge": ("none" if not cfg["frame"]
+                     else safe_hex(cfg["edge_color"], "#000000")),
+            "face": ("none" if cfg["transparent"]
+                     else safe_hex(cfg["background"], "#ffffff")),
+        }
+
+    def add_note(self, position, text=None, state=None):
+        """Create a text box at `position` (axes coordinates)."""
+        self._note_counter += 1
+        key = f"note{self._note_counter}"
+        self.note_state[key] = state or self.default_note_state(position)
+        if text is not None:
+            self.note_state[key]["text"] = text
+        self.refresh_note(key)
+        self.draw()
+        return key
+
+    def remove_note(self, key):
+        artist = self.notes.pop(key, None)
+        if artist is not None:
+            artist.remove()
+        self.note_state.pop(key, None)
+        dialog = self._dialogs.pop(f"note-{key}", None)
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()
+        self.draw()
+
+    def refresh_note(self, key):
+        artist = self.notes.pop(key, None)
+        if artist is not None:
+            artist.remove()
+        state = self.note_state.get(key)
+        if state is None or not str(state["text"]).strip():
+            return None
+        edge, face = state.get("edge", "none"), state.get("face", "none")
+        box = {"boxstyle": "round,pad=0.35",
+               "facecolor": "none" if face == "none" else face,
+               "edgecolor": "none" if edge == "none" else edge,
+               "linewidth": 0.0 if edge == "none" else 0.8}
+        artist = self.ax.text(state["pos"][0], state["pos"][1], state["text"],
+                              transform=self.ax.transAxes,
+                              fontsize=state["size"], color=state["color"],
+                              ha="left", va="center", bbox=box, zorder=6,
+                              picker=True, clip_on=False)
+        self.notes[key] = artist
+        return artist
+
+    def refresh_notes(self):
+        for key in list(self.note_state):
+            self.refresh_note(key)
+
+    def note_at(self, x, y):
+        """Key of the text box under the pointer, or None."""
+        if x is None or y is None:
+            return None
+        renderer = self._renderer()
+        for key, artist in self.notes.items():
+            try:
+                box = artist.get_window_extent(renderer)
+            except (RuntimeError, ValueError, AttributeError):
+                continue
+            if box.expanded(1.15, 1.4).contains(x, y):
+                return key
+        return None
+
+    def edit_note(self, key):
+        state = self.note_state.get(key)
+        if state is None:
+            return None
+
+        def apply(values):
+            state.update(values)
+            if not str(state["text"]).strip():
+                self.remove_note(key)
+                return
+            self.refresh_note(key)
+            self.draw()
+
+        return self._show_dialog(f"note-{key}", lambda: TextBoxDialog(
+            self, "Text box", state["text"], state, apply,
+            hint="An empty text deletes this box.",
+            on_delete=lambda: self.remove_note(key),
+            on_close=lambda _d: self._dialogs.pop(f"note-{key}", None)))
+
     # -- movable title and axis labels -------------------------------------
     def text_artist(self, name):
         return {"title": self.ax.title,
@@ -2498,8 +3439,18 @@ class PlotWindow(tk.Toplevel):
         return None
 
     def _start_text_drag(self, name, event):
+        if name.startswith(NOTE_KEY):
+            origin = tuple(self.note_state[name[len(NOTE_KEY):]]["pos"])
+        else:
+            origin = tuple(self.text_offset[name])
         self._text_drag = {"name": name, "x": event.x, "y": event.y,
-                           "offset": tuple(self.text_offset[name]), "moved": False}
+                           "offset": origin, "moved": False}
+
+    def _move_note(self, key, position):
+        self.note_state[key]["pos"] = (float(position[0]), float(position[1]))
+        artist = self.notes.get(key)
+        if artist is not None:
+            artist.set_position(self.note_state[key]["pos"])
 
     # -- legend hit testing / dragging -------------------------------------
     def _renderer(self):
@@ -2534,7 +3485,8 @@ class PlotWindow(tk.Toplevel):
         return False
 
     def _axes_point(self, event):
-        return tuple(self.ax.transAxes.inverted().transform((event.x, event.y)))
+        x, y = self.ax.transAxes.inverted().transform((event.x, event.y))
+        return (float(x), float(y))
 
     def _start_legend_drag(self, y_col, event):
         pos = self.legend_state[y_col]["pos"]
@@ -2543,6 +3495,54 @@ class PlotWindow(tk.Toplevel):
                       "dx": pos[0] - point[0], "dy": pos[1] - point[1]}
 
     def _on_motion(self, event):
+        if self._shape_drag is not None:
+            if event.x is None or event.y is None:
+                return
+            drag = self._shape_drag
+            key = drag["key"]
+            mode = drag["mode"]
+            if mode.startswith("arrow"):
+                if key not in self.arrow_state:
+                    self._shape_drag = None
+                    return
+                point = self._axes_point(event)
+                state = self.arrow_state[key]
+                if mode == "arrow-new":
+                    state["tip"] = point
+                elif mode == "arrow-end":
+                    state["tail" if drag["index"] == 0 else "tip"] = point
+                else:
+                    shift = (point[0] - drag["start"][0],
+                             point[1] - drag["start"][1])
+                    state["tail"] = (drag["tail"][0] + shift[0],
+                                     drag["tail"][1] + shift[1])
+                    state["tip"] = (drag["tip"][0] + shift[0],
+                                    drag["tip"][1] + shift[1])
+                    drag["moved"] = True
+                self.refresh_arrow(key)
+                self._refresh_handles()
+                self.draw()
+                return
+            if key not in self.shape_state:
+                self._shape_drag = None
+                return
+            point = self._axes_point(event)
+            if drag["mode"] == "new":          # rubber band from the anchor
+                anchor = drag["anchor"]
+                state = self.shape_state[key]
+                state["x"], state["w"] = min(anchor[0], point[0]), abs(point[0] - anchor[0])
+                state["y"], state["h"] = min(anchor[1], point[1]), abs(point[1] - anchor[1])
+                self.refresh_shape(key)
+            elif drag["mode"] == "resize":
+                self._resize_shape(key, drag["index"], point)
+            else:
+                state = self.shape_state[key]
+                state["x"] = drag["origin"][0] + point[0] - drag["start"][0]
+                state["y"] = drag["origin"][1] + point[1] - drag["start"][1]
+                drag["moved"] = True
+                self.refresh_shape(key)
+            self.draw()
+            return
         if self._text_drag is not None:
             if event.x is None or event.y is None:
                 return
@@ -2551,9 +3551,18 @@ class PlotWindow(tk.Toplevel):
             dy = event.y - drag["y"]
             if abs(dx) > 2 or abs(dy) > 2:
                 drag["moved"] = True
-            self.text_offset[drag["name"]] = (drag["offset"][0] + dx,
-                                              drag["offset"][1] + dy)
-            self.apply_text_offset(drag["name"])
+            name = drag["name"]
+            if name.startswith(NOTE_KEY):     # text boxes live in axes coords
+                inverse = self.ax.transAxes.inverted()
+                start = inverse.transform((drag["x"], drag["y"]))
+                now = inverse.transform((event.x, event.y))
+                self._move_note(name[len(NOTE_KEY):],
+                                (drag["offset"][0] + now[0] - start[0],
+                                 drag["offset"][1] + now[1] - start[1]))
+            else:
+                self.text_offset[name] = (drag["offset"][0] + dx,
+                                          drag["offset"][1] + dy)
+                self.apply_text_offset(name)
             self.draw()
             return
         if self._drag is None:
@@ -2574,23 +3583,69 @@ class PlotWindow(tk.Toplevel):
 
     def _on_release(self, _event):
         self._drag = None
+        shape_drag, self._shape_drag = self._shape_drag, None
+        if shape_drag is not None and shape_drag["mode"].startswith("arrow"):
+            key = shape_drag["key"]
+            state = self.arrow_state.get(key)
+            if state is not None:
+                if shape_drag["mode"] == "arrow-new":
+                    tail = np.array(self.ax.transAxes.transform(state["tail"]))
+                    tip = np.array(self.ax.transAxes.transform(state["tip"]))
+                    if float(np.hypot(*(tip - tail))) < 12.0:   # a plain click
+                        state["tip"] = (state["tail"][0] + 0.18,
+                                        state["tail"][1])
+                        self.refresh_arrow(key)
+                        self._refresh_handles()
+                elif shape_drag["mode"] == "arrow-move" and not shape_drag.get("moved"):
+                    self.after(1, lambda k=key: self.edit_arrow(k))
+                self.draw()
+            return
+        if shape_drag is not None:
+            key = shape_drag["key"]
+            state = self.shape_state.get(key)
+            if state is not None:
+                if shape_drag["mode"] == "new" and (
+                        state["w"] < 0.02 or state["h"] < 0.02):
+                    state["w"] = max(state["w"], 0.18)   # a plain click
+                    state["h"] = max(state["h"], 0.14)
+                    self.refresh_shape(key)
+                elif shape_drag["mode"] == "move" and not shape_drag.get("moved"):
+                    self.after(1, lambda k=key: self.edit_shape(k))
+                self.draw()
+            return
         drag, self._text_drag = self._text_drag, None
         if drag is None:
             return
         if not drag["moved"]:          # a click, not a drag: open the dialog
-            self.text_offset[drag["name"]] = drag["offset"]
-            self.apply_text_offset(drag["name"])
-            self.draw()
             name = drag["name"]
+            if name.startswith(NOTE_KEY):
+                key = name[len(NOTE_KEY):]
+                self._move_note(key, drag["offset"])
+                self.draw()
+                self.after(1, lambda k=key: self.edit_note(k))
+                return
+            self.text_offset[name] = drag["offset"]
+            self.apply_text_offset(name)
+            self.draw()
             if name == "title":
                 self.after(1, self.edit_title)
             else:
                 self.after(1, lambda which=name: self.edit_axis_label(which))
 
     def _update_cursor(self, event):
+        if self._pending_text or self._pending_shape or self._pending_arrow:
+            return                     # the tool cursor stays until the click
         cursor = ""
         _y_col, legend = self.legend_at(event.x, event.y)
-        if self.text_at(event.x, event.y) is not None:
+        if self.handle_at(event.x, event.y) is not None:
+            cursor = "sizing"
+        elif self.arrow_at(event.x, event.y) is not None:
+            cursor = "fleur"
+        elif self.shape_at(event.x, event.y) is not None:
+            cursor = "fleur"
+        elif self.note_at(event.x, event.y) is not None:
+            cursor = "fleur"
+        elif self.text_at(event.x, event.y) is not None:
             cursor = "fleur"
         elif legend is not None:
             cursor = ("xterm" if self._legend_text_hit(legend, event.x, event.y)
@@ -2755,9 +3810,17 @@ class PlotWindow(tk.Toplevel):
         mouse = event.mouseevent
         if getattr(mouse, "dblclick", False):
             return  # double click belongs to the axes dialog
+        if self._pending_text or self._pending_shape or self._pending_arrow:
+            return  # waiting for the click that places the new object
+        if (self.shape_at(mouse.x, mouse.y) is not None
+                or self.arrow_at(mouse.x, mouse.y) is not None
+                or self.handle_at(mouse.x, mouse.y) is not None):
+            return  # drawn objects are handled by the press handler
         if self.legend_at(mouse.x, mouse.y)[1] is not None:
             return  # the legend boxes are handled by the press handler
         artist = event.artist
+        if artist in self.notes.values() or self.note_at(mouse.x, mouse.y):
+            return  # free text boxes are handled by the press handler
         # the title and the axis labels are draggable, so the press and
         # release handlers decide between moving them and editing them
         if artist in (self.ax.title, self.ax.xaxis.label, self.ax.yaxis.label):
@@ -2777,6 +3840,63 @@ class PlotWindow(tk.Toplevel):
                 self.open_axes_dialog(which)
             return
         if event.button != 1:
+            return
+        if self._pending_text:            # place a new text box here
+            if event.x is not None and event.y is not None:
+                key = self.add_note(self._axes_point(event))
+                self.arm_text_placement(False)
+                self.after(1, lambda k=key: self.edit_note(k))
+            return
+        if self._pending_shape:           # start drawing a new object
+            if event.x is not None and event.y is not None:
+                point = self._axes_point(event)
+                key = self.add_shape(self.shape_kind, point, (0.0, 0.0))
+                self._shape_drag = {"key": key, "mode": "new", "anchor": point}
+                self.arm_shape_drawing(armed=False)
+                self.select_shape(key)
+            return
+        if self._pending_arrow:           # start drawing a new arrow
+            if event.x is not None and event.y is not None:
+                point = self._axes_point(event)
+                key = self.add_arrow(self.arrow_head, point, point)
+                self._shape_drag = {"key": key, "mode": "arrow-new"}
+                self.arm_arrow_drawing(armed=False)
+                self.select_object("arrow", key)
+            return
+
+        index = self.handle_at(event.x, event.y)
+        if index is not None:             # resize the selected object
+            kind, key = self.selection
+            self._shape_drag = {"key": key, "index": index,
+                                "mode": ("arrow-end" if kind == "arrow"
+                                         else "resize")}
+            return
+        key = self.arrow_at(event.x, event.y)
+        if key is not None:               # move an arrow, or click it
+            self.select_object("arrow", key)
+            self.draw()
+            state = self.arrow_state[key]
+            self._shape_drag = {"key": key, "mode": "arrow-move", "moved": False,
+                                "start": self._axes_point(event),
+                                "tail": tuple(state["tail"]),
+                                "tip": tuple(state["tip"])}
+            return
+        key = self.shape_at(event.x, event.y)
+        if key is not None:               # move it, or click it for the dialog
+            self.select_shape(key)
+            self.draw()
+            state = self.shape_state[key]
+            self._shape_drag = {"key": key, "mode": "move", "moved": False,
+                                "start": self._axes_point(event),
+                                "origin": (state["x"], state["y"])}
+            return
+        if self.selection is not None:
+            self.select_object(None, None)   # clicking elsewhere deselects
+            self.draw()
+
+        key = self.note_at(event.x, event.y)
+        if key is not None:               # drag an existing text box, or edit it
+            self._start_text_drag(f"{NOTE_KEY}{key}", event)
             return
         name = self.text_at(event.x, event.y)
         if name is not None:      # drag the title / an axis label, or click it
@@ -2920,8 +4040,9 @@ class PlotWindow(tk.Toplevel):
             self.refresh_legend()
             self.draw()
 
-        return self._show_dialog(f"legend-{column}", lambda: LegendDialog(
-            self, column, line.get_label(), state, apply,
+        return self._show_dialog(f"legend-{column}", lambda: TextBoxDialog(
+            self, f"Legend of '{column}'", line.get_label(), state, apply,
+            hint="An empty text hides this legend box.",
             on_close=lambda _d: self._dialogs.pop(f"legend-{column}", None)))
 
 
@@ -3020,7 +4141,109 @@ Every curve, label and axis reacts to the mouse.
 | Click the frame (any axis line) | Frame and origin settings. |
 | Double-click beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
 | Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing this diagram. |
-| Toolbar | The standard Matplotlib toolbar: pan, zoom, and saving the figure as an image. |
+| Drag a text box | Moves it; clicking it opens its properties. |
+| Drag a drawn object | Moves it; dragging a control point resizes it, clicking it opens its properties. |
+| Drag an arrow | Moves it; dragging the control point at its tip or its tail changes its length and direction, clicking it opens its properties. |
+| Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
+
+### Drawing rectangles, triangles, circles and ellipses
+
+The button next to **T** is the drawing tool.  Its icon shows the shape
+that will be drawn, with a small arrow in its lower right corner:
+
+* clicking the **icon** starts drawing with the shape that is shown (a
+  rectangle at the first start, later whatever was used last),
+* clicking the **arrow** opens the list `Rectangle`, `Triangle`, `Circle`,
+  `Ellipse`; after choosing one the tool is armed with it and the icon
+  changes to that shape.
+
+While the tool is armed the button stays pressed and the pointer becomes a
+cross.  Press in the diagram and drag: the object is drawn between the
+press and the release point with the default line and fill.  A plain click
+without dragging gives an object of a comfortable default size.  `Esc` or
+clicking the icon again cancels.
+
+An object that was drawn behaves like the other decorations:
+
+* it is **selected** when it is clicked, and eight small square **control
+  points** appear on its corners and on the middle of its sides; dragging
+  one of them **resizes** the object (the pointer becomes a resize cross),
+* dragging the object itself **moves** it,
+* clicking it without moving opens its **properties**: line style (solid,
+  dashed, dash-dot, dotted, none), line thickness, line colour, fill colour
+  with an opacity, or `No fill (outline only)`, and a `Delete` button,
+* clicking an empty part of the diagram deselects it,
+* a circle keeps its round shape: its height follows its width and the
+  proportions of the plot area.
+
+The positions and sizes are kept in the coordinates of the plot area, so
+the objects follow the diagram when the window is resized, and they are
+stored in `.aplt` files.  The starting line and fill of new objects come
+from the `Drawings` tab of the settings.
+
+### Arrows
+
+The third button of the group is the arrow tool.  Its icon is an arrow head
+pointing to the right - the head that will be drawn - with the same small
+arrow in its lower right corner:
+
+* clicking the **icon** arms the tool with the head that is shown (a
+  triangle head at the first start, later whatever was used last),
+* clicking the **arrow** in the corner opens the list `Triangle head`,
+  `Chevron head`, `Concave head`, `Convex head`; the icon changes to the
+  chosen one.
+
+Press in the diagram at the **tail** of the arrow and drag: the arrow
+follows the pointer, so its length and its direction are drawn immediately,
+and it is finished by releasing the button at the **tip**.  A plain click
+without dragging gives a short horizontal arrow.  `Esc` or clicking the
+icon again cancels.
+
+An arrow behaves like the drawn objects:
+
+* it is **selected** when it is clicked, and two **control points** appear,
+  one on the tip and one on the tail; dragging either of them changes the
+  length, the direction and the position of that end,
+* dragging the shaft or the head **moves** the whole arrow,
+* clicking it without moving opens its **properties**: the arrow head
+  (`Triangle`, `Chevron`, `Concave`, `Convex`), the head size in pixels,
+  the line style, the line thickness, the colour and a `Delete` button,
+* clicking an empty part of the diagram deselects it.
+
+The tip and the tail are kept in the coordinates of the plot area, so the
+arrows follow the diagram when the window is resized, while the head keeps
+its size in pixels.  They are stored in `.aplt` files, and the head, size,
+line and colour of new arrows come from the `Arrows` tab of the settings.
+
+### Text boxes on the diagram
+
+The **T** button on the right end of the toolbar, a little apart from the
+save button, adds free text to the diagram:
+
+1. press **T** - the button stays pressed and the pointer becomes a
+   vertical line,
+2. click in the diagram where the text should be - a text box appears there
+   and its dialog opens,
+3. type the text and press `OK`.
+
+`Esc` or pressing **T** again cancels the placement without adding
+anything.
+
+A text box behaves like a legend box:
+
+* **drag** it with the pointer to move it (the pointer becomes a move
+  cross over it),
+* **click** it to open its dialog again: text, font size, font colour, the
+  frame around it (its colour, or no frame) and the background (a colour,
+  or fully transparent),
+* `Delete` in that dialog - or an empty text - removes the box,
+* the position is kept in the coordinates of the plot area, so the box
+  follows the diagram when the window is resized,
+* any number of text boxes can be added, and they are all stored in
+  `.aplt` files.
+
+The starting font, frame and background of new boxes come from the
+`Text boxes` tab of the settings.
 
 ### Moving the title and the axis labels
 
@@ -3227,6 +4450,9 @@ for each open diagram:
 * the frame: style, thickness, colour, major and minor tick length, the
   background of the plot area and of the window, and the size and origin of
   the axes inside the window,
+* every text box with its text, position, font, frame and background,
+* every drawn object with its shape, position, size, line and fill,
+* every arrow with its head type and size, tip, tail, line and colour,
 * the figure size, resolution and the window geometry.
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
@@ -3280,6 +4506,9 @@ built-in values.
 | Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
+| Text boxes | Font size and colour, frame and background of the text boxes added with the **T** button. |
+| Drawings | The shape the drawing tool starts with, and the line style, thickness, colour, fill colour and opacity of new objects. |
+| Arrows | The head type the arrow tool starts with, the head size in pixels, and the line style, thickness and colour of new arrows. |
 | Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
 
 Window sizes and plot defaults are used by windows opened after saving;
@@ -3293,7 +4522,8 @@ diagrams that are already open keep their settings.
    legend texts and the X axis label.
 3. `Plot`.
 4. Click the curves, the labels and the axes until the diagram looks right,
-   and drag the legend boxes where they do not cover the data.
+   and drag the legend boxes where they do not cover the data.  Add text
+   boxes, drawings and arrows to point out what matters.
 5. Correct or extend the data in the table and press `Update plot`; the
    diagram keeps its appearance and only the values change.
 6. `Save graph (.aplt)` to be able to continue later, or the save button of
@@ -3310,6 +4540,9 @@ diagrams that are already open keep their settings.
   the curve.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
+* The three tools of the toolbar (**T**, the shape and the arrow button)
+  are exclusive: arming one cancels the others, and `Esc` cancels all of
+  them.
 * A legend box can be dragged outside the axes area (for example beside the
   diagram); `Reset positions` brings every box back.
 """
