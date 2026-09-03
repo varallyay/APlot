@@ -74,28 +74,42 @@ overwritten.
 
 ## 2. The diagram window
 
-Every curve, label and axis reacts to the mouse.
+Every text, label, axis and object reacts to the mouse, and all of them
+follow the same rule:
+
+> **One click selects, a second click opens the properties.**
+
+A selected object can be moved with the pointer or with the arrow keys,
+copied, pasted and deleted, so a whole diagram can be arranged without
+opening a single dialog.  What is selected is always visible:
+
+* a **text** - the title, an axis label, a legend box or a text box - is
+  covered with a light **blue veil** in a blue frame,
+* a **drawing** or an **arrow** shows its **control points** instead,
+* clicking an empty part of the diagram deselects everything.
+
+The single exception is a **curve**: it is never selected, because there is
+nothing to move or copy on it, so one click on a curve opens its
+properties at once.
 
 | Action | Result |
 | --- | --- |
-| Click a curve | Curve properties: line and marker settings separately. |
-| Click the title | Its text, font size, font colour and its distance from the top of the plot area. |
-| Drag the title | Moves it freely anywhere on the diagram. |
-| Click an axis label | Its text, font size, font colour and its distance from the axis. |
-| Drag an axis label | Moves it freely anywhere on the diagram. |
-| Click the text of a legend box | Its text, font size and font colour (an empty text hides that box). |
-| Drag the frame of a legend box | Moves that legend box anywhere on the diagram. |
-| Click the frame (any axis line) | Frame and origin settings. |
-| Double-click beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
-| Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing this diagram. |
-| Drag a text box | Moves it; clicking it opens its properties. |
-| Drag a drawn object | Moves it; dragging a control point resizes it, clicking it opens its properties. |
-| Drag an arrow | Moves it; dragging the control point at its tip or its tail changes its length and direction, clicking it opens its properties. |
-| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
+| Click a curve | Curve properties at once: line and marker settings separately. |
+| Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
+| Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
+| Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
+| Drag a control point | Resizes a drawing, or moves the tip or the tail of an arrow. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| `Delete` / `Backspace` | Removes the selected object. |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
+| `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
+| Click the frame (any axis line) twice | Frame and origin settings. |
+| Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
+| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
+| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, paste and delete of the selected object, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
+
+The blue veil and the control points are only on the screen: they are left
+out of the image that the save button of the toolbar writes.
 
 ### Drawing rectangles, triangles, circles and ellipses
 
@@ -116,13 +130,13 @@ clicking the icon again cancels.
 
 An object that was drawn behaves like the other decorations:
 
-* it is **selected** when it is clicked, and eight small square **control
+* it is **selected** by one click, and eight small square **control
   points** appear on its corners and on the middle of its sides; dragging
   one of them **resizes** the object (the pointer becomes a resize cross),
-* dragging the object itself **moves** it,
-* clicking it without moving opens its **properties**: line style (solid,
-  dashed, dash-dot, dotted, none), line thickness, line colour, fill colour
-  with an opacity, or `No fill (outline only)`, and a `Delete` button,
+* dragging the object itself **moves** it, and so do the arrow keys,
+* a **second click** opens its **properties**: line style (solid, dashed,
+  dash-dot, dotted, none), line thickness, line colour, fill colour with an
+  opacity, or `No fill (outline only)`, and a `Delete` button,
 * clicking an empty part of the diagram deselects it,
 * a circle keeps its round shape: its height follows its width and the
   proportions of the plot area.
@@ -159,12 +173,12 @@ dragged stays where it is.
 
 An arrow behaves like the drawn objects:
 
-* it is **selected** when it is clicked, and two **control points** appear,
-  one on the tip and one on the tail; dragging either of them changes the
-  length, the direction and the position of that end,
+* it is **selected** by one click, and two **control points** appear, one on
+  the tip and one on the tail; dragging either of them changes the length,
+  the direction and the position of that end,
 * dragging the shaft or the head **moves** the whole arrow (the arrow keys
   move it by one pixel, with `Shift` by ten),
-* clicking it without moving opens its **properties**: the arrow head
+* a **second click** opens its **properties**: the arrow head
   (`Triangle`, `Chevron`, `Concave`, `Convex`), the head size in pixels,
   the line style, the line thickness, the colour and a `Delete` button,
 * clicking an empty part of the diagram deselects it.
@@ -174,11 +188,12 @@ arrows follow the diagram when the window is resized, while the head keeps
 its size in pixels.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
 
-### Copying, moving and deleting the objects
+### Selecting, copying, moving and deleting the objects
 
-Text boxes, drawings and arrows all work the same way once one of them is
-**selected** - a single click on the object selects it (a drawing and an
-arrow also show their control points):
+One click selects; what is selected is shown by the **blue veil** on a text
+(the title, an axis label, a legend box, a text box) or by the **control
+points** of a drawing or an arrow.  Everything that is selected can then be
+worked on from the keyboard:
 
 | Keys | What happens |
 | --- | --- |
@@ -190,6 +205,11 @@ arrow also show their control points):
 
 The same commands are in the `Plot` menu as `Copy object`, `Paste object`
 and `Delete object`.
+
+Copying, pasting and deleting work on **text boxes, drawings and arrows**.
+The title, the axis labels and the legend boxes belong to the diagram and
+are not copied or deleted - but they are selected and moved with the arrow
+keys just like everything else.
 
 So a circle that has its final line style, thickness, line colour, fill and
 opacity does not have to be built again: select it, `Ctrl/Cmd+C`, then
@@ -219,9 +239,10 @@ anything.
 
 A text box behaves like a legend box:
 
-* **drag** it with the pointer to move it (the pointer becomes a move
-  cross over it),
-* **click** it to open its dialog again: text, font size, font colour, the
+* **click** it to select it - it turns blue - and **drag** it with the
+  pointer to move it (the pointer becomes a move cross over it), or move it
+  with the arrow keys,
+* **click it again** to open its dialog: text, font size, font colour, the
   frame around it (its colour, or no frame) and the background (a colour,
   or fully transparent),
 * `Delete` in that dialog - or an empty text - removes the box,
@@ -237,8 +258,10 @@ The starting font, frame and background of new boxes come from the
 
 The title and both axis labels can be dragged with the pointer, just like
 the legend boxes: press on the text, move it, release it.  The pointer
-becomes a move cross over them.  Pressing and releasing without moving is
-still a click, so the dialog of that text opens as before.
+becomes a move cross over them.  Pressing and releasing without moving is a
+click, so it only selects the text (it turns blue); the second click opens
+its dialog.  A selected label also moves with the arrow keys, one pixel at
+a time, or ten with `Shift` - handy for the last bit of fine tuning.
 
 The drag is stored as a shift in pixels **on top of** the automatic
 placement, which has two useful consequences:
@@ -257,11 +280,11 @@ labels back to their automatic places.
 Every curve has its **own** legend box, so they can be placed
 independently.
 
-* Grab a box anywhere on its frame - that is, next to the sample line, not
-  on the text - and drag it to a new place.  The pointer turns into a move
-  cross over the frame and into a text cursor over the text.
-* Click the text of a box to open its own dialog: the text, the font size
-  and the font colour, the **frame** around the box (its colour, or no
+* Click a box anywhere - on its frame or on its text - to select it: it is
+  covered with the blue veil.  Then drag it to a new place with the
+  pointer, or move it with the arrow keys (`Shift`: ten pixels).
+* Click the selected box again to open its own dialog: the text, the font
+  size and the font colour, the **frame** around the box (its colour, or no
   frame at all) and the **background** (its colour, or fully transparent).
   An empty text hides the box.
 * The boxes keep their position when the data is updated, when the curve
@@ -280,8 +303,8 @@ are ordinary windows:
   if there is room on the screen, otherwise to the left),
 * the diagram can be **clicked in front of them** while they stay open, so
   a change can be looked at without a dialog covering the curves,
-* clicking the same curve, axis or legend again brings its window back to
-  the front,
+* clicking the same curve, axis or legend twice again brings its window
+  back to the front,
 * they stay open until they are closed, and several of them can be open at
   the same time.
 
@@ -509,7 +532,8 @@ diagrams that are already open keep their settings.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
 3. `Plot`.
-4. Click the curves, the labels and the axes until the diagram looks right,
+4. Click the curves, and click the labels and the axes twice, until the
+   diagram looks right,
    and drag the legend boxes where they do not cover the data.  Add text
    boxes, drawings and arrows to point out what matters - style one of them
    and copy it (`Ctrl/Cmd+C`, `Ctrl/Cmd+V`) instead of building the next
@@ -530,6 +554,9 @@ diagrams that are already open keep their settings.
   the curve.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
+* A curve whose properties are needed is clicked once; everything else
+  needs two clicks, because the first one selects it.  This is what makes
+  moving, copying and the arrow keys possible on all of those objects.
 * The three tools of the toolbar (**T**, the shape and the arrow button)
   are exclusive: arming one cancels the others, and `Esc` cancels all of
   them.

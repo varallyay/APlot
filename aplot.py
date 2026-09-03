@@ -33,12 +33,14 @@ Files
 
 Plot window
 -----------
-* click a curve            -> line, marker and fill properties separately
-                              (marker "None" available), legend follows
-* click an axis label/title -> its text, font size, colour and distance [px]
-* drag an axis label/title  -> moves it freely, like the legend boxes
-* every curve has its own legend box: drag its frame to move it, click its
-  text to change the text and the font size of that box
+* one click selects any object, a second click opens its properties; a
+  selected text (title, axis label, legend box, text box) is marked with a
+  light blue veil, a drawing or an arrow with its control points
+* a curve is the exception: one click opens its line, marker and fill
+  properties at once (marker "None" available), the legend follows
+* everything that can be selected can be dragged with the pointer and
+  moved with the arrow keys (Shift: ten pixels)
+* every curve has its own legend box, with its own text, font and colours
 * the "T" button of the toolbar adds a movable text box anywhere, the
   drawing tool next to it adds rectangles, triangles, circles and ellipses
   and the arrow tool adds arrows with triangle, chevron, concave or convex
@@ -48,10 +50,10 @@ Plot window
   (Shift: ten pixels) and removed with Delete
 * Shift while drawing or resizing an arrow keeps it horizontal, vertical or
   at 45, 135, 225, 315 degrees
-* double-click an axis      -> combined axes dialog (X / Y / Frame tabs) with
+* two clicks beside an axis -> combined axes dialog (X / Y / Frame tabs) with
                               range, step, minor ticks, grid, font sizes,
                               frame style and the size/origin of the axes
-* click the frame           -> the "Frame and origin" tab of that dialog
+* two clicks on the frame   -> the "Frame and origin" tab of that dialog
 * Plot menu                 -> axes dialog, title and font sizes, legend
 
 Settings
@@ -139,7 +141,7 @@ FRAME_STYLES = [
 ]
 
 # matplotlib's own subplot position: left, bottom, width, height
-DEFAULT_POSITION = (0.125, 0.11, 0.775, 0.77)
+DEFAULT_POSITION = (0.125, 0.125, 0.775, 0.77)
 SIZE_UNITS = ["Fraction of window", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
@@ -175,11 +177,18 @@ HANDLE_COUNT = 8
 MIN_SHAPE_SIZE = 0.01       # in axes coordinates
 
 # copy / paste and the keyboard
-CLIPBOARD_NAMES = {"shape": "Drawing", "arrow": "Arrow", "note": "Text box"}
+OBJECT_NAMES = {"shape": "Drawing", "arrow": "Arrow", "note": "Text box",
+                "legend": "Legend box", "text": "Text", "frame": "Frame"}
+COPYABLE = ("shape", "arrow", "note")   # a legend or an axis label is not copied
 PASTE_STEP = 14.0           # pixels: how far a pasted copy sits from the original
 NUDGE_STEP = 1.0            # pixels: one press of an arrow key
 NUDGE_BIG_STEP = 10.0       # pixels: with Shift
 SNAP_ANGLE = np.pi / 4      # arrows snap to 45 degrees while Shift is held
+SELECT_COLOR = "#1a5fb4"    # the blue of the selection
+SELECT_FACE = to_rgba(SELECT_COLOR, 0.18)     # veil over a selected text
+SELECT_EDGE = to_rgba(SELECT_COLOR, 0.90)
+SELECT_BOX = {"boxstyle": "round,pad=0.28", "facecolor": SELECT_FACE,
+              "edgecolor": SELECT_EDGE, "linewidth": 1.0}
 MODIFIER = "Command" if sys.platform == "darwin" else "Control"
 PASTE_HINT = "Cmd+V" if sys.platform == "darwin" else "Ctrl+V"
 ACCEL_NAME = "Cmd" if sys.platform == "darwin" else "Ctrl"
@@ -461,7 +470,7 @@ DEFAULTS = {
         "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
-        "title_pad": 8.0, "axis_label_pad": 5.5, "tick_label_pad": 5.0,
+        "title_pad": 12.0, "axis_label_pad": 8.0, "tick_label_pad": 10.0,
     },
     "grid": {
         "major": False, "minor": False, "color": "#b0b0b0",
@@ -469,7 +478,7 @@ DEFAULTS = {
     },
     "frame": {
         "style": "No frame (X and Y only) (default)", "width": 1.8,
-        "color": "#000000",
+        "color": "#080808",
         "major_tick_length": 8.0, "minor_tick_length": 4.0,
         "background": "#ffffff", "transparent_background": True,
         "figure_background": "#ffffff",
@@ -2236,14 +2245,13 @@ class PlotWindow(tk.Toplevel):
     # the copied object, shared by every diagram window of the program
     _clipboard = None
 
-    HINT = ("Click a curve, a text, a drawing or an arrow: its properties   |   "
-            "Drag it: move it   |   Drag a control point: resize it\n"
+    HINT = ("One click selects (a text turns blue), a second click opens its "
+            "properties   |   A curve: one click   |   Drag: move   |   "
+            "Drag a control point: resize\n"
             "\"T\", the shape and the arrow button: add text, drawings and "
             "arrows   |   Shift: arrows at 45 deg steps   |   "
             f"{ACCEL_NAME}+C / {ACCEL_NAME}+V: copy and paste   |   "
-            "Arrow keys: move   |   Delete: remove\n"
-            "Click the frame: frame and origin   |   "
-            "Double-click next to an axis: axes properties")
+            "Arrow keys: move   |   Delete: remove")
 
     def __init__(self, master, df: pd.DataFrame, config: Config, app=None):
         super().__init__(master)
@@ -2274,7 +2282,10 @@ class PlotWindow(tk.Toplevel):
         self._shape_counter = 0
         self._pending_shape = False
         self._shape_drag = None
-        self.selection = None           # ("shape"|"arrow"|"note", key)
+        # ("shape"|"arrow"|"note"|"legend"|"text", key) - one click selects,
+        # a second click opens the properties of the selected object
+        self.selection = None
+        self._marked = None             # the text that wears the blue veil
         self._shift_down = False        # Shift snaps the arrows to 45 degrees
         self._handles = None
         self.shape_kind = code_of(SHAPE_KINDS,
@@ -2391,7 +2402,7 @@ class PlotWindow(tk.Toplevel):
                 "Add text: click in the diagram to place a text box"))
         self.text_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
 
-        button_background = self.text_button.cget("background")
+        button_background = "#999999" #self.text_button.cget("background")
         self.shape_button = ShapeToolButton(
             toolbar, kind=self.shape_kind, family="shape",
             background=button_background,
@@ -2417,6 +2428,13 @@ class PlotWindow(tk.Toplevel):
                 "the small arrow selects the head"), add="+")
         self.arrow_button.bind("<Leave>", lambda _e: toolbar.set_message(""),
                                add="+")
+
+        try:            # the standard Save button must not save the marks
+            save_button = toolbar._buttons.get("Save")
+            if save_button is not None:
+                save_button.configure(command=self.save_figure_clean)
+        except (AttributeError, tk.TclError):
+            pass
 
         self.bind("<Escape>", lambda _e: self.cancel_tools())
         self._bind_keys()
@@ -2844,6 +2862,7 @@ class PlotWindow(tk.Toplevel):
         # geometry is rebuilt for the new aspect ratio
         self.refresh_shapes()
         self.refresh_arrows()
+        self._refresh_highlight()
         self.draw()
 
     def _connect_events(self):
@@ -2912,6 +2931,11 @@ class PlotWindow(tk.Toplevel):
             self.ax.add_artist(legend)
             self.legends[y_col] = legend
             index += 1
+        if self.selection is not None and self.selection[0] == "legend":
+            if self.selection[1] not in self.legends:
+                self.select_object(None, None)
+            else:
+                self._refresh_highlight()
 
     # -- drawn objects (rectangle, triangle, circle, ellipse) --------------
     def arm_shape_drawing(self, kind=None, armed=None):
@@ -3235,22 +3259,107 @@ class PlotWindow(tk.Toplevel):
     def select_shape(self, key):
         self.select_object("shape", key)
 
+    def _selection_store(self, kind):
+        return {"shape": self.shape_state, "arrow": self.arrow_state,
+                "note": self.note_state, "legend": self.legend_state,
+                "text": self.text_offset}.get(kind)
+
     def select_object(self, kind, key):
         """Remember the object the keyboard commands work on."""
-        store = {"shape": self.shape_state, "arrow": self.arrow_state,
-                 "note": self.note_state}.get(kind)
+        store = self._selection_store(kind)
         if store is not None and key in store:
+            if kind == "text":          # only a text that is really there
+                artist = self.text_artist(key)
+                if artist is None or not artist.get_text():
+                    kind = None
+        if store is not None and key in store and kind is not None:
             self.selection = (kind, key)
         else:
             self.selection = None
         self._refresh_handles()
+        self._refresh_highlight()
 
     def selected_state(self):
         """The dictionary of the selected object, or None."""
         kind, key = self.selection or (None, None)
-        store = {"shape": self.shape_state, "arrow": self.arrow_state,
-                 "note": self.note_state}.get(kind)
+        store = self._selection_store(kind)
         return None if store is None else store.get(key)
+
+    def highlighted_artist(self):
+        """The text of the selection - drawings show control points instead."""
+        kind, key = self.selection or (None, None)
+        if kind == "note":
+            return self.notes.get(key)
+        if kind == "legend":
+            return self.legends.get(key)
+        if kind == "text":
+            artist = self.text_artist(key)
+            return artist if artist is not None and artist.get_text() else None
+        return None
+
+    def is_marked(self):
+        """True while a text, a label or a legend box wears the blue veil."""
+        return self._marked is not None
+
+    def _plain_look(self, marked):
+        """Give one text its own appearance back."""
+        kind, key = marked
+        if kind == "text":
+            artist = self.text_artist(key)
+            if artist is not None:
+                artist.set_bbox(None)
+        elif kind == "note":
+            self.refresh_note(key)             # rebuilt from its own state
+        elif kind == "legend":
+            legend, state = self.legends.get(key), self.legend_state.get(key)
+            if legend is not None and state is not None:
+                edge, face = state.get("edge", "none"), state.get("face", "#ffffff")
+                frame = legend.get_frame()
+                frame.set_alpha(1.0)
+                frame.set_edgecolor("none" if edge == "none" else edge)
+                frame.set_linewidth(0.0 if edge == "none" else 0.8)
+                frame.set_facecolor("none" if face == "none" else face)
+
+    def _refresh_highlight(self):
+        """A light blue veil marks the selected text, label or legend box.
+
+        The mark belongs to the artist itself, so it follows the text
+        wherever matplotlib puts it - no stale pixel coordinates.
+        """
+        kind, key = self.selection or (None, None)
+        wanted = (kind, key) if kind in ("text", "note", "legend") else None
+        if self._marked is not None and self._marked != wanted:
+            self._plain_look(self._marked)
+            self._marked = None
+        if wanted is None:
+            return None
+        if kind == "text":
+            artist = self.text_artist(key)
+            if artist is None or not artist.get_text():
+                return None
+            artist.set_bbox(dict(SELECT_BOX))
+        elif kind == "note":
+            artist = self.notes.get(key)
+            if artist is None:
+                return None
+            patch = artist.get_bbox_patch()
+            if patch is None:
+                artist.set_bbox(dict(SELECT_BOX))
+            else:
+                patch.set_facecolor(SELECT_FACE)
+                patch.set_edgecolor(SELECT_EDGE)
+                patch.set_linewidth(1.0)
+        else:
+            legend = self.legends.get(key)
+            if legend is None:
+                return None
+            frame = legend.get_frame()
+            frame.set_alpha(None)      # let the translucent veil through
+            frame.set_facecolor(SELECT_FACE)
+            frame.set_edgecolor(SELECT_EDGE)
+            frame.set_linewidth(1.2)
+        self._marked = wanted
+        return self.highlighted_artist()
 
     # -- clipboard, keyboard moving and deleting ---------------------------
     def _axes_delta(self, dx_pixels, dy_pixels):
@@ -3283,9 +3392,13 @@ class PlotWindow(tk.Toplevel):
         if state is None:
             self.flash("Select an object first, then copy it")
             return None
+        if kind not in COPYABLE:
+            self.flash(f"{OBJECT_NAMES.get(kind, kind)} cannot be copied - "
+                       "text boxes, drawings and arrows can")
+            return None
         PlotWindow._clipboard = {"kind": kind, "pasted": 0,
                                  "state": copy.deepcopy(state)}
-        self.flash(f"{CLIPBOARD_NAMES.get(kind, kind)} copied - "
+        self.flash(f"{OBJECT_NAMES.get(kind, kind)} copied - "
                    f"paste it with {PASTE_HINT}")
         return kind
 
@@ -3308,7 +3421,7 @@ class PlotWindow(tk.Toplevel):
             key = self.add_note(state["pos"], state=state)
         self.select_object(kind, key)
         self.draw()
-        self.flash(f"{CLIPBOARD_NAMES.get(kind, kind)} pasted")
+        self.flash(f"{OBJECT_NAMES.get(kind, kind)} pasted")
         return key
 
     def nudge_selection(self, dx_pixels, dy_pixels):
@@ -3318,14 +3431,29 @@ class PlotWindow(tk.Toplevel):
         if state is None:
             return False
         dx, dy = self._axes_delta(dx_pixels, dy_pixels)
-        state.update(self._shifted_state(kind, state, dx, dy))
-        if kind == "shape":
-            self.refresh_shape(key)
-        elif kind == "arrow":
-            self.refresh_arrow(key)
+        if kind == "text":
+            # the title and the axis labels are shifted in pixels already
+            offset = self.text_offset[key]
+            self.text_offset[key] = (offset[0] + float(dx_pixels),
+                                     offset[1] + float(dy_pixels))
+            self.apply_text_offset(key)
+        elif kind == "legend":
+            position = (float(state["pos"][0]) + dx,
+                        float(state["pos"][1]) + dy)
+            state["pos"] = position
+            legend = self.legends.get(key)
+            if legend is not None:
+                legend.set_bbox_to_anchor(position, transform=self.ax.transAxes)
         else:
-            self._move_note(key, state["pos"])
+            state.update(self._shifted_state(kind, state, dx, dy))
+            if kind == "shape":
+                self.refresh_shape(key)
+            elif kind == "arrow":
+                self.refresh_arrow(key)
+            else:
+                self._move_note(key, state["pos"])
         self._refresh_handles()
+        self._refresh_highlight()
         self.draw()
         return True
 
@@ -3338,6 +3466,26 @@ class PlotWindow(tk.Toplevel):
             return False
         remover(key)
         return True
+
+    def announce_selection(self):
+        """Tell in the toolbar what is selected and what a second click does."""
+        kind, _key = self.selection or (None, None)
+        if kind is None:
+            return
+        self.flash(f"{OBJECT_NAMES.get(kind, kind)} selected - "
+                   "click it again for its properties")
+
+    def save_figure_clean(self, *_args):
+        """The saved image must not contain the selection marks."""
+        selection = self.selection
+        self.select_object(None, None)
+        try:
+            self.canvas.draw()
+            return self.toolbar.save_figure()
+        finally:
+            if selection is not None:
+                self.select_object(*selection)
+            self.canvas.draw_idle()
 
     def flash(self, message):
         """A short note in the message area of the toolbar."""
@@ -3534,6 +3682,8 @@ class PlotWindow(tk.Toplevel):
                               ha="left", va="center", bbox=box, zorder=6,
                               picker=True, clip_on=False)
         self.notes[key] = artist
+        if self.selection == ("note", key) and self._marked != ("note", key):
+            self._refresh_highlight()
         return artist
 
     def refresh_notes(self):
@@ -3765,6 +3915,7 @@ class PlotWindow(tk.Toplevel):
                 self.text_offset[name] = (drag["offset"][0] + dx,
                                           drag["offset"][1] + dy)
                 self.apply_text_offset(name)
+            self._refresh_highlight()
             self.draw()
             return
         if self._drag is None:
@@ -3781,6 +3932,7 @@ class PlotWindow(tk.Toplevel):
         pos = (point[0] + self._drag["dx"], point[1] + self._drag["dy"])
         self.legend_state[y_col]["pos"] = pos
         legend.set_bbox_to_anchor(pos, transform=self.ax.transAxes)
+        self._refresh_highlight()
         self.draw()
 
     def _on_release(self, _event):
@@ -3798,8 +3950,6 @@ class PlotWindow(tk.Toplevel):
                                         state["tail"][1])
                         self.refresh_arrow(key)
                         self._refresh_handles()
-                elif shape_drag["mode"] == "arrow-move" and not shape_drag.get("moved"):
-                    self.after(1, lambda k=key: self.edit_arrow(k))
                 self.draw()
             return
         if shape_drag is not None:
@@ -3811,28 +3961,20 @@ class PlotWindow(tk.Toplevel):
                     state["w"] = max(state["w"], 0.18)   # a plain click
                     state["h"] = max(state["h"], 0.14)
                     self.refresh_shape(key)
-                elif shape_drag["mode"] == "move" and not shape_drag.get("moved"):
-                    self.after(1, lambda k=key: self.edit_shape(k))
                 self.draw()
             return
         drag, self._text_drag = self._text_drag, None
         if drag is None:
             return
-        if not drag["moved"]:          # a click, not a drag: open the dialog
+        if not drag["moved"]:      # a click that only selected: put it back
             name = drag["name"]
             if name.startswith(NOTE_KEY):
-                key = name[len(NOTE_KEY):]
-                self._move_note(key, drag["offset"])
-                self.draw()
-                self.after(1, lambda k=key: self.edit_note(k))
-                return
-            self.text_offset[name] = drag["offset"]
-            self.apply_text_offset(name)
-            self.draw()
-            if name == "title":
-                self.after(1, self.edit_title)
+                self._move_note(name[len(NOTE_KEY):], drag["offset"])
             else:
-                self.after(1, lambda which=name: self.edit_axis_label(which))
+                self.text_offset[name] = drag["offset"]
+                self.apply_text_offset(name)
+        self._refresh_highlight()
+        self.draw()
 
     def _update_cursor(self, event):
         if self._pending_text or self._pending_shape or self._pending_arrow:
@@ -3850,8 +3992,7 @@ class PlotWindow(tk.Toplevel):
         elif self.text_at(event.x, event.y) is not None:
             cursor = "fleur"
         elif legend is not None:
-            cursor = ("xterm" if self._legend_text_hit(legend, event.x, event.y)
-                      else "fleur")
+            cursor = "fleur"           # one click selects it, then it is moved
         elif self.frame_hit(event.x, event.y):
             cursor = "hand2"
         if cursor != self._cursor:
@@ -4031,19 +4172,73 @@ class PlotWindow(tk.Toplevel):
             return
 
         if artist in self.ax.spines.values() or self.frame_hit(mouse.x, mouse.y):
-            self.open_axes_dialog("frame")
-        elif isinstance(artist, Line2D) and artist in self.lines:
+            return          # the frame is opened by a double click
+        # a curve is never "selected": one click opens its properties
+        if isinstance(artist, Line2D) and artist in self.lines:
             self.open_series_dialog(artist)
+
+    def object_at(self, x, y):
+        """(kind, key) of the object under the pointer, the topmost first."""
+        if self.selection is not None and self.handle_at(x, y) is not None:
+            return self.selection            # a control point of the selection
+        key = self.arrow_at(x, y)
+        if key is not None:
+            return ("arrow", key)
+        key = self.shape_at(x, y)
+        if key is not None:
+            return ("shape", key)
+        key = self.note_at(x, y)
+        if key is not None:
+            return ("note", key)
+        name = self.text_at(x, y)
+        if name is not None:
+            return ("text", name)
+        column, legend = self.legend_at(x, y)
+        if legend is not None:
+            return ("legend", column)
+        if self.frame_hit(x, y):
+            return ("frame", "frame")
+        return (None, None)
+
+    def open_properties(self, kind, key):
+        """The property window of one object, whatever kind it is."""
+        if kind == "arrow":
+            return self.edit_arrow(key)
+        if kind == "shape":
+            return self.edit_shape(key)
+        if kind == "note":
+            return self.edit_note(key)
+        if kind == "legend":
+            return self.edit_legend_entry(key)
+        if kind == "text":
+            return (self.edit_title() if key == "title"
+                    else self.edit_axis_label(key))
+        if kind == "frame":
+            return self.open_axes_dialog("frame")
+        return None
+
+    def _on_double_click(self, event):
+        """The second click opens the properties of the object under it."""
+        kind, key = self.object_at(event.x, event.y)
+        if kind is not None:
+            if kind != "frame":            # the frame itself is not selected
+                self.select_object(kind, key)
+                self.draw()
+            self.open_properties(kind, key)
+            return True
+        which = self._axis_hit(event)      # the numbers or the label of an axis
+        if which:
+            self.open_axes_dialog(which)
+            return True
+        return False
 
     def _on_button_press(self, event):
         try:                    # the keyboard commands need the focus here
             self.canvas.get_tk_widget().focus_set()
         except tk.TclError:
             pass
-        if event.dblclick:
-            which = self._axis_hit(event)
-            if which:
-                self.open_axes_dialog(which)
+        if event.dblclick:                 # every object needs two clicks
+            self._on_double_click(event)
             return
         if event.button != 1:
             return
@@ -4078,8 +4273,9 @@ class PlotWindow(tk.Toplevel):
                                          else "resize")}
             return
         key = self.arrow_at(event.x, event.y)
-        if key is not None:               # move an arrow, or click it
+        if key is not None:               # select an arrow and drag it
             self.select_object("arrow", key)
+            self.announce_selection()
             self.draw()
             state = self.arrow_state[key]
             self._shape_drag = {"key": key, "mode": "arrow-move", "moved": False,
@@ -4088,8 +4284,9 @@ class PlotWindow(tk.Toplevel):
                                 "tip": tuple(state["tip"])}
             return
         key = self.shape_at(event.x, event.y)
-        if key is not None:               # move it, or click it for the dialog
+        if key is not None:               # select a drawing and drag it
             self.select_shape(key)
+            self.announce_selection()
             self.draw()
             state = self.shape_state[key]
             self._shape_drag = {"key": key, "mode": "move", "moved": False,
@@ -4097,29 +4294,31 @@ class PlotWindow(tk.Toplevel):
                                 "origin": (state["x"], state["y"])}
             return
         key = self.note_at(event.x, event.y)
-        if key is not None:               # drag an existing text box, or edit it
+        if key is not None:               # select a text box and drag it
             self.select_object("note", key)
+            self.announce_selection()
             self.draw()
             self._start_text_drag(f"{NOTE_KEY}{key}", event)
             return
-        if self.selection is not None:
-            self.select_object(None, None)   # clicking elsewhere deselects
-            self.draw()
         name = self.text_at(event.x, event.y)
-        if name is not None:      # drag the title / an axis label, or click it
+        if name is not None:              # the title or an axis label
+            self.select_object("text", name)
+            self.announce_selection()
+            self.draw()
             self._start_text_drag(name, event)
             return
         y_col, legend = self.legend_at(event.x, event.y)
-        if legend is None:
-            if self.frame_hit(event.x, event.y):
-                # a click on any side of the frame: frame and origin settings
-                self.after(1, lambda: self.open_axes_dialog("frame"))
+        if legend is not None:            # select a legend box and drag it
+            self.select_object("legend", y_col)
+            self.announce_selection()
+            self.draw()
+            self._start_legend_drag(y_col, event)
             return
-        if self._legend_text_hit(legend, event.x, event.y):
-            # clicking the text edits it; the frame around it moves the box
-            self.after(1, lambda column=y_col: self.edit_legend_entry(column))
-            return
-        self._start_legend_drag(y_col, event)
+        if self.selection is not None:    # clicking elsewhere deselects
+            self.select_object(None, None)
+            self.draw()
+        if self.frame_hit(event.x, event.y):
+            self.flash("Frame - click it again for frame and origin")
 
     def frame_hit(self, x, y):
         """True when the pointer is on one of the visible frame sides."""
@@ -4334,28 +4533,42 @@ overwritten.
 
 ## 2. The diagram window
 
-Every curve, label and axis reacts to the mouse.
+Every text, label, axis and object reacts to the mouse, and all of them
+follow the same rule:
+
+> **One click selects, a second click opens the properties.**
+
+A selected object can be moved with the pointer or with the arrow keys,
+copied, pasted and deleted, so a whole diagram can be arranged without
+opening a single dialog.  What is selected is always visible:
+
+* a **text** - the title, an axis label, a legend box or a text box - is
+  covered with a light **blue veil** in a blue frame,
+* a **drawing** or an **arrow** shows its **control points** instead,
+* clicking an empty part of the diagram deselects everything.
+
+The single exception is a **curve**: it is never selected, because there is
+nothing to move or copy on it, so one click on a curve opens its
+properties at once.
 
 | Action | Result |
 | --- | --- |
-| Click a curve | Curve properties: line and marker settings separately. |
-| Click the title | Its text, font size, font colour and its distance from the top of the plot area. |
-| Drag the title | Moves it freely anywhere on the diagram. |
-| Click an axis label | Its text, font size, font colour and its distance from the axis. |
-| Drag an axis label | Moves it freely anywhere on the diagram. |
-| Click the text of a legend box | Its text, font size and font colour (an empty text hides that box). |
-| Drag the frame of a legend box | Moves that legend box anywhere on the diagram. |
-| Click the frame (any axis line) | Frame and origin settings. |
-| Double-click beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
-| Plot menu | The axes dialog (axes, frame and origin) and the title/fonts dialog, plus closing this diagram. |
-| Drag a text box | Moves it; clicking it opens its properties. |
-| Drag a drawn object | Moves it; dragging a control point resizes it, clicking it opens its properties. |
-| Drag an arrow | Moves it; dragging the control point at its tip or its tail changes its length and direction, clicking it opens its properties. |
-| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
+| Click a curve | Curve properties at once: line and marker settings separately. |
+| Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
+| Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
+| Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
+| Drag a control point | Resizes a drawing, or moves the tip or the tail of an arrow. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| `Delete` / `Backspace` | Removes the selected object. |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
+| `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
+| Click the frame (any axis line) twice | Frame and origin settings. |
+| Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
+| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
+| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, paste and delete of the selected object, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
+
+The blue veil and the control points are only on the screen: they are left
+out of the image that the save button of the toolbar writes.
 
 ### Drawing rectangles, triangles, circles and ellipses
 
@@ -4376,13 +4589,13 @@ clicking the icon again cancels.
 
 An object that was drawn behaves like the other decorations:
 
-* it is **selected** when it is clicked, and eight small square **control
+* it is **selected** by one click, and eight small square **control
   points** appear on its corners and on the middle of its sides; dragging
   one of them **resizes** the object (the pointer becomes a resize cross),
-* dragging the object itself **moves** it,
-* clicking it without moving opens its **properties**: line style (solid,
-  dashed, dash-dot, dotted, none), line thickness, line colour, fill colour
-  with an opacity, or `No fill (outline only)`, and a `Delete` button,
+* dragging the object itself **moves** it, and so do the arrow keys,
+* a **second click** opens its **properties**: line style (solid, dashed,
+  dash-dot, dotted, none), line thickness, line colour, fill colour with an
+  opacity, or `No fill (outline only)`, and a `Delete` button,
 * clicking an empty part of the diagram deselects it,
 * a circle keeps its round shape: its height follows its width and the
   proportions of the plot area.
@@ -4419,12 +4632,12 @@ dragged stays where it is.
 
 An arrow behaves like the drawn objects:
 
-* it is **selected** when it is clicked, and two **control points** appear,
-  one on the tip and one on the tail; dragging either of them changes the
-  length, the direction and the position of that end,
+* it is **selected** by one click, and two **control points** appear, one on
+  the tip and one on the tail; dragging either of them changes the length,
+  the direction and the position of that end,
 * dragging the shaft or the head **moves** the whole arrow (the arrow keys
   move it by one pixel, with `Shift` by ten),
-* clicking it without moving opens its **properties**: the arrow head
+* a **second click** opens its **properties**: the arrow head
   (`Triangle`, `Chevron`, `Concave`, `Convex`), the head size in pixels,
   the line style, the line thickness, the colour and a `Delete` button,
 * clicking an empty part of the diagram deselects it.
@@ -4434,11 +4647,12 @@ arrows follow the diagram when the window is resized, while the head keeps
 its size in pixels.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
 
-### Copying, moving and deleting the objects
+### Selecting, copying, moving and deleting the objects
 
-Text boxes, drawings and arrows all work the same way once one of them is
-**selected** - a single click on the object selects it (a drawing and an
-arrow also show their control points):
+One click selects; what is selected is shown by the **blue veil** on a text
+(the title, an axis label, a legend box, a text box) or by the **control
+points** of a drawing or an arrow.  Everything that is selected can then be
+worked on from the keyboard:
 
 | Keys | What happens |
 | --- | --- |
@@ -4450,6 +4664,11 @@ arrow also show their control points):
 
 The same commands are in the `Plot` menu as `Copy object`, `Paste object`
 and `Delete object`.
+
+Copying, pasting and deleting work on **text boxes, drawings and arrows**.
+The title, the axis labels and the legend boxes belong to the diagram and
+are not copied or deleted - but they are selected and moved with the arrow
+keys just like everything else.
 
 So a circle that has its final line style, thickness, line colour, fill and
 opacity does not have to be built again: select it, `Ctrl/Cmd+C`, then
@@ -4479,9 +4698,10 @@ anything.
 
 A text box behaves like a legend box:
 
-* **drag** it with the pointer to move it (the pointer becomes a move
-  cross over it),
-* **click** it to open its dialog again: text, font size, font colour, the
+* **click** it to select it - it turns blue - and **drag** it with the
+  pointer to move it (the pointer becomes a move cross over it), or move it
+  with the arrow keys,
+* **click it again** to open its dialog: text, font size, font colour, the
   frame around it (its colour, or no frame) and the background (a colour,
   or fully transparent),
 * `Delete` in that dialog - or an empty text - removes the box,
@@ -4497,8 +4717,10 @@ The starting font, frame and background of new boxes come from the
 
 The title and both axis labels can be dragged with the pointer, just like
 the legend boxes: press on the text, move it, release it.  The pointer
-becomes a move cross over them.  Pressing and releasing without moving is
-still a click, so the dialog of that text opens as before.
+becomes a move cross over them.  Pressing and releasing without moving is a
+click, so it only selects the text (it turns blue); the second click opens
+its dialog.  A selected label also moves with the arrow keys, one pixel at
+a time, or ten with `Shift` - handy for the last bit of fine tuning.
 
 The drag is stored as a shift in pixels **on top of** the automatic
 placement, which has two useful consequences:
@@ -4517,11 +4739,11 @@ labels back to their automatic places.
 Every curve has its **own** legend box, so they can be placed
 independently.
 
-* Grab a box anywhere on its frame - that is, next to the sample line, not
-  on the text - and drag it to a new place.  The pointer turns into a move
-  cross over the frame and into a text cursor over the text.
-* Click the text of a box to open its own dialog: the text, the font size
-  and the font colour, the **frame** around the box (its colour, or no
+* Click a box anywhere - on its frame or on its text - to select it: it is
+  covered with the blue veil.  Then drag it to a new place with the
+  pointer, or move it with the arrow keys (`Shift`: ten pixels).
+* Click the selected box again to open its own dialog: the text, the font
+  size and the font colour, the **frame** around the box (its colour, or no
   frame at all) and the **background** (its colour, or fully transparent).
   An empty text hides the box.
 * The boxes keep their position when the data is updated, when the curve
@@ -4540,8 +4762,8 @@ are ordinary windows:
   if there is room on the screen, otherwise to the left),
 * the diagram can be **clicked in front of them** while they stay open, so
   a change can be looked at without a dialog covering the curves,
-* clicking the same curve, axis or legend again brings its window back to
-  the front,
+* clicking the same curve, axis or legend twice again brings its window
+  back to the front,
 * they stay open until they are closed, and several of them can be open at
   the same time.
 
@@ -4769,7 +4991,8 @@ diagrams that are already open keep their settings.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
 3. `Plot`.
-4. Click the curves, the labels and the axes until the diagram looks right,
+4. Click the curves, and click the labels and the axes twice, until the
+   diagram looks right,
    and drag the legend boxes where they do not cover the data.  Add text
    boxes, drawings and arrows to point out what matters - style one of them
    and copy it (`Ctrl/Cmd+C`, `Ctrl/Cmd+V`) instead of building the next
@@ -4790,6 +5013,9 @@ diagrams that are already open keep their settings.
   the curve.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
+* A curve whose properties are needed is clicked once; everything else
+  needs two clicks, because the first one selects it.  This is what makes
+  moving, copying and the arrow keys possible on all of those objects.
 * The three tools of the toolbar (**T**, the shape and the arrow button)
   are exclusive: arming one cancels the others, and `Esc` cancels all of
   them.

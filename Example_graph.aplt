@@ -140,65 +140,169 @@
   },
   "plots": [
     {
-      "geometry": "960x720+60+157",
+      "geometry": "960x720+309+134",
       "figure": {
-        "width": 9.212598425196852,
-        "height": 6.160925196850394,
-        "dpi": 104.20512820512819
+        "width": 9.6,
+        "height": 6.24,
+        "dpi": 100.0
       },
       "title": {
-        "text": "Three independent legend boxes (click twice on axes' numbers or the graph's frame)",
-        "size": 12,
-        "color": "#ff9300"
+        "text": "Data visualization as a function of Time [s]",
+        "size": 18,
+        "color": "#000000",
+        "pad": 8.0
       },
       "legend": {
         "visible": true,
         "location": "best",
-        "size": 10,
+        "size": 14,
         "color": "#000000"
       },
       "frame": {
         "style": "none",
-        "width": 2.2,
-        "color": "#011892",
-        "major_tick_length": 4.5,
-        "minor_tick_length": 3.0,
+        "width": 1.8,
+        "color": "#000000",
+        "major_tick_length": 8.0,
+        "minor_tick_length": 4.0,
+        "background": "none",
+        "figure_background": "#ffffff",
         "left": 0.125,
         "bottom": 0.11,
         "x_length": 0.775,
         "y_length": 0.77
       },
+      "text_offsets": {
+        "title": [
+          1.0,
+          16.0
+        ],
+        "x": [
+          10.0,
+          1.0
+        ],
+        "y": [
+          0.0,
+          0.0
+        ]
+      },
+      "shapes": [
+        {
+          "kind": "ellipse",
+          "x": 0.736559139784946,
+          "y": 0.3878621378621376,
+          "w": 0.12634408602150526,
+          "h": 0.0978188478188477,
+          "style": ":",
+          "width": 3.0,
+          "edge": "#942092",
+          "face": "none",
+          "alpha": 0.6
+        },
+        {
+          "kind": "ellipse",
+          "x": 0.858870967741935,
+          "y": 0.09232434232434217,
+          "w": 0.12634408602150526,
+          "h": 0.0978188478188477,
+          "style": ":",
+          "width": 3.0,
+          "edge": "#942092",
+          "face": "none",
+          "alpha": 0.6
+        },
+        {
+          "kind": "ellipse",
+          "x": 0.560483870967742,
+          "y": 0.8103563103563103,
+          "w": 0.12634408602150526,
+          "h": 0.0978188478188477,
+          "style": ":",
+          "width": 3.0,
+          "edge": "#942092",
+          "face": "none",
+          "alpha": 0.6
+        }
+      ],
+      "arrows": [
+        {
+          "head": "concave",
+          "tail": [
+            0.3709677419354841,
+            0.7229437229437233
+          ],
+          "tip": [
+            0.5282258064516133,
+            0.7229437229437233
+          ],
+          "size": 24.0,
+          "style": "-",
+          "width": 4.0,
+          "color": "#9437ff"
+        },
+        {
+          "head": "concave",
+          "tail": [
+            0.8588709677419353,
+            0.7229437229437232
+          ],
+          "tip": [
+            0.7325268817204298,
+            0.7229437229437232
+          ],
+          "size": 24.0,
+          "style": "-",
+          "width": 4.0,
+          "color": "#9437ff"
+        }
+      ],
+      "notes": [
+        {
+          "text": "Trial text",
+          "pos": [
+            0.09408602150537643,
+            0.13603063603063587
+          ],
+          "size": 14,
+          "color": "#ff2600",
+          "edge": "#000000",
+          "face": "#ffffff"
+        }
+      ],
       "axes": {
         "x": {
           "label": "Time [s]",
           "auto": false,
-          "min": -1.0,
-          "max": 11.0,
-          "step": 1.0,
+          "min": 0.0,
+          "max": 10.0,
+          "step": null,
           "minor": 1,
           "label_size": 18,
           "tick_size": 16,
-          "label_color": "#011892",
-          "tick_color": "#011892",
+          "label_color": "#000000",
+          "tick_color": "#000000",
+          "label_pad": 6.0,
+          "tick_pad": 5.0,
           "grid": {
             "major": false,
             "minor": false,
-            "color": "#011892",
+            "color": "#b0b0b0",
             "style": ":",
             "width": 0.8
           }
         },
         "y": {
-          "label": "Function values",
+          "label": "Simulated values",
           "auto": false,
-          "min": 0.0,
-          "max": 100.0,
-          "step": 10.0,
+          "min": 10.0,
+          "max": 90.0,
+          "step": null,
           "minor": 1,
           "label_size": 18,
           "tick_size": 16,
-          "label_color": "#011892",
-          "tick_color": "#011892",
+          "label_color": "#000000",
+          "tick_color": "#000000",
+          "label_pad": 5.5,
+          "tick_pad": 5.0,
           "grid": {
             "major": false,
             "minor": false,
@@ -213,41 +317,61 @@
           "column": "Pressure",
           "label": "Pressure",
           "legend_pos": [
-            0.31763440860215064,
-            0.8870611320144032
+            0.5391397849462367,
+            0.9966500166500165
           ],
-          "legend_loc": "upper left",
+          "legend_loc": "upper right",
           "legend_size": 14,
           "legend_color": "#000000",
+          "legend_edge": "none",
+          "legend_face": "none",
+          "fill": {
+            "on": true,
+            "follow": true,
+            "color": "#1f77b4",
+            "alpha": 0.35,
+            "hatch": "",
+            "base": "zero"
+          },
           "auto_label": true,
-          "color": "#d62728",
+          "color": "#1f77b4",
           "linestyle": "--",
-          "linewidth": 2.0,
-          "marker": "s",
+          "linewidth": 1.5,
+          "marker": "o",
           "markersize": 8.0,
-          "markerfacecolor": "none",
-          "markeredgecolor": "#2ca02c",
-          "markeredgewidth": 1.5,
+          "markerfacecolor": "#1f77b4",
+          "markeredgecolor": "#1f77b4",
+          "markeredgewidth": 1.0,
           "visible": true
         },
         {
           "column": "Voltage",
           "label": "Voltage",
           "legend_pos": [
-            0.3175806451612901,
-            0.9632819516931663
+            0.5256989247311827,
+            0.9387062937062938
           ],
-          "legend_loc": "upper left",
+          "legend_loc": "upper right",
           "legend_size": 14,
           "legend_color": "#000000",
+          "legend_edge": "none",
+          "legend_face": "none",
+          "fill": {
+            "on": false,
+            "follow": true,
+            "color": "#1f77b4",
+            "alpha": 0.35,
+            "hatch": "",
+            "base": "zero"
+          },
           "auto_label": true,
-          "color": "#7f3fbf",
-          "linestyle": "-.",
-          "linewidth": 2.5,
-          "marker": "None",
-          "markersize": 6.0,
-          "markerfacecolor": "#7f3fbf",
-          "markeredgecolor": "#7f3fbf",
+          "color": "#ff7f0e",
+          "linestyle": "--",
+          "linewidth": 1.5,
+          "marker": "s",
+          "markersize": 8.0,
+          "markerfacecolor": "#ff7f0e",
+          "markeredgecolor": "#ff7f0e",
           "markeredgewidth": 1.0,
           "visible": true
         },
@@ -255,21 +379,31 @@
           "column": "Flow",
           "label": "Flow",
           "legend_pos": [
-            0.316989247311828,
-            0.695190354816523
+            0.4880645161290323,
+            0.8786813186813188
           ],
-          "legend_loc": "lower left",
+          "legend_loc": "upper right",
           "legend_size": 14,
           "legend_color": "#000000",
+          "legend_edge": "none",
+          "legend_face": "none",
+          "fill": {
+            "on": false,
+            "follow": true,
+            "color": "#1f77b4",
+            "alpha": 0.35,
+            "hatch": "",
+            "base": "zero"
+          },
           "auto_label": true,
-          "color": "#1f77b4",
-          "linestyle": "-",
+          "color": "#2ca02c",
+          "linestyle": "--",
           "linewidth": 1.5,
           "marker": "^",
-          "markersize": 9.0,
-          "markerfacecolor": "#ff2f92",
-          "markeredgecolor": "#8df900",
-          "markeredgewidth": 1.5,
+          "markersize": 8.0,
+          "markerfacecolor": "#2ca02c",
+          "markeredgecolor": "#2ca02c",
+          "markeredgewidth": 1.0,
           "visible": true
         }
       ]
