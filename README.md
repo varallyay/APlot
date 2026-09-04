@@ -34,10 +34,35 @@ separate curve.
 | Delete row | Deletes every row the highlighted block touches. |
 | Add column | Asks for a name and appends an empty column. |
 | Delete column | Deletes the column you last clicked in (after a confirmation). |
-| Clear cells | Empties the highlighted cells; the curves break at the empty cells. |
-| Copy / Paste | The highlighted block to and from the clipboard, tab separated. |
-| Random data | Fills the table with random numbers, keeping its present size. |
 | Settings... | Opens the settings editor (see section 4). |
+
+Clearing, copying and pasting cells are done with the keys (`Delete`,
+`Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
+`File` menu.
+
+### Which columns are plotted
+
+Above the column headings there is a row of **check buttons**, one for each
+column:
+
+* every column is ticked when a file is opened, when random data is
+  generated and when the program starts, so `Plot` draws everything;
+* unticking a column leaves it out of the diagram - the data stays in the
+  table, it is simply not drawn;
+* the check button of the **first column** is fixed: that column is the X
+  axis of every curve;
+* `Plot` opens a diagram of the ticked columns only, and `Update plot`
+  follows the ticks - a column that was unticked disappears from the open
+  diagrams, and a column that is ticked again comes back, while the other
+  curves keep every style setting;
+* with nothing ticked the program says so instead of drawing an empty
+  diagram;
+* the ticks are kept while the table is edited (adding rows, renaming a
+  column, adding a column - a new column starts ticked) and are reset to
+  "all ticked" whenever new data is loaded.
+
+A saved `.aplt` file always contains the **whole** table, and the diagrams
+in it keep exactly the curves they had when they were saved.
 
 ### Editing cells
 
@@ -629,7 +654,8 @@ diagrams that are already open keep their settings.
 
 ## 5. Typical workflow
 
-1. `Random data`, `Open data file` or type the numbers by hand.
+1. `Random data` (File menu), `Open data file` or type the numbers by hand.
+   Untick the columns that should not be drawn.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
 3. `Plot`.

@@ -9,7 +9,9 @@ Matplotlib.
 Spreadsheet window
 ------------------
 * toolbar: Plot / Update plot / Add row / Delete row / Add column /
-  Delete column / Clear cells / Copy / Paste / Random data / Settings
+  Delete column / Settings
+* a check button above every column: only the ticked columns are plotted
+  (a newly opened file starts with all of them ticked)
 * a highlighted block of cells: click and drag, Shift+click, Shift+arrows,
   Shift+Space (rows), Ctrl/Cmd+Space (columns), Ctrl/Cmd+A (everything)
 * the block is copied (Ctrl/Cmd+C), pasted (Ctrl/Cmd+V), cut (Ctrl/Cmd+X),
@@ -151,7 +153,7 @@ FRAME_STYLES = [
 ]
 
 # matplotlib's own subplot position: left, bottom, width, height
-DEFAULT_POSITION = (0.125, 0.11, 0.775, 0.77)
+DEFAULT_POSITION = (0.13, 0.125, 0.775, 0.77)
 SIZE_UNITS = ["Fraction of window", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
@@ -202,6 +204,7 @@ BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
 BLOCK_LINE = 2              # thickness of the outline around the block
 AUTO_SCROLL_EDGE = 14       # pixels: how close to the border scrolling starts
 AUTO_SCROLL_MS = 55         # how often the table scrolls on during a drag
+CHECK_BAR_HEIGHT = 26       # the strip of "plot this column" check buttons
 SELECT_FACE = to_rgba(SELECT_COLOR, 0.18)     # veil over a selected text
 SELECT_EDGE = to_rgba(SELECT_COLOR, 0.90)
 SELECT_BOX = {"boxstyle": "round,pad=0.28", "facecolor": SELECT_FACE,
@@ -496,7 +499,7 @@ DEFAULTS = {
         "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
-        "title_pad": 8.0, "axis_label_pad": 5.5, "tick_label_pad": 5.0,
+        "title_pad": 12.0, "axis_label_pad": 7.0, "tick_label_pad": 10.0,
     },
     "grid": {
         "major": False, "minor": False, "color": "#b0b0b0",
@@ -2012,21 +2015,131 @@ class DataTable(ttk.Frame):
                             xscrollcommand=self._x_scrolled)
         self._v_scroll, self._h_scroll = v_scroll, h_scroll
 
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        v_scroll.grid(row=0, column=1, sticky="ns")
-        h_scroll.grid(row=1, column=0, sticky="ew")
-        self.rowconfigure(0, weight=1)
+        # one check button per column, above the headings
+        self.check_bar = tk.Frame(self, height=CHECK_BAR_HEIGHT)
+        self.check_bar.grid(row=0, column=0, sticky="ew")
+        self.check_bar.grid_propagate(False)
+        self.plot_vars: dict = {}       # column name -> BooleanVar
+        self._checks: dict = {}         # column name -> Checkbutton
+
+        self.tree.grid(row=1, column=0, sticky="nsew")
+        v_scroll.grid(row=1, column=1, sticky="ns")
+        h_scroll.grid(row=2, column=0, sticky="ew")
+        self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
 
         self.tree.bind("<Button-1>", self._on_click)
         self.tree.bind("<Shift-Button-1>", self._on_shift_click)
         self.tree.bind("<B1-Motion>", self._on_drag)
         self.tree.bind("<ButtonRelease-1>", self._on_drag_end)
-        self.tree.bind("<Configure>", lambda _e: self._refresh_outline())
+        self.tree.bind("<Configure>", lambda _e: self._layout_changed())
         self.tree.bind("<MouseWheel>", lambda _e: self.after(1, self._refresh_outline),
                        add="+")
         self._bind_grid_keys()
         self.apply_config()
+
+    # -- which columns are plotted -----------------------------------------
+    def _build_checks(self, check_all=False):
+        """One check button per column, in the strip above the headings."""
+        wanted = [str(name) for name in self.df.columns]
+        previous = dict(self.plot_vars)
+        for widget in list(self._checks.values()):
+            widget.destroy()
+        self._checks.clear()
+        self.plot_vars = {}
+        for index, name in enumerate(wanted):
+            value = True
+            if not check_all and name in previous:
+                value = bool(previous[name].get())
+            variable = tk.BooleanVar(value=value)
+            check = ttk.Checkbutton(self.check_bar, variable=variable,
+                                    takefocus=False, text="",
+                                    command=self._checks_changed)
+            if index == 0:              # the X column is always plotted
+                variable.set(True)
+                check.state(["disabled"])
+            self.plot_vars[name] = variable
+            self._checks[name] = check
+        self._place_checks()
+
+    def _place_checks(self):
+        """Put every check button over the middle of its own column."""
+        if not self._checks:
+            return
+        rows = self.tree.get_children()
+        offset = 0
+        try:
+            offset = int(self.tree.winfo_rootx() - self.check_bar.winfo_rootx())
+        except tk.TclError:
+            offset = 0
+        width = self.check_bar.winfo_width() or self.winfo_width()
+        for index, (name, check) in enumerate(self._checks.items()):
+            box = None
+            for row in rows:            # a visible row gives the exact place
+                box = self.tree.bbox(row, f"#{index + 1}")
+                if box:
+                    break
+            if not box:
+                box = self._column_span(index)
+            if box is None:
+                check.place_forget()
+                continue
+            x = offset + box[0] + box[2] / 2
+            if x < 0 or (width and x > width):
+                check.place_forget()
+                continue
+            check.place(x=int(x), y=CHECK_BAR_HEIGHT // 2, anchor="center")
+
+    def _column_span(self, index):
+        """(x, y, width, height) of one column when no row is visible."""
+        columns = self.tree["columns"]
+        if index >= len(columns):
+            return None
+        start = 0
+        for other in columns[:index]:
+            start += int(self.tree.column(other, "width"))
+        try:
+            first = float(self.tree.xview()[0])
+        except (tk.TclError, ValueError, IndexError):
+            first = 0.0
+        total = sum(int(self.tree.column(one, "width")) for one in columns) or 1
+        return (int(start - first * total), 0,
+                int(self.tree.column(columns[index], "width")), 0)
+
+    def _checks_changed(self):
+        self._changed()
+
+    def plot_columns(self):
+        """The X column plus every Y column whose check button is ticked."""
+        names = [str(name) for name in self.df.columns]
+        if not names:
+            return []
+        chosen = [names[0]]
+        for name in names[1:]:
+            variable = self.plot_vars.get(name)
+            if variable is None or bool(variable.get()):
+                chosen.append(name)
+        return chosen
+
+    def plot_dataframe(self):
+        """The data of the ticked columns only."""
+        columns = self.plot_columns()
+        if len(columns) < 2:
+            return self.df.iloc[:, :0]
+        return self.df[columns].copy()
+
+    def set_plot_column(self, name, plotted=True):
+        variable = self.plot_vars.get(str(name))
+        if variable is None:
+            return False
+        variable.set(bool(plotted))
+        self._changed()
+        return True
+
+    def check_all_columns(self):
+        for name, variable in self.plot_vars.items():
+            variable.set(True)
+        self._changed()
 
     # -- the highlighted block of cells ------------------------------------
     def _bind_grid_keys(self):
@@ -2220,6 +2333,10 @@ class DataTable(ttk.Frame):
         for frame in self._outline:
             frame.place_forget()
 
+    def _layout_changed(self):
+        self._refresh_outline()
+        self._place_checks()
+
     def _refresh_outline(self):
         """Draw the blue rectangle around the visible part of the block."""
         bounds = self.block_bounds()
@@ -2269,7 +2386,7 @@ class DataTable(ttk.Frame):
 
     def _xview(self, *args):
         self.tree.xview(*args)
-        self.after(1, self._refresh_outline)
+        self.after(1, self._layout_changed)
 
     def _y_scrolled(self, first, last):
         self._v_scroll.set(first, last)
@@ -2277,7 +2394,7 @@ class DataTable(ttk.Frame):
 
     def _x_scrolled(self, first, last):
         self._h_scroll.set(first, last)
-        self.after(1, self._refresh_outline)
+        self.after(1, self._layout_changed)
 
     # -- appearance --------------------------------------------------------
     def apply_config(self):
@@ -2288,12 +2405,14 @@ class DataTable(ttk.Frame):
         width = max(40, int(self.config_obj.get("table", "column_width")))
         for column in self.tree["columns"]:
             self.tree.column(column, width=width)
+        self.after(1, self._place_checks)
 
     # -- data --------------------------------------------------------------
-    def set_dataframe(self, df):
+    def set_dataframe(self, df, check_all=False):
+        """Show a data frame; `check_all` ticks every column again."""
         self.df = df.reset_index(drop=True)
         self.df.columns = self._unique_columns(self.df.columns)
-        self.refresh()
+        self.refresh(check_all=check_all)
 
     @staticmethod
     def _unique_columns(columns):
@@ -2308,7 +2427,7 @@ class DataTable(ttk.Frame):
             result.append(name)
         return result
 
-    def refresh(self):
+    def refresh(self, check_all=False):
         self._cancel_edit()
         self._cancel_heading_edit()
         self.tree.delete(*self.tree.get_children())
@@ -2322,6 +2441,7 @@ class DataTable(ttk.Frame):
         for index, row in enumerate(self.df.itertuples(index=False, name=None)):
             self.tree.insert("", "end", iid=str(index),
                              values=["" if pd.isna(v) else str(v) for v in row])
+        self._build_checks(check_all=check_all)
         self._refresh_block()
         self._changed()
 
@@ -3163,7 +3283,7 @@ class PlotWindow(tk.Toplevel):
                 "Add text: click in the diagram to place a text box"))
         self.text_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
 
-        button_background = self.text_button.cget("background")
+        button_background = "#999999" #self.text_button.cget("background")
         self.shape_button = ShapeToolButton(
             toolbar, kind=self.shape_kind, family="shape",
             background=button_background,
@@ -3413,6 +3533,27 @@ class PlotWindow(tk.Toplevel):
                 self._create_line(x, y, y_col, x_col)
         return len(self.lines)
 
+    def remove_series(self, column):
+        """Take one curve out of the diagram with everything that belongs to it."""
+        line = self.series.pop(column, None)
+        if line is None:
+            return False
+        if line in self.lines:
+            self.lines.remove(line)
+        dialog = self._dialogs.pop(id(line), None)
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()
+        fill = self.fills.pop(column, None)
+        if fill is not None:
+            fill.remove()
+        self.fill_state.pop(column, None)
+        legend = self.legends.pop(column, None)
+        if legend is not None:
+            legend.remove()
+        self.legend_state.pop(column, None)
+        line.remove()
+        return True
+
     def update_data(self, df):
         """Replace the plotted values but keep every style setting.
 
@@ -3436,17 +3577,7 @@ class PlotWindow(tk.Toplevel):
                 line.set_data(x, y)
 
         for y_col in [name for name in self.series if name not in columns[1:]]:
-            line = self.series.pop(y_col)
-            if line in self.lines:
-                self.lines.remove(line)
-            dialog = self._dialogs.pop(id(line), None)
-            if dialog is not None and dialog.winfo_exists():
-                dialog.destroy()
-            fill = self.fills.pop(y_col, None)
-            if fill is not None:
-                fill.remove()
-            self.fill_state.pop(y_col, None)
-            line.remove()
+            self.remove_series(y_col)
 
         auto_x = self.axis_cfg["x"]["auto"]
         auto_y = self.axis_cfg["y"]["auto"]
@@ -3546,7 +3677,15 @@ class PlotWindow(tk.Toplevel):
         self.fonts["legend"] = int(legend.get("size", self.fonts["legend"]))
         self.fonts["legend_color"] = legend.get("color", self.fonts["legend_color"])
 
-        for index, entry in enumerate(state.get("series", [])):
+        saved_series = state.get("series")
+        if saved_series is not None:
+            # the file decides which curves exist: a column that was not
+            # plotted when it was saved does not appear now either
+            wanted = {entry.get("column") for entry in saved_series}
+            for column in [name for name in self.series if name not in wanted]:
+                self.remove_series(column)
+
+        for index, entry in enumerate(saved_series or []):
             column = entry.get("column")
             line = self.series.get(column)
             if line is None:
@@ -5509,10 +5648,35 @@ separate curve.
 | Delete row | Deletes every row the highlighted block touches. |
 | Add column | Asks for a name and appends an empty column. |
 | Delete column | Deletes the column you last clicked in (after a confirmation). |
-| Clear cells | Empties the highlighted cells; the curves break at the empty cells. |
-| Copy / Paste | The highlighted block to and from the clipboard, tab separated. |
-| Random data | Fills the table with random numbers, keeping its present size. |
 | Settings... | Opens the settings editor (see section 4). |
+
+Clearing, copying and pasting cells are done with the keys (`Delete`,
+`Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
+`File` menu.
+
+### Which columns are plotted
+
+Above the column headings there is a row of **check buttons**, one for each
+column:
+
+* every column is ticked when a file is opened, when random data is
+  generated and when the program starts, so `Plot` draws everything;
+* unticking a column leaves it out of the diagram - the data stays in the
+  table, it is simply not drawn;
+* the check button of the **first column** is fixed: that column is the X
+  axis of every curve;
+* `Plot` opens a diagram of the ticked columns only, and `Update plot`
+  follows the ticks - a column that was unticked disappears from the open
+  diagrams, and a column that is ticked again comes back, while the other
+  curves keep every style setting;
+* with nothing ticked the program says so instead of drawing an empty
+  diagram;
+* the ticks are kept while the table is edited (adding rows, renaming a
+  column, adding a column - a new column starts ticked) and are reset to
+  "all ticked" whenever new data is loaded.
+
+A saved `.aplt` file always contains the **whole** table, and the diagrams
+in it keep exactly the curves they had when they were saved.
 
 ### Editing cells
 
@@ -6104,7 +6268,8 @@ diagrams that are already open keep their settings.
 
 ## 5. Typical workflow
 
-1. `Random data`, `Open data file` or type the numbers by hand.
+1. `Random data` (File menu), `Open data file` or type the numbers by hand.
+   Untick the columns that should not be drawn.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
 3. `Plot`.
@@ -6203,7 +6368,7 @@ class App:
         self.table = DataTable(self.root, self.settings,
                                on_rename=self._column_renamed)
         self.table.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        self.table.set_dataframe(self._empty_frame())
+        self.table.set_dataframe(self._empty_frame(), check_all=True)
 
         self._build_menu()
         self.root.after_idle(self._focus)
@@ -6238,14 +6403,6 @@ class App:
         ttk.Button(bar, text="Delete row", command=self.delete_row).pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="Add column", command=self.add_column).pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="Delete column", command=self.delete_column).pack(side="left", padx=(6, 0))
-        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Button(bar, text="Clear cells", command=self.clear_cells).pack(side="left")
-        ttk.Button(bar, text="Copy", command=self.copy_cells).pack(
-            side="left", padx=(6, 0))
-        ttk.Button(bar, text="Paste", command=self.paste_cells).pack(
-            side="left", padx=(6, 0))
-        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Button(bar, text="Random data", command=self.random_csv).pack(side="left")
         ttk.Button(bar, text="Settings...", command=self.open_settings).pack(side="right")
 
     def _build_menu(self):
@@ -6387,7 +6544,7 @@ class App:
             messagebox.showerror("Error", "The file contains no usable data.")
             return None
 
-        self.table.set_dataframe(frame)
+        self.table.set_dataframe(frame, check_all=True)
         self.set_file_title(path, info)
         if info["bad_lines"]:
             messagebox.showwarning(
@@ -6485,12 +6642,13 @@ class App:
             return False
         frame = pd.DataFrame(rows, columns=columns)
         frame = frame.where(frame.notna(), "")   # JSON null -> empty cell
-        self.table.set_dataframe(frame)
+        self.table.set_dataframe(frame, check_all=True)
 
         for window in self.open_windows():   # replace the current diagrams
             window.destroy()
         self.plot_windows = []
         for state in document.get("plots") or []:
+            # a saved project brings its own curves: the whole table is used
             window = PlotWindow(self.root, self.df.copy(), self.settings, app=self)
             if not window.winfo_exists():
                 continue
@@ -6521,7 +6679,7 @@ class App:
         data = {name: (np.arange(rows) if index == 0
                        else np.random.randint(low, high, size=rows))
                 for index, name in enumerate(columns)}
-        self.table.set_dataframe(pd.DataFrame(data))
+        self.table.set_dataframe(pd.DataFrame(data), check_all=True)
 
     # -- table operations --------------------------------------------------
     def add_row(self):
@@ -6597,7 +6755,17 @@ class App:
             messagebox.showerror(
                 "Error", "At least two columns are needed (X and Y axes).")
             return False
+        if len(self.table.plot_columns()) < 2:
+            messagebox.showinfo(
+                "Information",
+                "No column is ticked for plotting.\n"
+                "Tick at least one column above the table.")
+            return False
         return True
+
+    def plot_data(self):
+        """The data that goes to the diagrams: the ticked columns only."""
+        return self.table.plot_dataframe()
 
     def open_windows(self):
         """The diagrams that are still open."""
@@ -6606,10 +6774,10 @@ class App:
         return self.plot_windows
 
     def open_plot(self):
-        """Open a new diagram with the default style."""
+        """Open a new diagram of the ticked columns, with the default style."""
         if not self._plottable():
             return None
-        window = PlotWindow(self.root, self.df.copy(), self.settings, app=self)
+        window = PlotWindow(self.root, self.plot_data(), self.settings, app=self)
         if window.winfo_exists():
             self.plot_windows.append(window)
             return window
@@ -6623,8 +6791,9 @@ class App:
         if not windows:
             self.open_plot()  # nothing to update yet: open the first diagram
             return
+        data = self.plot_data()
         for window in windows:
-            window.update_data(self.df.copy())
+            window.update_data(data.copy())
             window.lift()
 
 
