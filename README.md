@@ -99,6 +99,7 @@ properties at once.
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
 | Drag a control point | Resizes a drawing, or moves the tip or the tail of an arrow. |
+| Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
 | `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
@@ -139,12 +140,39 @@ An object that was drawn behaves like the other decorations:
   opacity, or `No fill (outline only)`, and a `Delete` button,
 * clicking an empty part of the diagram deselects it,
 * a circle keeps its round shape: its height follows its width and the
-  proportions of the plot area.
+  proportions of the plot area,
+* it can be **turned** to any angle: see below.
 
 The positions and sizes are kept in the coordinates of the plot area, so
 the objects follow the diagram when the window is resized, and they are
 stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
+
+### Turning the drawings and the text boxes
+
+A selected drawing shows one more control point: a **round** one on a short
+line above it.  Dragging that point turns the object around its centre, and
+holding **Shift** while dragging keeps the angle in 15 degree steps.  A
+selected text box has the same round point above it and turns around its
+own anchor, so it stays where it was put.
+
+The exact angle is in the property window of the object as
+`Rotation > Angle [deg]`, with an `Upright` button that puts it back to
+zero.  Angles are counted counter-clockwise and any value is accepted;
+negative angles and angles above 360 are wrapped.
+
+The rotation is measured on the **screen**, so an object keeps its shape
+and its size whatever the proportions of the plot area: a rectangle stays a
+rectangle with square corners, a circle stays round, and a text stays
+readable.  Everything else keeps working on a turned object:
+
+* the eight square control points turn with it, and dragging one of them
+  keeps the opposite corner exactly where it is,
+* the pointer finds the object where it is really drawn, so a turned
+  rectangle is not clicked by the empty corner beside it,
+* moving with the pointer or with the arrow keys, copying, pasting and
+  deleting leave the angle alone - a copy is turned like its original,
+* the angle is stored in `.aplt` files (older files simply open upright).
 
 ### Arrows
 
@@ -206,6 +234,11 @@ worked on from the keyboard:
 The same commands are in the `Plot` menu as `Copy object`, `Paste object`
 and `Delete object`.
 
+The keys always belong to the window that was clicked last, so after a
+property window has been used, **one click anywhere in the diagram** brings
+them back - the click also keeps or changes the selection, so nothing is
+lost.  The property window stays open while this happens.
+
 Copying, pasting and deleting work on **text boxes, drawings and arrows**.
 The title, the axis labels and the legend boxes belong to the diagram and
 are not copied or deleted - but they are selected and moved with the arrow
@@ -246,6 +279,8 @@ A text box behaves like a legend box:
   frame around it (its colour, or no frame) and the background (a colour,
   or fully transparent),
 * `Delete` in that dialog - or an empty text - removes the box,
+* **turn** it with the round handle above it or with `Angle [deg]` in its
+  dialog; it turns around its own anchor point, so it stays in place,
 * the position is kept in the coordinates of the plot area, so the box
   follows the diagram when the window is resized,
 * any number of text boxes can be added, and they are all stored in
@@ -461,8 +496,8 @@ for each open diagram:
 * the frame: style, thickness, colour, major and minor tick length, the
   background of the plot area and of the window, and the size and origin of
   the axes inside the window,
-* every text box with its text, position, font, frame and background,
-* every drawn object with its shape, position, size, line and fill,
+* every text box with its text, position, angle, font, frame and background,
+* every drawn object with its shape, position, size, angle, line and fill,
 * every arrow with its head type and size, tip, tail, line and colour,
 * the figure size, resolution and the window geometry.
 
@@ -554,6 +589,10 @@ diagrams that are already open keep their settings.
   the curve.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
+* The keyboard follows the click: the diagram takes it on every click in
+  the plot area (this is done by Tk itself, not through matplotlib's event
+  loop, so it is not lost when a property window has been used), and a
+  property window gives it back to the diagram when it is closed.
 * A curve whose properties are needed is clicked once; everything else
   needs two clicks, because the first one selects it.  This is what makes
   moving, copying and the arrow keys possible on all of those objects.

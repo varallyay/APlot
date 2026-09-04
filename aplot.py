@@ -33,11 +33,15 @@ Files
 
 Plot window
 -----------
+* drawings and text boxes can be turned to any angle: drag the round
+  control point above them (Shift: 15 degree steps) or type the angle in
+  their property window
 * one click selects any object, a second click opens its properties; a
   selected text (title, axis label, legend box, text box) is marked with a
   light blue veil, a drawing or an arrow with its control points
-* a curve is the exception: one click opens its line, marker and fill
-  properties at once (marker "None" available), the legend follows
+* a curve is the exception: one click opens its properties at once, where
+  the line, the marker, the legend and the fill each have their own check
+  button in front of the section name; the legend follows the curve
 * everything that can be selected can be dragged with the pointer and
   moved with the arrow keys (Shift: ten pixels)
 * every curve has its own legend box, with its own text, font and colours
@@ -141,7 +145,7 @@ FRAME_STYLES = [
 ]
 
 # matplotlib's own subplot position: left, bottom, width, height
-DEFAULT_POSITION = (0.125, 0.125, 0.775, 0.77)
+DEFAULT_POSITION = (0.125, 0.11, 0.775, 0.77)
 SIZE_UNITS = ["Fraction of window", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
@@ -174,6 +178,9 @@ ARROW_HEADS = [("Triangle head", "triangle"), ("Chevron head", "chevron"),
                ("Concave head", "concave"), ("Convex head", "convex")]
 # corners first, then the middle of the sides
 HANDLE_COUNT = 8
+ROTATE_HANDLE = 8           # the round control point above the object
+ROTATE_GAP = 26.0           # pixels between the object and that point
+ROTATE_SNAP = 15.0          # degrees, while Shift is held
 MIN_SHAPE_SIZE = 0.01       # in axes coordinates
 
 # copy / paste and the keyboard
@@ -207,6 +214,15 @@ def code_of(table, name, default):
         if label == name:
             return code
     return default
+
+
+def drawn_names(table):
+    """Option names of a table without its "none" entry.
+
+    The curve dialog switches the line, the marker, the legend and the fill on
+    and off with a check button, so "None" is not offered in the lists.
+    """
+    return [name for name, code in table if str(code).lower() != "none"]
 
 
 def name_of(table, code, default):
@@ -458,11 +474,11 @@ DEFAULTS = {
         "y_label": "Y values",
         "line_style": "Dashed", "line_width": 1.5,
         "marker": "Circle", "marker_size": 8.0,
-        "marker_edge_width": 1.0, "hollow_markers": False,
+        "marker_edge_width": 1.5, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
         "legend_frame": False, "legend_edge_color": "#000000",
         "legend_background": "#ffffff", "legend_transparent": True,
-        "fill_under": False, "fill_color": "#1f77b4", "fill_alpha": 0.35,
+        "fill_under": False, "fill_color": "#1f77b4", "fill_alpha": 0.36,
         "fill_pattern": "None (plain colour)", "fill_base": "Zero line",
         "fill_follows_line": True,
     },
@@ -470,7 +486,7 @@ DEFAULTS = {
         "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
-        "title_pad": 12.0, "axis_label_pad": 8.0, "tick_label_pad": 10.0,
+        "title_pad": 8.0, "axis_label_pad": 7, "tick_label_pad": 10.0,
     },
     "grid": {
         "major": False, "minor": False, "color": "#b0b0b0",
@@ -478,7 +494,7 @@ DEFAULTS = {
     },
     "frame": {
         "style": "No frame (X and Y only) (default)", "width": 1.8,
-        "color": "#080808",
+        "color": "#000000",
         "major_tick_length": 8.0, "minor_tick_length": 4.0,
         "background": "#ffffff", "transparent_background": True,
         "figure_background": "#ffffff",
@@ -857,6 +873,11 @@ class ToolDialog(tk.Toplevel):
         if self._on_close:
             self._on_close(self)
         self.destroy()
+        # the diagram gets the keyboard back, so the arrow keys and the
+        # copy/paste shortcuts keep working after a property window was used
+        take_focus = getattr(self.master, "take_focus", None)
+        if callable(take_focus):
+            take_focus()
 
     @staticmethod
     def field(parent, row, text, widget, pady=3):
@@ -949,6 +970,7 @@ class ShapeDialog(ToolDialog):
         self.width_var = tk.StringVar(value=f"{state['width']:g}")
         self.alpha_var = tk.StringVar(value=f"{state.get('alpha', 0.6):g}")
         self.no_fill_var = tk.BooleanVar(value=state["face"] == "none")
+        self.angle_var = tk.StringVar(value=f"{float(state.get('angle', 0.0)):g}")
 
         line = ttk.LabelFrame(self.body, text="Line", padding=8)
         line.pack(fill="x")
@@ -976,9 +998,19 @@ class ShapeDialog(ToolDialog):
                    ttk.Spinbox(fill, from_=0, to=1, increment=0.05, width=8,
                                textvariable=self.alpha_var, command=self.apply))
 
+        turn = ttk.LabelFrame(self.body, text="Rotation", padding=8)
+        turn.pack(fill="x", pady=(10, 0))
+        self.field(turn, 0, "Angle [deg]:",
+                   ttk.Spinbox(turn, from_=-360, to=360, increment=5, width=8,
+                               textvariable=self.angle_var, command=self.apply))
+        ttk.Button(turn, text="Upright",
+                   command=lambda: (self.angle_var.set("0"), self.apply())).grid(
+            row=0, column=2, padx=(8, 0))
+
         ttk.Label(self.body, foreground="#666", justify="left",
-                  text="Drag the object to move it, drag one of its handles\n"
-                       "to resize it.").pack(anchor="w", pady=(8, 0))
+                  text="Drag the object to move it, drag a square handle to\n"
+                       "resize it and the round one above it to turn it\n"
+                       "(Shift: 15 degree steps).").pack(anchor="w", pady=(8, 0))
 
         bar = ttk.Frame(self.body)
         bar.pack(fill="x", pady=(12, 0))
@@ -995,6 +1027,7 @@ class ShapeDialog(ToolDialog):
             "edge": self.edge_color.color,
             "face": "none" if self.no_fill_var.get() else self.face_color.color,
             "alpha": min(1.0, max(0.0, to_float(self.alpha_var.get(), 0.6))),
+            "angle": to_float(self.angle_var.get(), 0.0) % 360.0,
         }
 
     def apply(self):
@@ -1194,12 +1227,21 @@ class SeriesStyleDialog(ToolDialog):
         self._loading = True
 
         label = line.get_label()
+        self.column = getattr(line, "aplot_series", None)
         self.label_var = tk.StringVar(value="" if label.startswith("_") else label)
+
+        # every section has its own check button: off means the line, the
+        # marker, the legend box or the fill is simply not drawn
+        self.line_on_var = tk.BooleanVar(value=not self.is_off(line.get_linestyle()))
+        self.marker_on_var = tk.BooleanVar(value=not self.is_off(line.get_marker()))
+        self.legend_on_var = tk.BooleanVar(value=not label.startswith("_"))
+
         self.lstyle_var = tk.StringVar(
-            value=name_of(LINE_STYLES, line.get_linestyle(), "Solid"))
+            value=self.first_choice(LINE_STYLES, line.get_linestyle(), "Solid"))
         self.lwidth_var = tk.StringVar(value=f"{line.get_linewidth():g}")
         self.mstyle_var = tk.StringVar(
-            value=name_of(MARKERS, line.get_marker(), "None"))
+            value=self.first_choice(MARKERS, line.get_marker(),
+                                    self.default_marker()))
         self.msize_var = tk.StringVar(value=f"{line.get_markersize():g}")
         self.mwidth_var = tk.StringVar(value=f"{line.get_markeredgewidth():g}")
 
@@ -1224,10 +1266,42 @@ class SeriesStyleDialog(ToolDialog):
         self._build_buttons()
         self._loading = False
 
+    # -- helpers -----------------------------------------------------------
+    @staticmethod
+    def is_off(code):
+        """True for every way matplotlib writes "not drawn"."""
+        return str(code).strip().lower() in ("none", "", " ", "nothing")
+
+    @staticmethod
+    def first_choice(table, code, fallback):
+        """The name of `code`, or `fallback` when it is switched off."""
+        if SeriesStyleDialog.is_off(code):
+            names_left = drawn_names(table)
+            return fallback if fallback in names_left else names_left[0]
+        return name_of(table, code, fallback)
+
+    def default_marker(self):
+        """The marker a curve gets when the marker is switched on."""
+        settings = getattr(self.master, "settings", None)
+        try:
+            wanted = str(settings.get("plot", "marker"))
+        except (AttributeError, KeyError, TypeError):
+            wanted = ""
+        choices = drawn_names(MARKERS)
+        return wanted if wanted in choices else choices[0]
+
+    def _section(self, title, variable, **pack):
+        """A section whose title is its own check button."""
+        box = ttk.LabelFrame(self.body, padding=8)
+        check = ttk.Checkbutton(box, text=title, variable=variable,
+                                command=self._apply)
+        box.configure(labelwidget=check)
+        box.pack(fill="x", **pack)
+        return box
+
     # -- construction ------------------------------------------------------
     def _build_legend_box(self):
-        box = ttk.LabelFrame(self.body, text="Legend", padding=8)
-        box.pack(fill="x")
+        box = self._section("Legend", self.legend_on_var)
         self.field(box, 0, "Text:", ttk.Entry(box, textvariable=self.label_var, width=30))
         self.label_var.trace_add("write", self._apply)
         self.field(box, 1, "Font size:",
@@ -1238,16 +1312,15 @@ class SeriesStyleDialog(ToolDialog):
         self.legend_color = ColorSwatch(box, self._legend_color,
                                         command=lambda _c: self._apply())
         self.field(box, 2, "Font colour:", self.legend_color)
-        ttk.Label(box, text="Empty text hides this curve's legend box.",
+        ttk.Label(box, text="Switch \"Legend\" off to hide this curve's box.",
                   foreground="#666").grid(row=3, column=0, columnspan=2,
                                           sticky="w", pady=(4, 0))
 
     def _build_line_box(self, line_color):
-        box = ttk.LabelFrame(self.body, text="Line", padding=8)
-        box.pack(fill="x", pady=(10, 0))
+        box = self._section("Line", self.line_on_var, pady=(10, 0))
 
         combo = ttk.Combobox(box, textvariable=self.lstyle_var, state="readonly",
-                             values=names(LINE_STYLES), width=14)
+                             values=drawn_names(LINE_STYLES), width=14)
         self.field(box, 0, "Style:", combo)
         combo.bind("<<ComboboxSelected>>", self._apply)
 
@@ -1260,11 +1333,10 @@ class SeriesStyleDialog(ToolDialog):
         self.field(box, 2, "Colour:", self.line_color)
 
     def _build_marker_box(self, line_color, face):
-        box = ttk.LabelFrame(self.body, text="Marker", padding=8)
-        box.pack(fill="x", pady=(10, 0))
+        box = self._section("Marker", self.marker_on_var, pady=(10, 0))
 
         combo = ttk.Combobox(box, textvariable=self.mstyle_var, state="readonly",
-                             values=names(MARKERS), width=14)
+                             values=drawn_names(MARKERS), width=14)
         self.field(box, 0, "Style:", combo)
         combo.bind("<<ComboboxSelected>>", self._apply)
 
@@ -1291,19 +1363,16 @@ class SeriesStyleDialog(ToolDialog):
         self.mwidth_var.trace_add("write", self._apply)
 
     def _build_fill_box(self, line_color):
-        box = ttk.LabelFrame(self.body, text="Fill under the curve", padding=8)
-        box.pack(fill="x", pady=(10, 0))
+        box = self._section("Fill under the curve", self.fill_on_var,
+                            pady=(10, 0))
 
-        self.field(box, 0, "", ttk.Checkbutton(box, text="Fill the area",
-                                               variable=self.fill_on_var,
-                                               command=self._apply))
-        self.field(box, 1, "", ttk.Checkbutton(box, text="Same colour as the curve",
+        self.field(box, 0, "", ttk.Checkbutton(box, text="Same colour as the curve",
                                                variable=self.fill_follow_var,
                                                command=self._apply))
         self.fill_color = ColorSwatch(box, self._fill.get("color", line_color),
                                       command=lambda _c: self._apply())
-        self.field(box, 2, "Fill colour:", self.fill_color)
-        self.field(box, 3, "Opacity (0-1):",
+        self.field(box, 1, "Fill colour:", self.fill_color)
+        self.field(box, 2, "Opacity (0-1):",
                    ttk.Spinbox(box, from_=0, to=1, increment=0.05, width=8,
                                textvariable=self.fill_alpha_var, command=self._apply))
         self.fill_alpha_var.trace_add("write", self._apply)
@@ -1311,12 +1380,12 @@ class SeriesStyleDialog(ToolDialog):
         pattern = ttk.Combobox(box, textvariable=self.fill_hatch_var,
                                state="readonly", values=names(HATCH_PATTERNS),
                                width=22)
-        self.field(box, 4, "Pattern:", pattern)
+        self.field(box, 3, "Pattern:", pattern)
         pattern.bind("<<ComboboxSelected>>", self._apply)
 
         base = ttk.Combobox(box, textvariable=self.fill_base_var, state="readonly",
                             values=names(FILL_BASES), width=22)
-        self.field(box, 5, "Fill down to:", base)
+        self.field(box, 4, "Fill down to:", base)
         base.bind("<<ComboboxSelected>>", self._apply)
 
     def _build_buttons(self):
@@ -1338,11 +1407,13 @@ class SeriesStyleDialog(ToolDialog):
             return
         line = self.line
 
-        line.set_linestyle(code_of(LINE_STYLES, self.lstyle_var.get(), "-"))
+        line.set_linestyle(code_of(LINE_STYLES, self.lstyle_var.get(), "-")
+                           if self.line_on_var.get() else "none")
         line.set_linewidth(to_float(self.lwidth_var.get(), line.get_linewidth()))
         line.set_color(self.line_color.color)
 
-        line.set_marker(code_of(MARKERS, self.mstyle_var.get(), "None"))
+        line.set_marker(code_of(MARKERS, self.mstyle_var.get(), "o")
+                        if self.marker_on_var.get() else "None")
         line.set_markersize(to_float(self.msize_var.get(), line.get_markersize()))
         line.set_markerfacecolor("none" if self.hollow_var.get()
                                  else self.face_color.color)
@@ -1351,7 +1422,15 @@ class SeriesStyleDialog(ToolDialog):
                                           line.get_markeredgewidth()))
 
         text = self.label_var.get().strip()
-        line.set_label(text if text else "_nolegend_")
+        if self.legend_on_var.get():
+            if not text and self.column:     # switched on with an empty text
+                self._loading = True         # the column name is a good start
+                self.label_var.set(str(self.column))
+                self._loading = False
+                text = str(self.column)
+            line.set_label(text if text else "_nolegend_")
+        else:
+            line.set_label("_nolegend_")
         if self.on_legend_style:
             self.on_legend_style(to_int(self.legend_size_var.get(), 10),
                                  self.legend_color.color)
@@ -1698,10 +1777,13 @@ class TextBoxDialog(ToolDialog):
     """A legend box or a free text box: text, font, frame and background."""
 
     def __init__(self, master, title, text, state, on_apply, on_close=None,
-                 hint=None, on_delete=None):
+                 hint=None, on_delete=None, rotation=False):
         super().__init__(master, title, on_close=on_close)
         self.on_apply = on_apply
         self.on_delete = on_delete
+        self.rotation = rotation
+        self.angle_var = tk.StringVar(
+            value=f"{float(state.get('angle', 0.0) or 0.0):g}")
 
         self.text_var = tk.StringVar(value=text)
         self.size_var = tk.StringVar(value=str(int(state.get("size", 10))))
@@ -1744,6 +1826,22 @@ class TextBoxDialog(ToolDialog):
                   foreground="#666").grid(row=4, column=0, columnspan=2,
                                           sticky="w", pady=(4, 0))
 
+        if rotation:
+            turn = ttk.LabelFrame(self.body, text="Rotation", padding=8)
+            turn.pack(fill="x", pady=(10, 0))
+            self.field(turn, 0, "Angle [deg]:",
+                       ttk.Spinbox(turn, from_=-360, to=360, increment=5,
+                                   width=8, textvariable=self.angle_var,
+                                   command=self.apply))
+            ttk.Button(turn, text="Upright",
+                       command=lambda: (self.angle_var.set("0"),
+                                        self.apply())).grid(row=0, column=2,
+                                                            padx=(8, 0))
+            ttk.Label(turn, foreground="#666", justify="left",
+                      text="Or drag the round handle above the box\n"
+                           "(Shift: 15 degree steps).").grid(
+                row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
         bar = ttk.Frame(self.body)
         bar.pack(fill="x", pady=(12, 0))
         ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
@@ -1757,13 +1855,16 @@ class TextBoxDialog(ToolDialog):
         entry.select_range(0, "end")
 
     def values(self):
-        return {
+        values = {
             "text": self.text_var.get(),
             "size": to_int(self.size_var.get(), 10),
             "color": self.color.color,
             "edge": self.edge_color.color if self.frame_var.get() else "none",
             "face": "none" if self.transparent_var.get() else self.face_color.color,
         }
+        if self.rotation:
+            values["angle"] = to_float(self.angle_var.get(), 0.0) % 360.0
+        return values
 
     def apply(self):
         self.on_apply(self.values())
@@ -2288,6 +2389,7 @@ class PlotWindow(tk.Toplevel):
         self._marked = None             # the text that wears the blue veil
         self._shift_down = False        # Shift snaps the arrows to 45 degrees
         self._handles = None
+        self._rotator = None            # the round rotation control point
         self.shape_kind = code_of(SHAPE_KINDS,
                                   config.get("shape", "kind"), "rect")
         self.arrows: dict = {}          # key -> [shaft, head]
@@ -2386,6 +2488,7 @@ class PlotWindow(tk.Toplevel):
             self.configure(menu=menubar)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+        self._bind_native_focus()
         toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
         toolbar.update()
         self.toolbar = toolbar
@@ -2402,7 +2505,7 @@ class PlotWindow(tk.Toplevel):
                 "Add text: click in the diagram to place a text box"))
         self.text_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
 
-        button_background = "#999999" #self.text_button.cget("background")
+        button_background = self.text_button.cget("background")
         self.shape_button = ShapeToolButton(
             toolbar, kind=self.shape_kind, family="shape",
             background=button_background,
@@ -2437,11 +2540,52 @@ class PlotWindow(tk.Toplevel):
             pass
 
         self.bind("<Escape>", lambda _e: self.cancel_tools())
+        self.canvas.get_tk_widget().bind("<Escape>",
+                                         lambda _e: self.cancel_tools())
         self._bind_keys()
         toolbar.pack(side="top", fill="x")
         self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
         ttk.Label(self, text=self.HINT, anchor="center", justify="center",
                   padding=4, foreground="#444").pack(side="bottom", fill="x")
+
+    def take_focus(self, _event=None):
+        """Give the keyboard to the diagram canvas.
+
+        matplotlib runs the canvas clicks through its own event loop, which
+        does not always hand the focus back to Tk - and after a property
+        window has been used, the keyboard belongs to that window.  Setting
+        the focus natively keeps the arrow keys, Delete and copy/paste alive.
+        """
+        try:
+            widget = self.canvas.get_tk_widget()
+            if widget.winfo_exists():
+                widget.focus_set()
+        except (tk.TclError, AttributeError):
+            pass
+        return None            # never "break": matplotlib needs the click too
+
+    def _bind_native_focus(self):
+        """Every click in the diagram brings the keyboard back, natively."""
+        widget = self.canvas.get_tk_widget()
+        try:
+            widget.configure(takefocus=True)
+        except tk.TclError:
+            pass
+        for sequence in ("<Button-1>", "<Button-2>", "<Button-3>"):
+            # add="+" keeps matplotlib's own handlers of these events
+            widget.bind(sequence, self.take_focus, add="+")
+        # when the window itself is activated and nothing inside it holds the
+        # keyboard, the diagram takes it
+        self.bind("<FocusIn>", self._window_focused, add="+")
+
+    def _window_focused(self, _event=None):
+        try:
+            current = self.focus_displayof()
+        except (tk.TclError, KeyError):
+            current = None
+        if current is None or current is self:
+            self.take_focus()
+        return None
 
     def _bind_keys(self):
         """Copy, paste, deleting and moving the selected object."""
@@ -2451,27 +2595,38 @@ class PlotWindow(tk.Toplevel):
                 return "break"
             return handler
 
+        canvas_widget = self.canvas.get_tk_widget()
+
+        def bind_both(sequence, handler):
+            # on the canvas (which owns the focus while the diagram is used)
+            # and on the window (for the toolbar and the rest of it)
+            self.bind(sequence, handler)
+            try:
+                canvas_widget.bind(sequence, handler)
+            except tk.TclError:
+                pass
+
         for modifier in ("Control", "Command"):
             for letter in ("c", "C"):
-                self.bind(f"<{modifier}-{letter}>", wrap(self.copy_selection))
+                bind_both(f"<{modifier}-{letter}>", wrap(self.copy_selection))
             for letter in ("v", "V"):
-                self.bind(f"<{modifier}-{letter}>", wrap(self.paste_clipboard))
+                bind_both(f"<{modifier}-{letter}>", wrap(self.paste_clipboard))
         for sequence in ("<Delete>", "<BackSpace>"):
-            self.bind(sequence, wrap(self.delete_selection))
+            bind_both(sequence, wrap(self.delete_selection))
 
         steps = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, 1), "Down": (0, -1)}
         for name, (sx, sy) in steps.items():
-            self.bind(f"<{name}>",
+            bind_both(f"<{name}>",
                       wrap(self.nudge_selection, sx * NUDGE_STEP, sy * NUDGE_STEP))
-            self.bind(f"<Shift-{name}>",
+            bind_both(f"<Shift-{name}>",
                       wrap(self.nudge_selection,
                            sx * NUDGE_BIG_STEP, sy * NUDGE_BIG_STEP))
 
         # Shift snaps the arrows: remember whether it is held down
         for sequence in ("<KeyPress-Shift_L>", "<KeyPress-Shift_R>"):
-            self.bind(sequence, lambda _e: setattr(self, "_shift_down", True))
+            bind_both(sequence, lambda _e: setattr(self, "_shift_down", True))
         for sequence in ("<KeyRelease-Shift_L>", "<KeyRelease-Shift_R>"):
-            self.bind(sequence, lambda _e: setattr(self, "_shift_down", False))
+            bind_both(sequence, lambda _e: setattr(self, "_shift_down", False))
         self.bind("<FocusOut>", lambda _e: setattr(self, "_shift_down", False),
                   add="+")
 
@@ -2690,7 +2845,7 @@ class PlotWindow(tk.Toplevel):
             "frame": dict(self.frame_cfg),
             "text_offsets": {name: [float(value[0]), float(value[1])]
                              for name, value in self.text_offset.items()},
-            "shapes": [{key_: (float(value) if key_ in ("x", "y", "w", "h",
+            "shapes": [{key_: (float(value) if key_ in ("x", "y", "w", "h", "angle",
                                                         "width", "alpha")
                                else value)
                         for key_, value in state.items()}
@@ -2703,6 +2858,7 @@ class PlotWindow(tk.Toplevel):
                        for state in self.arrow_state.values()],
             "notes": [{"text": state["text"],
                        "pos": [float(state["pos"][0]), float(state["pos"][1])],
+                       "angle": float(state.get("angle", 0.0) or 0.0),
                        "size": int(state["size"]), "color": state["color"],
                        "edge": state["edge"], "face": state["face"]}
                       for state in self.note_state.values()],
@@ -2984,7 +3140,7 @@ class PlotWindow(tk.Toplevel):
         cfg = self.settings.section("shape")
         return {
             "kind": kind, "x": float(x), "y": float(y),
-            "w": float(width), "h": float(height),
+            "w": float(width), "h": float(height), "angle": 0.0,
             "style": code_of(LINE_STYLES, cfg["line_style"], "-"),
             "width": float(cfg["line_width"]),
             "edge": safe_hex(cfg["line_color"], "#000000"),
@@ -3035,7 +3191,8 @@ class PlotWindow(tk.Toplevel):
             state["h"] = h
         face = state.get("face", "none")
         common = {
-            "transform": self.ax.transAxes, "clip_on": False, "zorder": 5,
+            "transform": self._shape_transform(state),
+            "clip_on": False, "zorder": 5,
             "edgecolor": state["edge"], "linestyle": state["style"],
             "linewidth": state["width"],
             "facecolor": ("none" if face == "none"
@@ -3057,6 +3214,106 @@ class PlotWindow(tk.Toplevel):
     def refresh_shapes(self):
         for key in list(self.shape_state):
             self.refresh_shape(key)
+
+    # -- rotation ----------------------------------------------------------
+    @staticmethod
+    def angle_of(state):
+        try:
+            return float(state.get("angle", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def shape_centre(state):
+        return (state["x"] + state["w"] / 2.0, state["y"] + state["h"] / 2.0)
+
+    def _rotation(self, centre, angle):
+        """Turn by `angle` degrees around `centre`, measured on the screen."""
+        px, py = self.ax.transAxes.transform(centre)
+        return Affine2D().rotate_deg_around(float(px), float(py), float(angle))
+
+    def _shape_transform(self, state):
+        """Axes coordinates plus the rotation of that object, in pixels.
+
+        Rotating in pixels (and not in axes coordinates) keeps the object
+        undistorted whatever the proportions of the plot area.
+        """
+        angle = self.angle_of(state)
+        if not angle:
+            return self.ax.transAxes
+        return self.ax.transAxes + self._rotation(self.shape_centre(state), angle)
+
+    def _turn_point(self, point, centre, angle):
+        """One point of the plot area turned around `centre`."""
+        if not angle:
+            return (float(point[0]), float(point[1]))
+        base = self.ax.transAxes
+        turned = self._rotation(centre, angle).transform(base.transform(point))
+        back = base.inverted().transform(turned)
+        return (float(back[0]), float(back[1]))
+
+    def rotation_centre(self):
+        """The point the selected object turns around, in axes coordinates."""
+        kind, key = self.selection or (None, None)
+        if kind == "shape" and key in self.shape_state:
+            return self.shape_centre(self.shape_state[key])
+        if kind == "note" and key in self.note_state:
+            return tuple(self.note_state[key]["pos"])
+        return None
+
+    def rotation_handle_position(self):
+        """Where the round rotation control point sits, or None."""
+        kind, key = self.selection or (None, None)
+        centre = self.rotation_centre()
+        if centre is None:
+            return None
+        base = self.ax.transAxes
+        if kind == "shape":
+            state = self.shape_state[key]
+            top = self.shape_handle_positions(state)[6]     # top, middle
+            start = np.array(base.transform(centre), dtype=float)
+            end = np.array(base.transform(top), dtype=float)
+            vector = end - start
+            length = float(np.hypot(*vector))
+            if length < 1e-6:
+                return None
+            point = end + vector / length * ROTATE_GAP
+        else:
+            artist = self.notes.get(key)
+            if artist is None:
+                return None
+            try:
+                box = artist.get_window_extent(self._renderer())
+            except (RuntimeError, ValueError, AttributeError, TypeError):
+                return None
+            point = np.array([(box.x0 + box.x1) / 2.0, box.y1 + ROTATE_GAP])
+        back = base.inverted().transform(point)
+        return (float(back[0]), float(back[1]))
+
+    def rotate_selection(self, angle, snap=False):
+        """Turn the selected drawing or text box to `angle` degrees."""
+        kind, key = self.selection or (None, None)
+        state = self.selected_state()
+        if state is None or kind not in ("shape", "note"):
+            return False
+        if snap:
+            angle = round(angle / ROTATE_SNAP) * ROTATE_SNAP
+        state["angle"] = float(angle) % 360.0
+        if kind == "shape":
+            self.refresh_shape(key)
+        else:
+            self.refresh_note(key)
+        self._refresh_handles()
+        self._refresh_highlight()
+        self.draw()
+        return True
+
+    def _pointer_angle(self, event, centre):
+        point = np.array(self.ax.transAxes.transform(centre), dtype=float)
+        vector = np.array([event.x, event.y], dtype=float) - point
+        if float(np.hypot(*vector)) < 1e-6:
+            return None
+        return float(np.degrees(np.arctan2(vector[1], vector[0])))
 
     # -- arrows ------------------------------------------------------------
     def arm_arrow_drawing(self, head=None, armed=None):
@@ -3495,37 +3752,78 @@ class PlotWindow(tk.Toplevel):
         except (tk.TclError, AttributeError):
             pass
 
+    def shape_handle_positions(self, state):
+        """The eight control points, turned with the object."""
+        points = self.handle_positions(state)
+        angle = self.angle_of(state)
+        if not angle:
+            return points
+        centre = self.shape_centre(state)
+        return [self._turn_point(point, centre, angle) for point in points]
+
     def selected_handle_positions(self):
         kind, key = self.selection or (None, None)
         if kind == "shape" and key in self.shape_state:
-            return self.handle_positions(self.shape_state[key])
+            return self.shape_handle_positions(self.shape_state[key])
         if kind == "arrow" and key in self.arrow_state:
             return self.arrow_handle_positions(self.arrow_state[key])
         return None
 
     def _refresh_handles(self):
         points = self.selected_handle_positions()
-        if points is None:
-            if self._handles is not None:
-                self._handles.set_data([], [])
-            return
-        if self._handles is None:
+        if self._handles is None and points is not None:
             self._handles, = self.ax.plot(
                 [], [], linestyle="none", marker="s", markersize=7,
                 markerfacecolor="#ffffff", markeredgecolor="#1a5fb4",
                 markeredgewidth=1.2, transform=self.ax.transAxes,
                 clip_on=False, zorder=8, label="_nolegend_")
-        self._handles.set_data([p[0] for p in points], [p[1] for p in points])
+        if self._handles is not None:
+            if points is None:
+                self._handles.set_data([], [])
+            else:
+                self._handles.set_data([p[0] for p in points],
+                                       [p[1] for p in points])
+        self._refresh_rotation_handle()
+
+    def _refresh_rotation_handle(self):
+        """The round control point that turns a drawing or a text box."""
+        point = self.rotation_handle_position()
+        if self._rotator is None:
+            if point is None:
+                return
+            self._rotator, = self.ax.plot(
+                [], [], linestyle="-", linewidth=0.8, color="#1a5fb4",
+                marker="o", markersize=8, markerfacecolor="#ffffff",
+                markeredgecolor="#1a5fb4", markeredgewidth=1.2,
+                markevery=[1], transform=self.ax.transAxes,
+                clip_on=False, zorder=8, label="_nolegend_")
+        if point is None:
+            self._rotator.set_data([], [])
+            return
+        centre = self.rotation_centre()
+        kind, key = self.selection or (None, None)
+        if kind == "shape":
+            anchor = self.shape_handle_positions(self.shape_state[key])[6]
+        else:
+            anchor = centre
+        self._rotator.set_data([anchor[0], point[0]], [anchor[1], point[1]])
 
     def handle_at(self, x, y, tolerance=8.0):
-        """Index of the control point of the selected object, or None."""
-        points = self.selected_handle_positions()
-        if points is None or x is None or y is None:
+        """Index of the control point of the selected object, or None.
+
+        `ROTATE_HANDLE` (8) is the round one that turns the object.
+        """
+        if x is None or y is None:
             return None
-        for index, point in enumerate(points):
+        for index, point in enumerate(self.selected_handle_positions() or ()):
             px, py = self.ax.transAxes.transform(point)
             if abs(px - x) <= tolerance and abs(py - y) <= tolerance:
                 return index
+        point = self.rotation_handle_position()
+        if point is not None:
+            px, py = self.ax.transAxes.transform(point)
+            if abs(px - x) <= tolerance and abs(py - y) <= tolerance:
+                return ROTATE_HANDLE
         return None
 
     def shape_at(self, x, y):
@@ -3544,8 +3842,19 @@ class PlotWindow(tk.Toplevel):
                 return key
         return None
 
+    OPPOSITE_HANDLE = {0: 2, 1: 3, 2: 0, 3: 1, 4: 6, 5: 7, 6: 4, 7: 5}
+
     def _resize_shape(self, key, index, point):
         state = self.shape_state[key]
+        angle = self.angle_of(state)
+        anchor_before = None
+        if angle:
+            # work in the frame of the object and keep the opposite control
+            # point where it is on the screen
+            anchor = self.OPPOSITE_HANDLE.get(index, index)
+            anchor_before = self.ax.transAxes.transform(
+                self.shape_handle_positions(state)[anchor])
+            point = self._turn_point(point, self.shape_centre(state), -angle)
         x0, y0 = state["x"], state["y"]
         x1, y1 = x0 + state["w"], y0 + state["h"]
         if index in (0, 3, 7):
@@ -3558,6 +3867,14 @@ class PlotWindow(tk.Toplevel):
             y1 = point[1]
         state["x"], state["w"] = min(x0, x1), max(MIN_SHAPE_SIZE, abs(x1 - x0))
         state["y"], state["h"] = min(y0, y1), max(MIN_SHAPE_SIZE, abs(y1 - y0))
+        if anchor_before is not None:
+            anchor = self.OPPOSITE_HANDLE.get(index, index)
+            after = self.ax.transAxes.transform(
+                self.shape_handle_positions(state)[anchor])
+            dx, dy = self._axes_delta(anchor_before[0] - after[0],
+                                      anchor_before[1] - after[1])
+            state["x"] += dx
+            state["y"] += dy
         self.refresh_shape(key)
 
     def edit_shape(self, key):
@@ -3636,6 +3953,7 @@ class PlotWindow(tk.Toplevel):
         cfg = self.settings.section("text")
         return {
             "text": "Text", "pos": (float(position[0]), float(position[1])),
+            "angle": 0.0,
             "size": int(cfg["size"]), "color": safe_hex(cfg["color"], "#000000"),
             "edge": ("none" if not cfg["frame"]
                      else safe_hex(cfg["edge_color"], "#000000")),
@@ -3659,6 +3977,10 @@ class PlotWindow(tk.Toplevel):
         if artist is not None:
             artist.remove()
         self.note_state.pop(key, None)
+        if self._marked == ("note", key):
+            self._marked = None
+        if self.selection == ("note", key):
+            self.select_object(None, None)
         dialog = self._dialogs.pop(f"note-{key}", None)
         if dialog is not None and dialog.winfo_exists():
             dialog.destroy()
@@ -3680,6 +4002,8 @@ class PlotWindow(tk.Toplevel):
                               transform=self.ax.transAxes,
                               fontsize=state["size"], color=state["color"],
                               ha="left", va="center", bbox=box, zorder=6,
+                              rotation=self.angle_of(state),
+                              rotation_mode="anchor",
                               picker=True, clip_on=False)
         self.notes[key] = artist
         if self.selection == ("note", key) and self._marked != ("note", key):
@@ -3718,7 +4042,7 @@ class PlotWindow(tk.Toplevel):
             self.draw()
 
         return self._show_dialog(f"note-{key}", lambda: TextBoxDialog(
-            self, "Text box", state["text"], state, apply,
+            self, "Text box", state["text"], state, apply, rotation=True,
             hint="An empty text deletes this box.",
             on_delete=lambda: self.remove_note(key),
             on_close=lambda _d: self._dialogs.pop(f"note-{key}", None)))
@@ -3848,6 +4172,15 @@ class PlotWindow(tk.Toplevel):
             drag = self._shape_drag
             key = drag["key"]
             mode = drag["mode"]
+            if mode == "rotate":
+                pointer = self._pointer_angle(event, drag["centre"])
+                if pointer is None:
+                    return
+                # the object turns by as much as the pointer did, so grabbing
+                # the handle never makes it jump
+                self.rotate_selection(drag["angle"] + pointer - drag["pointer"],
+                                      snap=self._shift_active(event))
+                return
             if mode.startswith("arrow"):
                 if key not in self.arrow_state:
                     self._shape_drag = None
@@ -3952,6 +4285,9 @@ class PlotWindow(tk.Toplevel):
                         self._refresh_handles()
                 self.draw()
             return
+        if shape_drag is not None and shape_drag["mode"] == "rotate":
+            self.draw()
+            return
         if shape_drag is not None:
             key = shape_drag["key"]
             state = self.shape_state.get(key)
@@ -3981,7 +4317,10 @@ class PlotWindow(tk.Toplevel):
             return                     # the tool cursor stays until the click
         cursor = ""
         _y_col, legend = self.legend_at(event.x, event.y)
-        if self.handle_at(event.x, event.y) is not None:
+        index = self.handle_at(event.x, event.y)
+        if index == ROTATE_HANDLE:
+            cursor = "exchange"            # a round arrow: turn the object
+        elif index is not None:
             cursor = "sizing"
         elif self.arrow_at(event.x, event.y) is not None:
             cursor = "fleur"
@@ -4071,6 +4410,10 @@ class PlotWindow(tk.Toplevel):
                           "left": float(cfg["left"]), "bottom": float(cfg["bottom"]),
                           "x_length": float(cfg["x_length"]),
                           "y_length": float(cfg["y_length"])}
+        # the plot area moved: the pixel geometry of the objects is rebuilt
+        self.refresh_shapes()
+        self.refresh_arrows()
+        self._refresh_handles()
         if redraw:
             self.draw()
 
@@ -4233,10 +4576,8 @@ class PlotWindow(tk.Toplevel):
         return False
 
     def _on_button_press(self, event):
-        try:                    # the keyboard commands need the focus here
-            self.canvas.get_tk_widget().focus_set()
-        except tk.TclError:
-            pass
+        # the keyboard focus is taken by the native <Button-1> binding of the
+        # canvas widget (see take_focus), not from inside this handler
         if event.dblclick:                 # every object needs two clicks
             self._on_double_click(event)
             return
@@ -4266,6 +4607,15 @@ class PlotWindow(tk.Toplevel):
             return
 
         index = self.handle_at(event.x, event.y)
+        if index == ROTATE_HANDLE:        # turn the selected object
+            kind, key = self.selection
+            centre = self.rotation_centre()
+            start = self._pointer_angle(event, centre)
+            if centre is not None and start is not None:
+                self._shape_drag = {"key": key, "mode": "rotate", "kind": kind,
+                                    "centre": centre, "pointer": start,
+                                    "angle": self.angle_of(self.selected_state())}
+            return
         if index is not None:             # resize the selected object
             kind, key = self.selection
             self._shape_drag = {"key": key, "index": index,
@@ -4558,6 +4908,7 @@ properties at once.
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
 | Drag a control point | Resizes a drawing, or moves the tip or the tail of an arrow. |
+| Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
 | `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
@@ -4598,12 +4949,39 @@ An object that was drawn behaves like the other decorations:
   opacity, or `No fill (outline only)`, and a `Delete` button,
 * clicking an empty part of the diagram deselects it,
 * a circle keeps its round shape: its height follows its width and the
-  proportions of the plot area.
+  proportions of the plot area,
+* it can be **turned** to any angle: see below.
 
 The positions and sizes are kept in the coordinates of the plot area, so
 the objects follow the diagram when the window is resized, and they are
 stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
+
+### Turning the drawings and the text boxes
+
+A selected drawing shows one more control point: a **round** one on a short
+line above it.  Dragging that point turns the object around its centre, and
+holding **Shift** while dragging keeps the angle in 15 degree steps.  A
+selected text box has the same round point above it and turns around its
+own anchor, so it stays where it was put.
+
+The exact angle is in the property window of the object as
+`Rotation > Angle [deg]`, with an `Upright` button that puts it back to
+zero.  Angles are counted counter-clockwise and any value is accepted;
+negative angles and angles above 360 are wrapped.
+
+The rotation is measured on the **screen**, so an object keeps its shape
+and its size whatever the proportions of the plot area: a rectangle stays a
+rectangle with square corners, a circle stays round, and a text stays
+readable.  Everything else keeps working on a turned object:
+
+* the eight square control points turn with it, and dragging one of them
+  keeps the opposite corner exactly where it is,
+* the pointer finds the object where it is really drawn, so a turned
+  rectangle is not clicked by the empty corner beside it,
+* moving with the pointer or with the arrow keys, copying, pasting and
+  deleting leave the angle alone - a copy is turned like its original,
+* the angle is stored in `.aplt` files (older files simply open upright).
 
 ### Arrows
 
@@ -4665,6 +5043,11 @@ worked on from the keyboard:
 The same commands are in the `Plot` menu as `Copy object`, `Paste object`
 and `Delete object`.
 
+The keys always belong to the window that was clicked last, so after a
+property window has been used, **one click anywhere in the diagram** brings
+them back - the click also keeps or changes the selection, so nothing is
+lost.  The property window stays open while this happens.
+
 Copying, pasting and deleting work on **text boxes, drawings and arrows**.
 The title, the axis labels and the legend boxes belong to the diagram and
 are not copied or deleted - but they are selected and moved with the arrow
@@ -4705,6 +5088,8 @@ A text box behaves like a legend box:
   frame around it (its colour, or no frame) and the background (a colour,
   or fully transparent),
 * `Delete` in that dialog - or an empty text - removes the box,
+* **turn** it with the round handle above it or with `Angle [deg]` in its
+  dialog; it turns around its own anchor point, so it stays in place,
 * the position is kept in the coordinates of the plot area, so the box
   follows the diagram when the window is resized,
 * any number of text boxes can be added, and they are all stored in
@@ -4920,8 +5305,8 @@ for each open diagram:
 * the frame: style, thickness, colour, major and minor tick length, the
   background of the plot area and of the window, and the size and origin of
   the axes inside the window,
-* every text box with its text, position, font, frame and background,
-* every drawn object with its shape, position, size, line and fill,
+* every text box with its text, position, angle, font, frame and background,
+* every drawn object with its shape, position, size, angle, line and fill,
 * every arrow with its head type and size, tip, tail, line and colour,
 * the figure size, resolution and the window geometry.
 
@@ -5013,6 +5398,10 @@ diagrams that are already open keep their settings.
   the curve.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
+* The keyboard follows the click: the diagram takes it on every click in
+  the plot area (this is done by Tk itself, not through matplotlib's event
+  loop, so it is not lost when a property window has been used), and a
+  property window gives it back to the diagram when it is closed.
 * A curve whose properties are needed is clicked once; everything else
   needs two clicks, because the first one selects it.  This is what makes
   moving, copying and the arrow keys possible on all of those objects.
