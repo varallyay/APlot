@@ -31,9 +31,11 @@ separate curve.
 | Plot | Opens a NEW diagram from the current data, with the default style. |
 | Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
 | Add row | Appends an empty row and starts editing it. |
-| Delete row | Deletes the selected row. |
+| Delete row | Deletes every row the highlighted block touches. |
 | Add column | Asks for a name and appends an empty column. |
 | Delete column | Deletes the column you last clicked in (after a confirmation). |
+| Clear cells | Empties the highlighted cells; the curves break at the empty cells. |
+| Copy / Paste | The highlighted block to and from the clipboard, tab separated. |
 | Random data | Fills the table with random numbers, keeping its present size. |
 | Settings... | Opens the settings editor (see section 4). |
 
@@ -51,14 +53,78 @@ separate curve.
 * `Ctrl`, `Cmd` or `Alt` together with any arrow key always jumps to the
   neighbouring cell, whatever the text cursor is doing.
 * `Esc` cancels the edit and keeps the previous value.
-* Text can be selected with the mouse, with `Shift+Left/Right` and with
-  `Shift+Up/Down` (to the beginning / end of the cell).  `Ctrl+A` (`Cmd+A`
-  on macOS) selects everything, `Ctrl+C` (`Cmd+C`) copies it.
-* Pressing `Ctrl+C` / `Cmd+C` while a row is selected copies the whole row
-  as tab separated text, ready to be pasted into another program.
+* Text can be selected **with the pointer**: press in the cell and drag
+  across the characters - the editor opens with the press, so the drag
+  highlights exactly the part you sweep over (leaving the cell during the
+  drag selects a block of cells instead).  A plain click selects the whole
+  text, a double click a word.
+* While a block is dragged out, holding the pointer at the bottom (or the
+  top, or a side) of the table keeps scrolling it row by row, and the block
+  follows - the selection is not limited to what is on the screen.
+* `Shift+Left/Right` extend the selection inside the cell, `Ctrl+A`
+  (`Cmd+A` on macOS) selects the whole text of the cell and `Ctrl+C`
+  (`Cmd+C`) copies it.
+* `Esc` closes the editor and leaves the keyboard on the table itself,
+  where the arrow keys walk from cell to cell.
 
 Values that look like numbers are stored as numbers; everything else is
 kept as text and is ignored when plotting.
+
+### Selecting several rows and columns
+
+The table always has a **highlighted block** of cells, marked by a blue
+rectangle around it.  It can be one cell or a whole rectangle of rows and
+columns.  Rows are **tinted** light blue only when the block covers every
+column of them - that is, when whole rows were selected on purpose (with
+`Shift+Space`, `Ctrl/Cmd+A`, or by taking the selection across all the
+columns).  Clicking or editing a single cell marks that cell alone and
+leaves its row quiet.
+
+| Action | What happens |
+| --- | --- |
+| Click a cell | That cell alone is the block, and it is opened for editing. |
+| Drag with the pointer | Inside the pressed cell it highlights its text; leaving that cell it selects the block between the pressed and the released cell.  Dragging to the edge of the table **scrolls it on** as long as the pointer stays there, so rows and columns below or beside the window can be selected as well. |
+| `Shift`+click a cell | Stretches the block from where it started to that cell. |
+| `Shift`+click a heading | Selects that whole column. |
+| `Shift`+arrow keys | One row or column more (or less) in the block - this also works while a cell is being edited, where `Shift+Up/Down` leaves the editor at once and `Shift+Left/Right` first select the text of the cell. |
+| Arrow keys (no Shift) | Walk from cell to cell; the block collapses to that one cell. |
+| `Shift+Space` | The whole rows the block touches (they become tinted). |
+| `Ctrl/Cmd+Space` | The whole columns the block touches. |
+| `Ctrl/Cmd+A` | The whole table. |
+| `Enter` or `F2` | Opens the cell under the cursor for editing. |
+
+The block is what the data operations work on:
+
+| Keys | What happens |
+| --- | --- |
+| `Ctrl/Cmd+C` | Copies the block as tab separated text - several rows and columns at once, ready for a spreadsheet program. |
+| `Ctrl/Cmd+V` | Writes tab separated text (from this program or another one) into the table, starting at the **top left cell of the block**; the shape of the text decides the shape of what is written, so a block of two columns fills two columns even when only one cell is selected.  The table grows if the text has more rows.  This also works while a cell is being edited - only a single value (no tabs, no line breaks) is pasted into the text of that cell. |
+| `Ctrl/Cmd+X` | Copies the block and empties it (inside a cell editor it cuts the selected text instead). |
+| `Delete` or `Backspace` | Empties the cells of the block. |
+| `Delete row` button | Removes every row of the block. |
+
+### Leaving a gap in a curve
+
+An **empty cell is a gap, not a zero**: the curve is cut there instead of
+being drawn straight across the missing point.  So a range of data can be
+plotted in pieces:
+
+1. select the cells that should not be plotted - a block, a whole row, or
+   parts of a few columns,
+2. press `Delete` (or `Clear cells` in the toolbar),
+3. press `Update plot`.
+
+Every curve whose cells were emptied is now drawn in two (or more) separate
+pieces, with the markers of the remaining points where they belong.  Filling
+the cells again joins the curve back together.
+
+Nothing is thrown away and nothing is bridged: an empty cell in the Y
+column, an empty cell in the X column and a **completely empty row** all
+break the curve at that place.  So simply leaving a row empty in the middle
+of the data is enough to cut the curve in two.
+
+The only case with no curve at all is a column that is empty from top to
+bottom.
 
 ### Column names
 
@@ -574,7 +640,9 @@ diagrams that are already open keep their settings.
    and copy it (`Ctrl/Cmd+C`, `Ctrl/Cmd+V`) instead of building the next
    one from the beginning.
 5. Correct or extend the data in the table and press `Update plot`; the
-   diagram keeps its appearance and only the values change.
+   diagram keeps its appearance and only the values change.  Emptying a
+   block of cells (select it, `Delete`) breaks the curves there, so a
+   measurement can be shown in separate pieces.
 6. `Save graph (.aplt)` to be able to continue later, or the save button of
    the Matplotlib toolbar to export a PNG/PDF image.
 
@@ -585,8 +653,9 @@ diagrams that are already open keep their settings.
   renames it to "APlot" through the Cocoa bundle information, which needs
   pyobjc: `pip install pyobjc-framework-Cocoa`.  Without it the menu keeps
   the name of the Python interpreter; everything else works the same way.
-* Empty cells and cells that do not contain a number are simply left out of
-  the curve.
+* Every empty cell (or a cell that is not a number) breaks the curve at
+  that point - an empty Y cell, an empty X cell and an empty row alike.
+  The points on the two sides of the gap are never connected.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
 * The keyboard follows the click: the diagram takes it on every click in

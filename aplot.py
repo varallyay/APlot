@@ -9,7 +9,13 @@ Matplotlib.
 Spreadsheet window
 ------------------
 * toolbar: Plot / Update plot / Add row / Delete row / Add column /
-  Delete column / Random data / Settings
+  Delete column / Clear cells / Copy / Paste / Random data / Settings
+* a highlighted block of cells: click and drag, Shift+click, Shift+arrows,
+  Shift+Space (rows), Ctrl/Cmd+Space (columns), Ctrl/Cmd+A (everything)
+* the block is copied (Ctrl/Cmd+C), pasted (Ctrl/Cmd+V), cut (Ctrl/Cmd+X),
+  emptied (Delete) and its rows deleted with one button
+* empty cells break the curves instead of connecting over them, so a range
+  of data can be plotted in separate pieces
 * "Plot" opens a new diagram, "Update plot" sends the edited values to the
   diagrams that are already open without changing any of their styling
 * "Random data" fills the table in its present shape, extra columns included
@@ -192,6 +198,10 @@ NUDGE_STEP = 1.0            # pixels: one press of an arrow key
 NUDGE_BIG_STEP = 10.0       # pixels: with Shift
 SNAP_ANGLE = np.pi / 4      # arrows snap to 45 degrees while Shift is held
 SELECT_COLOR = "#1a5fb4"    # the blue of the selection
+BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
+BLOCK_LINE = 2              # thickness of the outline around the block
+AUTO_SCROLL_EDGE = 14       # pixels: how close to the border scrolling starts
+AUTO_SCROLL_MS = 55         # how often the table scrolls on during a drag
 SELECT_FACE = to_rgba(SELECT_COLOR, 0.18)     # veil over a selected text
 SELECT_EDGE = to_rgba(SELECT_COLOR, 0.90)
 SELECT_BOX = {"boxstyle": "round,pad=0.28", "facecolor": SELECT_FACE,
@@ -474,11 +484,11 @@ DEFAULTS = {
         "y_label": "Y values",
         "line_style": "Dashed", "line_width": 1.5,
         "marker": "Circle", "marker_size": 8.0,
-        "marker_edge_width": 1.5, "hollow_markers": False,
+        "marker_edge_width": 1.0, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
         "legend_frame": False, "legend_edge_color": "#000000",
         "legend_background": "#ffffff", "legend_transparent": True,
-        "fill_under": False, "fill_color": "#1f77b4", "fill_alpha": 0.36,
+        "fill_under": False, "fill_color": "#1f77b4", "fill_alpha": 0.35,
         "fill_pattern": "None (plain colour)", "fill_base": "Zero line",
         "fill_follows_line": True,
     },
@@ -486,7 +496,7 @@ DEFAULTS = {
         "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
-        "title_pad": 8.0, "axis_label_pad": 7, "tick_label_pad": 10.0,
+        "title_pad": 8.0, "axis_label_pad": 5.5, "tick_label_pad": 5.0,
     },
     "grid": {
         "major": False, "minor": False, "color": "#b0b0b0",
@@ -1981,13 +1991,26 @@ class DataTable(ttk.Frame):
         self.current_column = None      # column of the last clicked cell/heading
         self._editor = None
         self._heading_editor = None
+        # the highlighted block of cells: (row0, col0, row1, col1)
+        self.block = None
+        self.anchor = (0, 0)            # where Shift+arrows measure from
+        self.cursor = (0, 0)            # the cell the keyboard works on
+        self._outline = []              # the four frames around the block
+        self._selecting = False         # a block is being dragged out
+        self._press = None              # (x, cell) of the press that started it
+        self._text_dragging = False     # the pointer is selecting cell text
+        self._drag_point = None         # last pointer position of the drag
+        self._auto_scroll = None        # the running auto-scroll timer
 
         self.style = ttk.Style(self)
-        self.tree = ttk.Treeview(self, show="headings", selectmode="browse",
-                                 style="APlot.Treeview")
-        v_scroll = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
-        h_scroll = ttk.Scrollbar(self, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+        self.tree = ttk.Treeview(self, show="headings", selectmode="none",
+                                 style="APlot.Treeview", takefocus=True)
+        self.tree.tag_configure("block", background=BLOCK_TINT)
+        v_scroll = ttk.Scrollbar(self, orient="vertical", command=self._yview)
+        h_scroll = ttk.Scrollbar(self, orient="horizontal", command=self._xview)
+        self.tree.configure(yscrollcommand=self._y_scrolled,
+                            xscrollcommand=self._x_scrolled)
+        self._v_scroll, self._h_scroll = v_scroll, h_scroll
 
         self.tree.grid(row=0, column=0, sticky="nsew")
         v_scroll.grid(row=0, column=1, sticky="ns")
@@ -1996,9 +2019,265 @@ class DataTable(ttk.Frame):
         self.columnconfigure(0, weight=1)
 
         self.tree.bind("<Button-1>", self._on_click)
-        for sequence in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>"):
-            self.tree.bind(sequence, self._copy_rows)
+        self.tree.bind("<Shift-Button-1>", self._on_shift_click)
+        self.tree.bind("<B1-Motion>", self._on_drag)
+        self.tree.bind("<ButtonRelease-1>", self._on_drag_end)
+        self.tree.bind("<Configure>", lambda _e: self._refresh_outline())
+        self.tree.bind("<MouseWheel>", lambda _e: self.after(1, self._refresh_outline),
+                       add="+")
+        self._bind_grid_keys()
         self.apply_config()
+
+    # -- the highlighted block of cells ------------------------------------
+    def _bind_grid_keys(self):
+        """Keys of the table itself, when no cell editor is open."""
+        tree = self.tree
+
+        def wrap(function, *args):
+            def handler(_event=None):
+                function(*args)
+                return "break"
+            return handler
+
+        steps = {"Left": (0, -1), "Right": (0, 1), "Up": (-1, 0), "Down": (1, 0)}
+        for name, (d_row, d_col) in steps.items():
+            tree.bind(f"<{name}>", wrap(self.move_cursor, d_row, d_col))
+            tree.bind(f"<Shift-{name}>", wrap(self.extend_block, d_row, d_col))
+        tree.bind("<Return>", wrap(self.edit_cursor))
+        tree.bind("<KP_Enter>", wrap(self.edit_cursor))
+        tree.bind("<F2>", wrap(self.edit_cursor))
+        for modifier in ("Control", "Command"):
+            tree.bind(f"<{modifier}-a>", wrap(self.select_all_cells))
+            tree.bind(f"<{modifier}-A>", wrap(self.select_all_cells))
+            tree.bind(f"<{modifier}-c>", wrap(self.copy_block))
+            tree.bind(f"<{modifier}-C>", wrap(self.copy_block))
+            tree.bind(f"<{modifier}-v>", wrap(self.paste_block))
+            tree.bind(f"<{modifier}-V>", wrap(self.paste_block))
+            tree.bind(f"<{modifier}-x>", wrap(self.cut_block))
+            tree.bind(f"<{modifier}-X>", wrap(self.cut_block))
+            tree.bind(f"<{modifier}-space>", wrap(self.select_columns_of_block))
+        tree.bind("<Shift-space>", wrap(self.select_rows_of_block))
+        for sequence in ("<Delete>", "<BackSpace>"):
+            tree.bind(sequence, wrap(self.clear_block))
+
+    def _shape(self):
+        return len(self.df), len(self.df.columns)
+
+    def block_bounds(self):
+        """The block as (row0, col0, row1, col1), clamped to the table."""
+        rows, columns = self._shape()
+        if not rows or not columns:
+            return None
+        if self.block is None:
+            row, col = self.cursor
+            self.block = (row, col, row, col)
+        r0, c0, r1, c1 = self.block
+        r0, r1 = sorted((max(0, min(rows - 1, r0)), max(0, min(rows - 1, r1))))
+        c0, c1 = sorted((max(0, min(columns - 1, c0)),
+                         max(0, min(columns - 1, c1))))
+        self.block = (r0, c0, r1, c1)
+        return self.block
+
+    def block_cells(self):
+        """Number of cells, rows and columns in the block."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return (0, 0, 0)
+        r0, c0, r1, c1 = bounds
+        return ((r1 - r0 + 1) * (c1 - c0 + 1), r1 - r0 + 1, c1 - c0 + 1)
+
+    def select_block(self, r0, c0, r1, c1, anchor=None, cursor=None):
+        """Highlight a rectangular block of cells."""
+        rows, columns = self._shape()
+        if not rows or not columns:
+            return None
+        self.block = (r0, c0, r1, c1)
+        bounds = self.block_bounds()
+        self.anchor = anchor if anchor is not None else (bounds[0], bounds[1])
+        self.cursor = cursor if cursor is not None else (bounds[2], bounds[3])
+        self._refresh_block()
+        return bounds
+
+    def select_cell(self, row, col):
+        """One cell: it becomes the block, the anchor and the cursor."""
+        return self.select_block(row, col, row, col,
+                                 anchor=(row, col), cursor=(row, col))
+
+    def extend_block_to(self, row, col):
+        """Stretch the block from the anchor to this cell."""
+        rows, columns = self._shape()
+        row = max(0, min(rows - 1, int(row)))
+        col = max(0, min(columns - 1, int(col)))
+        a_row, a_col = self.anchor
+        return self.select_block(a_row, a_col, row, col,
+                                 anchor=self.anchor, cursor=(row, col))
+
+    def extend_block(self, d_row, d_col):
+        """Shift+arrow: one row or column more (or less) in the block."""
+        rows, columns = self._shape()
+        if not rows or not columns:
+            return False
+        self.block_bounds()
+        row, col = self.cursor
+        row = max(0, min(rows - 1, row + d_row))
+        col = max(0, min(columns - 1, col + d_col))
+        self.extend_block_to(row, col)
+        self.tree.see(str(row))
+        self._refresh_outline()
+        return True
+
+    def move_cursor(self, d_row, d_col):
+        """An arrow key without Shift: one cell, and the block collapses."""
+        rows, columns = self._shape()
+        if not rows or not columns:
+            return False
+        row, col = self.cursor
+        row = max(0, min(rows - 1, row + d_row))
+        col = max(0, min(columns - 1, col + d_col))
+        self.select_cell(row, col)
+        self.tree.see(str(row))
+        return True
+
+    def select_all_cells(self):
+        rows, columns = self._shape()
+        if not rows or not columns:
+            return False
+        self.select_block(0, 0, rows - 1, columns - 1,
+                          anchor=(0, 0), cursor=(rows - 1, columns - 1))
+        return True
+
+    def select_rows_of_block(self):
+        """Shift+Space: the whole rows the block touches."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return False
+        r0, _c0, r1, _c1 = bounds
+        self.select_block(r0, 0, r1, len(self.df.columns) - 1,
+                          anchor=(r0, 0), cursor=self.cursor)
+        return True
+
+    def select_columns_of_block(self):
+        """Ctrl/Cmd+Space: the whole columns the block touches."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return False
+        _r0, c0, _r1, c1 = bounds
+        self.select_block(0, c0, len(self.df) - 1, c1,
+                          anchor=(0, c0), cursor=self.cursor)
+        return True
+
+    def selected_rows(self):
+        """Row indices of the block."""
+        bounds = self.block_bounds()
+        return [] if bounds is None else list(range(bounds[0], bounds[2] + 1))
+
+    def selected_columns(self):
+        """Column names of the block."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return []
+        return [str(name) for name in self.df.columns[bounds[1]:bounds[3] + 1]]
+
+    def edit_cursor(self):
+        row, col = self.cursor
+        self._begin_edit(str(row), col)
+        return True
+
+    # -- how the block is shown -------------------------------------------
+    def covers_whole_rows(self):
+        """True when the block reaches from the first to the last column."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return False
+        return bounds[1] == 0 and bounds[3] == len(self.df.columns) - 1
+
+    def _refresh_block(self):
+        """Show the block: whole rows are tinted, a part of a row outlined.
+
+        A row can only be coloured as a whole, so the tint is used only when
+        the block really covers every column of those rows (Shift+Space, a
+        drag across all the columns, Ctrl/Cmd+A).  A single cell or a few
+        columns of it are marked by the blue rectangle alone, which keeps
+        editing one cell quiet.
+        """
+        bounds = self.block_bounds()
+        rows = set()
+        if bounds is not None and self.covers_whole_rows():
+            rows = set(range(bounds[0], bounds[2] + 1))
+        for item in self.tree.get_children():
+            wanted = ("block",) if int(item) in rows else ()
+            if tuple(self.tree.item(item, "tags")) != wanted:
+                self.tree.item(item, tags=wanted)
+        self._refresh_outline()
+
+    def _outline_frames(self):
+        if not self._outline:
+            self._outline = [tk.Frame(self.tree, background=SELECT_COLOR)
+                             for _ in range(4)]
+        return self._outline
+
+    def _hide_outline(self):
+        for frame in self._outline:
+            frame.place_forget()
+
+    def _refresh_outline(self):
+        """Draw the blue rectangle around the visible part of the block."""
+        bounds = self.block_bounds()
+        if bounds is None or not self.tree.get_children():
+            self._hide_outline()
+            return
+        r0, c0, r1, c1 = bounds
+        try:
+            self.tree.update_idletasks()
+        except tk.TclError:
+            return
+        first = self._visible_cell(r0, r1, c0)
+        last = self._visible_cell(r1, r0, c1, from_bottom=True)
+        if first is None or last is None:
+            self._hide_outline()
+            return
+        x0, y0 = first[0], first[1]
+        x1 = last[0] + last[2]
+        y1 = last[1] + last[3]
+        if x1 <= x0 or y1 <= y0:
+            self._hide_outline()
+            return
+        top, bottom, left, right = self._outline_frames()
+        width, height = x1 - x0, y1 - y0
+        top.place(x=x0, y=y0, width=width, height=BLOCK_LINE)
+        bottom.place(x=x0, y=y1 - BLOCK_LINE, width=width, height=BLOCK_LINE)
+        left.place(x=x0, y=y0, width=BLOCK_LINE, height=height)
+        right.place(x=x1 - BLOCK_LINE, y=y0, width=BLOCK_LINE, height=height)
+
+    def _visible_cell(self, row, other, col, from_bottom=False):
+        """bbox of a cell, walking towards `other` until one is on screen."""
+        step = -1 if row > other else 1
+        current = row
+        while True:
+            if self.tree.exists(str(current)):
+                bbox = self.tree.bbox(str(current), f"#{col + 1}")
+                if bbox:
+                    return bbox
+            if current == other:
+                return None
+            current += step
+
+    # -- scrolling keeps the outline in place ------------------------------
+    def _yview(self, *args):
+        self.tree.yview(*args)
+        self.after(1, self._refresh_outline)
+
+    def _xview(self, *args):
+        self.tree.xview(*args)
+        self.after(1, self._refresh_outline)
+
+    def _y_scrolled(self, first, last):
+        self._v_scroll.set(first, last)
+        self.after(1, self._refresh_outline)
+
+    def _x_scrolled(self, first, last):
+        self._h_scroll.set(first, last)
+        self.after(1, self._refresh_outline)
 
     # -- appearance --------------------------------------------------------
     def apply_config(self):
@@ -2043,6 +2322,7 @@ class DataTable(ttk.Frame):
         for index, row in enumerate(self.df.itertuples(index=False, name=None)):
             self.tree.insert("", "end", iid=str(index),
                              values=["" if pd.isna(v) else str(v) for v in row])
+        self._refresh_block()
         self._changed()
 
     def _changed(self):
@@ -2050,8 +2330,9 @@ class DataTable(ttk.Frame):
             self.on_change()
 
     def selected_row(self):
-        selection = self.tree.selection()
-        return int(selection[0]) if selection else None
+        """The first row of the highlighted block."""
+        rows = self.selected_rows()
+        return rows[0] if rows else None
 
     def add_row(self, focus=False):
         """Append one empty row (cheap: no full rebuild) and return its index."""
@@ -2068,9 +2349,10 @@ class DataTable(ttk.Frame):
         return index
 
     def delete_row(self, index=None):
-        index = self.selected_row() if index is None else index
+        """Delete one row, or every row of the block when none is given."""
         if index is None:
-            return False
+            return self.delete_selected_rows()
+        self.block = None
         self.set_dataframe(self.df.drop(index=index))
         return True
 
@@ -2097,7 +2379,19 @@ class DataTable(ttk.Frame):
         return True
 
     # -- editing -----------------------------------------------------------
+    def _cell_at(self, x, y):
+        """(row, column) of the cell under the pointer, or None."""
+        row_id = self.tree.identify_row(y)
+        column_id = self.tree.identify_column(x)
+        if not row_id or not column_id or not self.tree.exists(row_id):
+            return None
+        col = int(column_id[1:]) - 1
+        if not (0 <= col < len(self.df.columns)):
+            return None
+        return (int(row_id), col)
+
     def _on_click(self, event):
+        self.tree.focus_set()
         region = self.tree.identify_region(event.x, event.y)
         column_id = self.tree.identify_column(event.x)
         if region == "heading" and column_id:
@@ -2105,11 +2399,170 @@ class DataTable(ttk.Frame):
             return
         if region != "cell":
             return
-        row_id = self.tree.identify_row(event.y)
-        if not row_id or not column_id:
+        cell = self._cell_at(event.x, event.y)
+        if cell is None:
             return
-        col_index = int(column_id[1:]) - 1
-        self.after(1, lambda: self._begin_edit(row_id, col_index))
+        row, col = cell
+        self.select_cell(row, col)
+        self._selecting = True          # a drag from here selects
+        self._press = (event.x, cell)
+        self._text_dragging = False
+        # the editor is opened at once, so that dragging inside the cell can
+        # select its text right away
+        self._begin_edit(str(row), col)
+
+    def _on_shift_click(self, event):
+        """Shift+click: stretch the block from the anchor to this cell."""
+        self.tree.focus_set()
+        region = self.tree.identify_region(event.x, event.y)
+        column_id = self.tree.identify_column(event.x)
+        if region == "heading" and column_id:      # a whole column
+            col = int(column_id[1:]) - 1
+            if 0 <= col < len(self.df.columns) and len(self.df):
+                self._commit_edit()
+                self.select_block(0, col, len(self.df) - 1, col,
+                                  anchor=(0, col), cursor=(len(self.df) - 1, col))
+            return "break"
+        cell = self._cell_at(event.x, event.y)
+        if cell is None:
+            return "break"
+        self._commit_edit()
+        self.extend_block_to(*cell)
+        self._selecting = True
+        return "break"
+
+    def _header_height(self):
+        """Where the rows start: the heading is above that."""
+        children = self.tree.get_children()
+        if children:
+            bbox = self.tree.bbox(children[0], "#1")
+            if bbox:
+                return int(bbox[1])
+        return 20
+
+    def _pointer_inside(self, x, y):
+        return (0 <= x <= self.tree.winfo_width()
+                and self._header_height() <= y <= self.tree.winfo_height())
+
+    def _on_drag(self, event):
+        """Dragging selects the text of the cell, or a block of cells.
+
+        Tk keeps sending the motion events to the table (that is where the
+        button went down), so both the text selection of the cell editor and
+        the automatic scrolling have to be driven from here.
+        """
+        if not self._selecting:
+            return None
+        self._drag_point = (event.x, event.y)
+        inside = self._pointer_inside(event.x, event.y)
+        cell = self._cell_at(event.x, event.y)
+        editor = self._editor
+        press_cell = self._press[1] if self._press else None
+        text_drag = (editor is not None and press_cell is not None
+                     and (int(editor[2]), editor[3]) == press_cell
+                     and (cell == press_cell
+                          or (cell is None and inside and self._text_dragging)))
+        if text_drag:
+            self._drag_text(editor[0], event.x)
+            return "break"
+        if not inside:                  # past the edge: scroll and follow
+            self._start_auto_scroll()
+            return "break"
+        self._stop_auto_scroll()
+        if cell is None:
+            return None
+        if cell != self.cursor or self._editor is not None:
+            self._commit_edit()         # leaving the cell: select a block
+            self.extend_block_to(*cell)
+            self.tree.focus_set()
+        if self._near_edge(event.x, event.y):
+            self._start_auto_scroll()
+        return "break"
+
+    # -- scrolling on while the pointer is dragged past the edge ------------
+    def _near_edge(self, x, y):
+        """(dx, dy) of the scrolling the pointer asks for, or None."""
+        height, width = self.tree.winfo_height(), self.tree.winfo_width()
+        header = self._header_height()
+        step_y = 0
+        if y > height - AUTO_SCROLL_EDGE:
+            step_y = 1
+        elif y < header + AUTO_SCROLL_EDGE:
+            step_y = -1
+        step_x = 0
+        if x > width - AUTO_SCROLL_EDGE:
+            step_x = 1
+        elif x < AUTO_SCROLL_EDGE:
+            step_x = -1
+        return (step_x, step_y) if (step_x or step_y) else None
+
+    def _start_auto_scroll(self):
+        if self._auto_scroll is None:
+            self._auto_scroll = self.after(1, self._auto_scroll_step)
+
+    def _stop_auto_scroll(self):
+        if self._auto_scroll is not None:
+            try:
+                self.after_cancel(self._auto_scroll)
+            except (tk.TclError, ValueError):
+                pass
+            self._auto_scroll = None
+
+    def _auto_scroll_step(self):
+        """Scroll one row (or column) and take the block with it."""
+        self._auto_scroll = None
+        if not self._selecting or self._drag_point is None:
+            return
+        x, y = self._drag_point
+        step = self._near_edge(x, y)
+        if step is None:
+            return
+        step_x, step_y = step
+        first, last = self.tree.yview()
+        if step_y > 0 and last < 1.0:
+            self.tree.yview_scroll(1, "units")
+        elif step_y < 0 and first > 0.0:
+            self.tree.yview_scroll(-1, "units")
+        if step_x:
+            self.tree.xview_scroll(step_x, "units")
+        self.tree.update_idletasks()
+        # the cell now under the pointer, pulled back into the visible area
+        header = self._header_height()
+        inside_y = min(max(y, header + 2), max(header + 2,
+                                               self.tree.winfo_height() - 2))
+        inside_x = min(max(x, 2), max(2, self.tree.winfo_width() - 2))
+        cell = self._cell_at(inside_x, inside_y)
+        if cell is not None:
+            self._commit_edit()
+            self.extend_block_to(*cell)
+            self.tree.focus_set()
+        self._refresh_outline()
+        self._auto_scroll = self.after(AUTO_SCROLL_MS, self._auto_scroll_step)
+
+    def _drag_text(self, entry, x):
+        """Highlight the text of the edited cell with the pointer."""
+        try:
+            inside = x - entry.winfo_x()
+            index = entry.index(f"@{max(0, int(inside))}")
+            if not self._text_dragging:
+                start = entry.index(f"@{max(0, int(self._press[0] - entry.winfo_x()))}")
+                entry.selection_clear()
+                entry.selection_from(start)
+                entry.icursor(start)
+                self._text_dragging = True
+            entry.selection_to(index)
+            entry.icursor(index)
+            entry.focus_set()
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _on_drag_end(self, _event=None):
+        self._stop_auto_scroll()
+        self._selecting = False
+        self._press = None
+        self._text_dragging = False
+        self._drag_point = None
+        return None
 
     # -- column names ------------------------------------------------------
     def _heading_geometry(self, column_id):
@@ -2176,15 +2629,23 @@ class DataTable(ttk.Frame):
         return "break"
 
     # -- selection / clipboard --------------------------------------------
-    def _bind_text_editing(self, entry):
+    def _bind_text_editing(self, entry, cell=False):
         """Selection and copy bindings shared by the cell and heading editors."""
         for sequence in ("<Control-a>", "<Control-A>", "<Command-a>", "<Command-A>"):
             entry.bind(sequence, self._select_all)
         for sequence in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>"):
             entry.bind(sequence, self._copy_text)
-        # Shift+Up / Shift+Down extend the selection to the start / end
-        entry.bind("<Shift-Up>", lambda e: self._extend_selection(e, "start"))
-        entry.bind("<Shift-Down>", lambda e: self._extend_selection(e, "end"))
+        if not cell:                     # the heading editor holds text only
+            entry.bind("<Shift-Up>", lambda e: self._extend_selection(e, "start"))
+            entry.bind("<Shift-Down>", lambda e: self._extend_selection(e, "end"))
+            return
+        # in a cell, Shift+Up / Shift+Down grow the highlighted block
+        entry.bind("<Shift-Up>", lambda _e: self._block_from_editor(-1, 0))
+        entry.bind("<Shift-Down>", lambda _e: self._block_from_editor(1, 0))
+        # Shift+Left / Shift+Right select the text of the cell, and grow the
+        # block once the cursor has reached the end of it
+        entry.bind("<Shift-Left>", lambda e: self._shift_arrow(e, -1))
+        entry.bind("<Shift-Right>", lambda e: self._shift_arrow(e, 1))
 
     @staticmethod
     def _select_all(event):
@@ -2203,9 +2664,36 @@ class DataTable(ttk.Frame):
         widget.clipboard_append(text)
         return "break"
 
+    def _block_from_editor(self, d_row, d_col):
+        """Leave the cell editor and grow the block of cells instead."""
+        editor = self._editor
+        if editor is not None:
+            row_id, col_index = editor[2], editor[3]
+            self._commit_edit()
+            self.cursor = (int(row_id), col_index)
+            if self.block is None:
+                self.select_cell(int(row_id), col_index)
+        self.tree.focus_set()
+        self.extend_block(d_row, d_col)
+        return "break"
+
+    def _shift_arrow(self, event, d_col):
+        """Shift+Left/Right: select text, then grow the block sideways."""
+        widget = event.widget
+        cursor = widget.index("insert")
+        at_edge = (cursor == 0) if d_col < 0 else (cursor == len(widget.get()))
+        if not at_edge:
+            target = max(0, min(len(widget.get()), cursor + d_col))
+            if not widget.selection_present():
+                widget.selection_from(cursor)
+            widget.selection_to(target)
+            widget.icursor(target)
+            return "break"
+        return self._block_from_editor(0, d_col)
+
     @staticmethod
     def _extend_selection(event, where):
-        """Shift+Up / Shift+Down: extend the selection from the anchor."""
+        """Shift+Up / Shift+Down inside a heading editor: whole text."""
         widget = event.widget
         target = 0 if where == "start" else len(widget.get())
         if not widget.selection_present():
@@ -2214,22 +2702,128 @@ class DataTable(ttk.Frame):
         widget.icursor(target)
         return "break"
 
-    def _copy_rows(self, _event=None):
-        """Ctrl/Cmd+C on the table copies the selected row (tab separated)."""
-        rows = self.tree.selection()
-        if not rows:
-            return "break"
-        lines = ["\t".join(str(value) for value in self.tree.item(row, "values"))
-                 for row in rows]
+    def block_text(self):
+        """The block as tab separated text, one line per row."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return ""
+        r0, c0, r1, c1 = bounds
+        lines = []
+        for row in range(r0, r1 + 1):
+            values = []
+            for col in range(c0, c1 + 1):
+                value = self.df.iat[row, col]
+                values.append("" if pd.isna(value) else str(value))
+            lines.append("\t".join(values))
+        return "\n".join(lines)
+
+    def copy_block(self, _event=None):
+        """Ctrl/Cmd+C: the whole highlighted block, rows and columns."""
+        text = self.block_text()
+        if not text:
+            return False
         self.clipboard_clear()
-        self.clipboard_append("\n".join(lines))
-        return "break"
+        self.clipboard_append(text)
+        return True
+
+    def clear_block(self, _event=None):
+        """Delete: empty every cell of the block.
+
+        The curves break at the emptied cells instead of jumping over them.
+        """
+        bounds = self.block_bounds()
+        if bounds is None:
+            return False
+        r0, c0, r1, c1 = bounds
+        for col in range(c0, c1 + 1):
+            column = self.df.columns[col]
+            if self.df[column].dtype != object:
+                self.df[column] = self.df[column].astype(object)
+            for row in range(r0, r1 + 1):
+                self.df.iat[row, col] = ""
+                if self.tree.exists(str(row)):
+                    self.tree.set(str(row), column, "")
+        self._changed()
+        return True
+
+    def cut_block(self, _event=None):
+        """Ctrl/Cmd+X: copy the block and empty it."""
+        if not self.copy_block():
+            return False
+        return self.clear_block()
+
+    def paste_block(self, text=None, _event=None):
+        """Ctrl/Cmd+V: write tab separated text starting at the block.
+
+        The shape of the text decides the shape of what is written: two
+        columns of numbers fill two columns of cells, starting at the top
+        left cell of the highlighted block.
+        """
+        if text is None:
+            text = self._clipboard_text()
+            if not text:
+                return False
+        rows = [line.split("\t")
+                for line in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+        while rows and not any(cell.strip() for cell in rows[-1]):
+            rows.pop()
+        bounds = self.block_bounds()
+        if bounds is None or not rows:
+            return False
+        r0, c0 = bounds[0], bounds[1]
+        needed = r0 + len(rows)
+        if needed > len(self.df):
+            if self.config_obj.get("table", "auto_extend"):
+                while len(self.df) < needed:
+                    self.add_row()
+            else:
+                rows = rows[:len(self.df) - r0]
+        columns = len(self.df.columns)
+        for offset, line in enumerate(rows):
+            row = r0 + offset
+            if row >= len(self.df):
+                break
+            for shift, cell in enumerate(line):
+                col = c0 + shift
+                if col >= columns:
+                    break
+                column = self.df.columns[col]
+                value = coerce(cell.strip())
+                try:
+                    self.df.iat[row, col] = value
+                except (ValueError, TypeError):
+                    self.df[column] = self.df[column].astype(object)
+                    self.df.iat[row, col] = value
+                if self.tree.exists(str(row)):
+                    self.tree.set(str(row), column,
+                                  "" if value == "" else str(value))
+        last_row = min(len(self.df) - 1, r0 + len(rows) - 1)
+        last_col = min(columns - 1, c0 + max(len(line) for line in rows) - 1)
+        self.select_block(r0, c0, last_row, last_col)
+        self._changed()
+        return True
+
+    def delete_selected_rows(self):
+        """Remove every row the block touches."""
+        rows = self.selected_rows()
+        if not rows:
+            return False
+        keep = [index for index in range(len(self.df)) if index not in set(rows)]
+        self.block = None
+        self.set_dataframe(self.df.iloc[keep])
+        first = min(rows)
+        if len(self.df):
+            self.select_cell(min(first, len(self.df) - 1), 0)
+        return True
 
     def _begin_edit(self, row_id, col_index, retry=True):
         self._commit_edit()
         if not self.tree.exists(row_id) or not (0 <= col_index < len(self.df.columns)):
             return
-        self.tree.selection_set(row_id)
+        if self._selecting and self.block_cells()[0] > 1:
+            return          # the pointer is drawing a block, not editing
+        # opening a cell for editing makes that cell the whole selection
+        self.select_cell(int(row_id), col_index)
         self.tree.see(row_id)
         self.update_idletasks()
         bbox = self.tree.bbox(row_id, f"#{col_index + 1}")
@@ -2265,9 +2859,73 @@ class DataTable(ttk.Frame):
             for key, delta in (("Left", (0, -1)), ("Right", (0, 1)),
                                ("Up", (-1, 0)), ("Down", (1, 0))):
                 entry.bind(f"<{prefix}-{key}>", lambda _e, d=delta: self._move(*d))
-        entry.bind("<Escape>", lambda _e: self._cancel_edit())
+        entry.bind("<Escape>", lambda _e: self._leave_editor())
         entry.bind("<FocusOut>", lambda _e: self._commit_edit())
-        self._bind_text_editing(entry)
+        # a block on the clipboard must fill a block of cells, not one cell
+        for prefix in ("Control", "Command"):
+            for letter in ("v", "V"):
+                entry.bind(f"<{prefix}-{letter}>", self._paste_from_editor)
+            for letter in ("x", "X"):
+                entry.bind(f"<{prefix}-{letter}>", self._cut_from_editor)
+        self._bind_text_editing(entry, cell=True)
+
+    # -- the clipboard while a cell is being edited -------------------------
+    def _clipboard_text(self):
+        try:
+            return str(self.clipboard_get())
+        except tk.TclError:
+            return ""
+
+    @staticmethod
+    def is_block_text(text):
+        """True when the clipboard holds more than one cell."""
+        cleaned = str(text).replace("\r", "")
+        while cleaned.endswith("\n"):
+            cleaned = cleaned[:-1]
+        return "\t" in cleaned or "\n" in cleaned
+
+    def _paste_from_editor(self, _event=None):
+        """Ctrl/Cmd+V in a cell: a block of cells fills a block of cells.
+
+        A single value is left to the text editor, so it can be pasted into
+        the middle of a cell; anything with tabs or line breaks is written
+        into the table starting at the edited cell.
+        """
+        text = self._clipboard_text()
+        if not self.is_block_text(text):
+            return None                  # one value: the normal text paste
+        editor = self._editor
+        if editor is not None:
+            row_id, col_index = editor[2], editor[3]
+            self._commit_edit()
+            self.select_cell(int(row_id), col_index)
+        self.tree.focus_set()
+        self.paste_block(text)
+        return "break"
+
+    def _cut_from_editor(self, event=None):
+        """Ctrl/Cmd+X in a cell: the selected text, or the whole block."""
+        entry = getattr(event, "widget", None)
+        if entry is not None and entry.selection_present():
+            return None                  # cutting text inside the cell
+        editor = self._editor
+        if editor is not None:
+            row_id, col_index = editor[2], editor[3]
+            self._commit_edit()
+            self.select_cell(int(row_id), col_index)
+        self.tree.focus_set()
+        self.cut_block()
+        return "break"
+
+    def _leave_editor(self):
+        """Escape: close the editor and work on the block with the keys."""
+        editor = self._editor
+        if editor is not None:
+            self.cursor = (int(editor[2]), editor[3])
+        self._cancel_edit()
+        self.tree.focus_set()
+        self._refresh_block()
+        return "break"
 
     def _arrow(self, event, d_row, d_col):
         """Left/Right: move the text cursor, or jump to the neighbour cell."""
@@ -2632,12 +3290,20 @@ class PlotWindow(tk.Toplevel):
 
     @staticmethod
     def _series_data(df, x_col, y_col):
-        """Numeric X/Y pairs of one column, empty cells dropped."""
+        """Numeric X/Y pairs of one column, gaps kept as gaps.
+
+        Nothing is thrown away: every empty cell - in the Y column, in the X
+        column, or a whole empty row - becomes "not a number", and matplotlib
+        neither draws a point there nor connects the two sides of it.  So a
+        gap left in the table really is a gap in the curve instead of a
+        straight line across it.
+        """
         data = pd.DataFrame({
             "x": pd.to_numeric(df[x_col], errors="coerce"),
             "y": pd.to_numeric(df[y_col], errors="coerce"),
-        }).dropna()
-        return data["x"].to_numpy(), data["y"].to_numpy()
+        })
+        return (data["x"].to_numpy(dtype=float),
+                data["y"].to_numpy(dtype=float))
 
     def _create_line(self, x, y, y_col, x_col):
         """New curve drawn with the defaults of the configuration file."""
@@ -2743,7 +3409,7 @@ class PlotWindow(tk.Toplevel):
         x_col = columns[0]
         for y_col in columns[1:]:
             x, y = self._series_data(self.df, x_col, y_col)
-            if len(x):
+            if len(x) and bool(np.isfinite(y).any()):
                 self._create_line(x, y, y_col, x_col)
         return len(self.lines)
 
@@ -4840,9 +5506,11 @@ separate curve.
 | Plot | Opens a NEW diagram from the current data, with the default style. |
 | Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
 | Add row | Appends an empty row and starts editing it. |
-| Delete row | Deletes the selected row. |
+| Delete row | Deletes every row the highlighted block touches. |
 | Add column | Asks for a name and appends an empty column. |
 | Delete column | Deletes the column you last clicked in (after a confirmation). |
+| Clear cells | Empties the highlighted cells; the curves break at the empty cells. |
+| Copy / Paste | The highlighted block to and from the clipboard, tab separated. |
 | Random data | Fills the table with random numbers, keeping its present size. |
 | Settings... | Opens the settings editor (see section 4). |
 
@@ -4860,14 +5528,78 @@ separate curve.
 * `Ctrl`, `Cmd` or `Alt` together with any arrow key always jumps to the
   neighbouring cell, whatever the text cursor is doing.
 * `Esc` cancels the edit and keeps the previous value.
-* Text can be selected with the mouse, with `Shift+Left/Right` and with
-  `Shift+Up/Down` (to the beginning / end of the cell).  `Ctrl+A` (`Cmd+A`
-  on macOS) selects everything, `Ctrl+C` (`Cmd+C`) copies it.
-* Pressing `Ctrl+C` / `Cmd+C` while a row is selected copies the whole row
-  as tab separated text, ready to be pasted into another program.
+* Text can be selected **with the pointer**: press in the cell and drag
+  across the characters - the editor opens with the press, so the drag
+  highlights exactly the part you sweep over (leaving the cell during the
+  drag selects a block of cells instead).  A plain click selects the whole
+  text, a double click a word.
+* While a block is dragged out, holding the pointer at the bottom (or the
+  top, or a side) of the table keeps scrolling it row by row, and the block
+  follows - the selection is not limited to what is on the screen.
+* `Shift+Left/Right` extend the selection inside the cell, `Ctrl+A`
+  (`Cmd+A` on macOS) selects the whole text of the cell and `Ctrl+C`
+  (`Cmd+C`) copies it.
+* `Esc` closes the editor and leaves the keyboard on the table itself,
+  where the arrow keys walk from cell to cell.
 
 Values that look like numbers are stored as numbers; everything else is
 kept as text and is ignored when plotting.
+
+### Selecting several rows and columns
+
+The table always has a **highlighted block** of cells, marked by a blue
+rectangle around it.  It can be one cell or a whole rectangle of rows and
+columns.  Rows are **tinted** light blue only when the block covers every
+column of them - that is, when whole rows were selected on purpose (with
+`Shift+Space`, `Ctrl/Cmd+A`, or by taking the selection across all the
+columns).  Clicking or editing a single cell marks that cell alone and
+leaves its row quiet.
+
+| Action | What happens |
+| --- | --- |
+| Click a cell | That cell alone is the block, and it is opened for editing. |
+| Drag with the pointer | Inside the pressed cell it highlights its text; leaving that cell it selects the block between the pressed and the released cell.  Dragging to the edge of the table **scrolls it on** as long as the pointer stays there, so rows and columns below or beside the window can be selected as well. |
+| `Shift`+click a cell | Stretches the block from where it started to that cell. |
+| `Shift`+click a heading | Selects that whole column. |
+| `Shift`+arrow keys | One row or column more (or less) in the block - this also works while a cell is being edited, where `Shift+Up/Down` leaves the editor at once and `Shift+Left/Right` first select the text of the cell. |
+| Arrow keys (no Shift) | Walk from cell to cell; the block collapses to that one cell. |
+| `Shift+Space` | The whole rows the block touches (they become tinted). |
+| `Ctrl/Cmd+Space` | The whole columns the block touches. |
+| `Ctrl/Cmd+A` | The whole table. |
+| `Enter` or `F2` | Opens the cell under the cursor for editing. |
+
+The block is what the data operations work on:
+
+| Keys | What happens |
+| --- | --- |
+| `Ctrl/Cmd+C` | Copies the block as tab separated text - several rows and columns at once, ready for a spreadsheet program. |
+| `Ctrl/Cmd+V` | Writes tab separated text (from this program or another one) into the table, starting at the **top left cell of the block**; the shape of the text decides the shape of what is written, so a block of two columns fills two columns even when only one cell is selected.  The table grows if the text has more rows.  This also works while a cell is being edited - only a single value (no tabs, no line breaks) is pasted into the text of that cell. |
+| `Ctrl/Cmd+X` | Copies the block and empties it (inside a cell editor it cuts the selected text instead). |
+| `Delete` or `Backspace` | Empties the cells of the block. |
+| `Delete row` button | Removes every row of the block. |
+
+### Leaving a gap in a curve
+
+An **empty cell is a gap, not a zero**: the curve is cut there instead of
+being drawn straight across the missing point.  So a range of data can be
+plotted in pieces:
+
+1. select the cells that should not be plotted - a block, a whole row, or
+   parts of a few columns,
+2. press `Delete` (or `Clear cells` in the toolbar),
+3. press `Update plot`.
+
+Every curve whose cells were emptied is now drawn in two (or more) separate
+pieces, with the markers of the remaining points where they belong.  Filling
+the cells again joins the curve back together.
+
+Nothing is thrown away and nothing is bridged: an empty cell in the Y
+column, an empty cell in the X column and a **completely empty row** all
+break the curve at that place.  So simply leaving a row empty in the middle
+of the data is enough to cut the curve in two.
+
+The only case with no curve at all is a column that is empty from top to
+bottom.
 
 ### Column names
 
@@ -5383,7 +6115,9 @@ diagrams that are already open keep their settings.
    and copy it (`Ctrl/Cmd+C`, `Ctrl/Cmd+V`) instead of building the next
    one from the beginning.
 5. Correct or extend the data in the table and press `Update plot`; the
-   diagram keeps its appearance and only the values change.
+   diagram keeps its appearance and only the values change.  Emptying a
+   block of cells (select it, `Delete`) breaks the curves there, so a
+   measurement can be shown in separate pieces.
 6. `Save graph (.aplt)` to be able to continue later, or the save button of
    the Matplotlib toolbar to export a PNG/PDF image.
 
@@ -5394,8 +6128,9 @@ diagrams that are already open keep their settings.
   renames it to "APlot" through the Cocoa bundle information, which needs
   pyobjc: `pip install pyobjc-framework-Cocoa`.  Without it the menu keeps
   the name of the Python interpreter; everything else works the same way.
-* Empty cells and cells that do not contain a number are simply left out of
-  the curve.
+* Every empty cell (or a cell that is not a number) breaks the curve at
+  that point - an empty Y cell, an empty X cell and an empty row alike.
+  The points on the two sides of the gap are never connected.
 * A curve whose line style AND marker are both "None" is invisible and can
   no longer be clicked; reach it again through its legend box.
 * The keyboard follows the click: the diagram takes it on every click in
@@ -5503,6 +6238,12 @@ class App:
         ttk.Button(bar, text="Delete row", command=self.delete_row).pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="Add column", command=self.add_column).pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="Delete column", command=self.delete_column).pack(side="left", padx=(6, 0))
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Button(bar, text="Clear cells", command=self.clear_cells).pack(side="left")
+        ttk.Button(bar, text="Copy", command=self.copy_cells).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(bar, text="Paste", command=self.paste_cells).pack(
+            side="left", padx=(6, 0))
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         ttk.Button(bar, text="Random data", command=self.random_csv).pack(side="left")
         ttk.Button(bar, text="Settings...", command=self.open_settings).pack(side="right")
@@ -5787,8 +6528,38 @@ class App:
         self.table.add_row(focus=True)
 
     def delete_row(self):
-        if not self.table.delete_row():
-            messagebox.showinfo("Information", "Select a row first.")
+        """Delete every row the highlighted block touches."""
+        rows = self.table.selected_rows()
+        if not rows:
+            messagebox.showinfo("Information", "Select a cell or a block first.")
+            return
+        if len(rows) > 1 and not messagebox.askyesno(
+                "Delete rows", f"Delete {len(rows)} rows with their data?",
+                parent=self.root):
+            return
+        self.table.delete_selected_rows()
+
+    def clear_cells(self):
+        """Empty the highlighted cells: the curves break at those points."""
+        cells, rows, columns = self.table.block_cells()
+        if not cells:
+            messagebox.showinfo("Information", "Select a cell or a block first.")
+            return
+        if cells > 1 and not messagebox.askyesno(
+                "Clear cells",
+                f"Empty {cells} cells ({rows} rows x {columns} columns)?\n"
+                "The curves will be broken at the empty cells.",
+                parent=self.root):
+            return
+        self.table.clear_block()
+
+    def copy_cells(self):
+        if not self.table.copy_block():
+            messagebox.showinfo("Information", "Select a cell or a block first.")
+
+    def paste_cells(self):
+        if not self.table.paste_block():
+            messagebox.showinfo("Information", "There is nothing to paste.")
 
     def add_column(self):
         name = simpledialog.askstring("Add column", "Name of the new column:",
