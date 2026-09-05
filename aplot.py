@@ -96,9 +96,11 @@ import copy
 import json
 import re
 import sys
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, colorchooser, messagebox, simpledialog
+from tkinter import font as tkfont
 
 import numpy as np
 import pandas as pd
@@ -205,6 +207,18 @@ PASTE_STEP = 14.0           # pixels: how far a pasted copy sits from the origin
 NUDGE_STEP = 1.0            # pixels: one press of an arrow key
 NUDGE_BIG_STEP = 10.0       # pixels: with Shift
 SNAP_ANGLE = np.pi / 4      # arrows snap to 45 degrees while Shift is held
+
+# texts that can be rewritten in place, the way a file is renamed in the
+# Finder: one click selects, a second - slower than a double click - opens a
+# little editor with the cursor where the pointer was
+EDITABLE_KINDS = ("text", "note", "legend")
+RENAME_DELAY = 1500         # milliseconds allowed between the two clicks
+INLINE_PAD = 3              # pixels of air around the text in the editor
+INLINE_MIN_WIDTH = 48       # pixels: an empty editor is still usable
+INLINE_FAMILY = "DejaVu Sans"
+CARET_COLOR = "#1a5fb4"     # the blinking cursor of the in-place editor
+CARET_ON_MS = 600           # how long it is shown ...
+CARET_OFF_MS = 350          # ... and how long it is away: it blinks
 SELECT_COLOR = "#1a5fb4"    # the blue of the selection
 BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
 BLOCK_LINE = 2              # thickness of the outline around the block
@@ -3164,8 +3178,9 @@ class PlotWindow(tk.Toplevel):
     # the copied object, shared by every diagram window of the program
     _clipboard = None
 
-    HINT = ("One click selects (a text turns blue), a second click opens its "
-            "properties   |   A curve: one click   |   Drag: move   |   "
+    HINT = ("One click selects (a text turns blue), a slow second click "
+            "writes the text, a double click opens its properties   |   "
+            "A curve: one click   |   Drag: move   |   "
             "Drag a control point: resize\n"
             "\"T\", the shape and the arrow button: add text, drawings and "
             "arrows   |   Shift: arrows at 45 deg steps   |   "
@@ -3205,6 +3220,11 @@ class PlotWindow(tk.Toplevel):
         # a second click opens the properties of the selected object
         self.selection = None
         self._marked = None             # the text that wears the blue veil
+        self._inline = None             # the in-place text editor, while open
+        self._rename_click = None       # (kind, key, time) of the last click
+        self._rename_prev = None        # the same, one click earlier
+        self._pending_rename = None     # a slow second click, waiting for the
+                                        # release: a drag moves the text instead
         self._shift_down = False        # Shift snaps the arrows to 45 degrees
         self._handles = None
         self._rotator = None            # the round rotation control point
@@ -3374,6 +3394,8 @@ class PlotWindow(tk.Toplevel):
         window has been used, the keyboard belongs to that window.  Setting
         the focus natively keeps the arrow keys, Delete and copy/paste alive.
         """
+        if self._inline is not None:
+            return None        # the keyboard belongs to the little text editor
         try:
             widget = self.canvas.get_tk_widget()
             if widget.winfo_exists():
@@ -3855,6 +3877,8 @@ class PlotWindow(tk.Toplevel):
 
     def _on_resize(self, _event=None):
         """The Tk canvas may change the resolution: keep the pixels honest."""
+        if self._inline is not None:   # the editor would sit in the wrong place
+            self.commit_inline_edit()
         dpi = self.fig.get_dpi()
         if abs(dpi - self._dpi) > 0.01:
             self._dpi = dpi
@@ -4475,6 +4499,280 @@ class PlotWindow(tk.Toplevel):
         self._marked = wanted
         return self.highlighted_artist()
 
+    # -- writing a text in place -------------------------------------------
+    def text_value(self, kind, key):
+        """The text of one editable object, as the user sees it."""
+        if kind == "note":
+            state = self.note_state.get(key)
+            return "" if state is None else str(state.get("text", ""))
+        if kind == "text":
+            return self.ax.get_title() if key == "title" else self.axis_label(key)
+        if kind == "legend":
+            line = self.series.get(key)
+            label = "" if line is None else str(line.get_label())
+            return "" if not label or label.startswith("_") else label
+        return ""
+
+    def set_text_value(self, kind, key, text):
+        """Give one editable object a new text, everything else unchanged."""
+        text = str(text)
+        if kind == "text":
+            if key == "title":
+                self.ax.set_title(
+                    text, fontsize=self.fonts["title"],
+                    color=safe_hex(self.fonts["title_color"], "#000000"),
+                    pad=self.points(self.fonts["title_pad"]))
+                self.ax.title.set_picker(True)
+                self.apply_text_offset("title")   # set_title resets the place
+            else:
+                cfg = dict(self.axis_cfg[key])
+                cfg["label"] = text
+                self.apply_axis(key, cfg)
+        elif kind == "note":
+            state = self.note_state.get(key)
+            if state is None:
+                return None
+            state["text"] = text
+            self._marked = None            # the artist itself is rebuilt
+            if not text.strip():
+                self.remove_note(key)      # an empty text box goes away
+                return None
+            self.refresh_note(key)
+        elif kind == "legend":
+            line = self.series.get(key)
+            if line is None:
+                return None
+            line.set_label(text.strip() if text.strip() else "_nolegend_")
+            self._marked = None
+            self.refresh_legend()
+        else:
+            return None
+        self._refresh_highlight()
+        return None
+
+    def inline_target(self, kind, key):
+        """The artist an in-place editor would sit on, or None."""
+        if kind == "note":
+            return self.notes.get(key)
+        if kind == "text":
+            artist = self.text_artist(key)
+            return artist if artist is not None and artist.get_text() else None
+        if kind == "legend":
+            legend = self.legends.get(key)
+            if legend is None:
+                return None
+            texts = list(legend.get_texts())
+            return texts[0] if texts else None
+        return None
+
+    def is_editing_inline(self):
+        """True while a text is being written straight on the diagram."""
+        return self._inline is not None
+
+    def _inline_font(self, artist):
+        """A Tk font of about the size the artist is drawn with."""
+        try:
+            points = float(artist.get_fontsize())
+        except (AttributeError, TypeError, ValueError):
+            points = 12.0
+        pixels = max(8, int(round(points * float(self.fig.get_dpi()) / 72.0)))
+        try:
+            return tkfont.Font(family=INLINE_FAMILY, size=-pixels)
+        except tk.TclError:
+            return tkfont.Font(size=-pixels)
+
+    def _inline_geometry(self, artist, font, value):
+        """Where the little editor goes and how big it is, in widget pixels."""
+        widget = self.canvas.get_tk_widget()
+        widget.update_idletasks()
+        width_px = max(1, widget.winfo_width())
+        height_px = max(1, widget.winfo_height())
+        try:
+            box = artist.get_window_extent(self._renderer())
+            centre = (0.5 * (box.x0 + box.x1),
+                      height_px - 0.5 * (box.y0 + box.y1))
+        except (RuntimeError, ValueError, AttributeError):
+            centre = (0.5 * width_px, 0.5 * height_px)
+        lines = value.split("\n") or [""]
+        text_w = max([font.measure(line) for line in lines] + [0])
+        line_h = font.metrics("linespace")
+        width = max(INLINE_MIN_WIDTH, text_w + 2 * INLINE_PAD + 6)
+        height = len(lines) * line_h + 2 * INLINE_PAD + 4
+        x = int(round(centre[0] - width / 2.0))
+        y = int(round(centre[1] - height / 2.0))
+        x = max(0, min(x, width_px - int(width)))
+        y = max(0, min(y, height_px - int(height)))
+        return x, y, int(width), int(height)
+
+    def begin_inline_edit(self, kind, key, x=None, y=None):
+        """Open a small text box over one text, cursor where the pointer is.
+
+        This is the second, slower click of the Finder-like rename: one click
+        selects the object, a second one within RENAME_DELAY milliseconds -
+        too slow to be a double click - lets the text itself be rewritten.
+        """
+        if kind not in EDITABLE_KINDS:
+            return None
+        artist = self.inline_target(kind, key)
+        if artist is None:
+            return None
+        self.cancel_inline_edit()
+        widget = self.canvas.get_tk_widget()
+        value = self.text_value(kind, key)
+        font = self._inline_font(artist)
+        left, top, width, height = self._inline_geometry(artist, font, value)
+        # the blinking cursor: its colour is set by hand, because the colour
+        # the system gives it can be white - invisible on the white editor
+        caret = max(2, int(round(font.metrics("linespace") / 9.0)))
+        editor = tk.Text(widget, font=font, wrap="none", undo=True,
+                         borderwidth=1, relief="solid", highlightthickness=1,
+                         highlightcolor=SELECT_COLOR, highlightbackground=SELECT_COLOR,
+                         padx=INLINE_PAD, pady=INLINE_PAD,
+                         insertwidth=caret, insertborderwidth=0,
+                         insertbackground=CARET_COLOR,
+                         insertontime=CARET_ON_MS, insertofftime=CARET_OFF_MS,
+                         selectbackground=SELECT_COLOR, selectforeground="#ffffff",
+                         background="#ffffff", foreground="#000000")
+        try:      # older Tk versions do not know this one
+            editor.configure(insertunfocussed="hollow")
+        except tk.TclError:
+            pass
+        editor.insert("1.0", value)
+        # the arrow keys, Delete and copy/paste of the window would move or
+        # remove the selected object: inside the editor they belong to the text
+        editor.bindtags((str(editor), "Text", "all"))
+        editor.bind("<Return>", self._inline_return)
+        editor.bind("<KP_Enter>", self._inline_return)
+        editor.bind("<Shift-Return>", lambda _e: None)
+        editor.bind("<Escape>", lambda _e: (self.cancel_inline_edit(), "break")[1])
+        editor.bind("<FocusOut>", lambda _e: self.commit_inline_edit())
+        editor.place(x=left, y=top, width=width, height=height)
+        self._inline = {"kind": kind, "key": key, "editor": editor,
+                        "value": value, "artist": artist}
+        artist.set_visible(False)          # the editor takes its place
+        self.draw()
+        editor.focus_set()
+        try:
+            editor.update_idletasks()      # the text has to be laid out first
+        except tk.TclError:
+            pass
+        if x is not None and y is not None:
+            try:
+                pointer_x = int(round(float(x))) - left
+                pointer_y = int(round(widget.winfo_height() - float(y))) - top
+                editor.mark_set("insert", f"@{pointer_x},{pointer_y}")
+            except (tk.TclError, TypeError, ValueError):
+                editor.mark_set("insert", "end")
+        else:
+            editor.mark_set("insert", "end")
+        editor.see("insert")
+        # the cursor only blinks in the widget that holds the keyboard, and
+        # the click that opened the editor is still on its way to the canvas
+        self._insist_inline_focus(editor)
+        self.after(30, lambda box=editor: self._insist_inline_focus(box))
+        self.flash("Write the text and press Enter - Escape keeps the old one")
+        return editor
+
+    def _insist_inline_focus(self, editor):
+        """Keep the keyboard - and with it the blinking cursor - in the editor."""
+        if self._inline is None or self._inline["editor"] is not editor:
+            return None
+        try:
+            if not editor.winfo_exists():
+                return None
+            if editor.focus_displayof() is not editor:
+                editor.focus_force()
+        except (tk.TclError, KeyError):
+            pass
+        return None
+
+    def _inline_return(self, _event=None):
+        self.commit_inline_edit()
+        return "break"
+
+    def inline_text(self):
+        """What the open editor holds at the moment, or None."""
+        if self._inline is None:
+            return None
+        try:
+            return self._inline["editor"].get("1.0", "end-1c")
+        except tk.TclError:
+            return None
+
+    def _close_inline(self):
+        """Take the editor away and show the text again."""
+        inline, self._inline = self._inline, None
+        self._pending_rename = None
+        if inline is None:
+            return None
+        artist = inline["artist"]
+        try:
+            artist.set_visible(True)
+        except AttributeError:
+            pass
+        editor = inline["editor"]
+        try:
+            if editor.winfo_exists():
+                editor.destroy()
+        except tk.TclError:
+            pass
+        self.take_focus()
+        return inline
+
+    def commit_inline_edit(self, _event=None):
+        """Keep what was written and close the editor."""
+        if self._inline is None:
+            return None
+        text = self.inline_text()
+        inline = self._close_inline()
+        if inline is None:
+            return None
+        if text is None:
+            text = inline["value"]
+        if text != inline["value"]:
+            self.set_text_value(inline["kind"], inline["key"], text)
+        self.select_object(inline["kind"], inline["key"])
+        self._rename_click = None
+        self.draw()
+        return text
+
+    def cancel_inline_edit(self, _event=None):
+        """Throw the writing away and close the editor."""
+        inline = self._close_inline()
+        if inline is None:
+            return None
+        self._rename_click = None
+        self.draw()
+        return inline["value"]
+
+    def _arm_inline_edit(self, kind, key, event):
+        """Remember a slow second click on an already selected text.
+
+        The editor is not opened here but when the button is released: a
+        press that turns into a drag moves the text, exactly as before, and
+        only a press-and-release on the same spot starts the writing.
+        """
+        now = time.monotonic()
+        previous, self._rename_prev = self._rename_prev, None
+        self._rename_click = (kind, key, now)
+        self._pending_rename = None
+        if (previous is None or previous[0] != kind or previous[1] != key
+                or self.selection != (kind, key)
+                or (now - previous[2]) * 1000.0 > RENAME_DELAY):
+            return False
+        self._rename_click = None
+        self._pending_rename = {"kind": kind, "key": key,
+                                "x": event.x, "y": event.y}
+        return True
+
+    def _open_pending_rename(self):
+        """The release after a slow second click opens the little editor."""
+        pending, self._pending_rename = self._pending_rename, None
+        if pending is None or self._inline is not None:
+            return None
+        return self.begin_inline_edit(pending["kind"], pending["key"],
+                                      pending["x"], pending["y"])
+
     # -- clipboard, keyboard moving and deleting ---------------------------
     def _axes_delta(self, dx_pixels, dy_pixels):
         """A pixel offset as an offset in the coordinates of the plot area."""
@@ -4857,6 +5155,7 @@ class PlotWindow(tk.Toplevel):
 
     def cancel_tools(self):
         """Escape: none of the three toolbar tools stays armed."""
+        self.cancel_inline_edit()
         self.arm_text_placement(False)
         self.arm_shape_drawing(armed=False)
         self.arm_arrow_drawing(armed=False)
@@ -5078,6 +5377,11 @@ class PlotWindow(tk.Toplevel):
                       "dx": pos[0] - point[0], "dy": pos[1] - point[1]}
 
     def _on_motion(self, event):
+        pending = self._pending_rename
+        if pending is not None and event.x is not None and event.y is not None:
+            if (abs(event.x - pending["x"]) > 3.0
+                    or abs(event.y - pending["y"]) > 3.0):
+                self._pending_rename = None    # this is a drag, not a rename
         if self._shape_drag is not None:
             if event.x is None or event.y is None:
                 return
@@ -5204,7 +5508,11 @@ class PlotWindow(tk.Toplevel):
         self._refresh_highlight()
         self.draw()
 
-    def _on_release(self, _event):
+    def _on_release(self, event=None):
+        self._finish_drag(event)
+        self._open_pending_rename()
+
+    def _finish_drag(self, _event=None):
         self._drag = None
         shape_drag, self._shape_drag = self._shape_drag, None
         if shape_drag is not None and shape_drag["mode"].startswith("arrow"):
@@ -5538,11 +5846,20 @@ class PlotWindow(tk.Toplevel):
     def _on_button_press(self, event):
         # the keyboard focus is taken by the native <Button-1> binding of the
         # canvas widget (see take_focus), not from inside this handler
+        if self._inline is not None:       # a click elsewhere finishes writing
+            self.commit_inline_edit()
         if event.dblclick:                 # every object needs two clicks
+            self._rename_click = None      # a real double click is not a rename
+            self._rename_prev = None
+            self._pending_rename = None
             self._on_double_click(event)
             return
         if event.button != 1:
             return
+        self._pending_rename = None
+        # only a second click on the very same, already selected text opens
+        # the in-place editor: any other click starts the count again
+        self._rename_prev, self._rename_click = self._rename_click, None
         if self._pending_text:            # place a new text box here
             if event.x is not None and event.y is not None:
                 key = self.add_note(self._axes_point(event))
@@ -5616,6 +5933,7 @@ class PlotWindow(tk.Toplevel):
             return
         key = self.note_at(event.x, event.y)
         if key is not None:               # select a text box and drag it
+            self._arm_inline_edit("note", key, event)
             self.select_object("note", key)
             self.announce_selection()
             self.draw()
@@ -5623,6 +5941,7 @@ class PlotWindow(tk.Toplevel):
             return
         name = self.text_at(event.x, event.y)
         if name is not None:              # the title or an axis label
+            self._arm_inline_edit("text", name, event)
             self.select_object("text", name)
             self.announce_selection()
             self.draw()
@@ -5630,6 +5949,7 @@ class PlotWindow(tk.Toplevel):
             return
         y_col, legend = self.legend_at(event.x, event.y)
         if legend is not None:            # select a legend box and drag it
+            self._arm_inline_edit("legend", y_col, event)
             self.select_object("legend", y_col)
             self.announce_selection()
             self.draw()
@@ -6213,6 +6533,9 @@ worked on from the keyboard:
 The same commands are in the `Plot` menu as `Copy object`, `Paste object`
 and `Delete object`.
 
+A text that is selected can also be **rewritten on the spot** with a slow
+second click - see `Writing a text in place` below.
+
 The keys always belong to the window that was clicked last, so after a
 property window has been used, **one click anywhere in the diagram** brings
 them back - the click also keeps or changes the selection, so nothing is
@@ -6235,6 +6558,55 @@ be copied in one diagram and pasted into another one.  It is not the
 clipboard of the operating system: `Ctrl/Cmd+C` in the diagram does not
 disturb text that was copied elsewhere.
 
+### Writing a text in place
+
+The title, both axis labels, the legend boxes and the text boxes can be
+rewritten **on the diagram itself**, without opening any dialog.  It works
+exactly like renaming a file in the Finder of macOS or in a file manager:
+
+1. **click** the text once - it is selected and turns blue,
+2. **click it a second time**, slowly - about half a second to one and a
+   half seconds after the first click, clearly slower than a double click,
+3. a small white box appears over the text with a **blinking blue cursor
+   where the pointer was**, and the text can be edited there,
+4. `Enter` keeps the new text, `Esc` keeps the old one; clicking anywhere
+   else also keeps what was written.
+
+| Click | What happens |
+| --- | --- |
+| one click | selects the text (blue veil) |
+| a second click within 1.5 seconds | writes the text in place |
+| a double click (two fast clicks) | opens the property window |
+
+So nothing is lost: the property window - with the font size, the colour,
+the distance, the frame and the background - is still one double click
+away, and the fast way of fixing a typo or a unit is the slow second click.
+
+The cursor is a vertical line in the colour of the selection, as thick as
+the text is big, and it blinks - so it can be found at a glance even in a
+large title.  It is drawn by the program itself and not by the operating
+system, so it stays visible in a dark desktop theme as well.
+
+Moving the text is not disturbed either: the editor waits for the button to
+be **released** on the same spot, so pressing on a selected text and
+**dragging** it moves it, exactly as before.
+
+While the little editor is open the arrow keys, `Delete`, `Ctrl/Cmd+C` and
+`Ctrl/Cmd+V` belong to the **text**, not to the selected object, so the
+text is edited the way any text field is edited.  `Shift+Enter` starts a
+new line inside a text box.  Only the text is changed; the font size, the
+colour, the position, the distance from the axis, the frame and the
+background all stay as they were.
+
+Two texts are special, in the same way as in their dialogs:
+
+* writing **nothing** into a text box deletes that box,
+* writing **nothing** into a legend box hides that legend, exactly as an
+  empty text does in the legend dialog.
+
+Drawings and arrows hold no text, so a second click on them does nothing -
+they are simply selected.
+
 ### Text boxes on the diagram
 
 The **T** button on the right end of the toolbar, a little apart from the
@@ -6254,10 +6626,12 @@ A text box behaves like a legend box:
 * **click** it to select it - it turns blue - and **drag** it with the
   pointer to move it (the pointer becomes a move cross over it), or move it
   with the arrow keys,
-* **click it again** to open its dialog: text, font size, font colour, and
-  the `Surrounding box` section - the name of that section is a **check
-  button**, so switching it off leaves the frame away, while its colour and
-  the background (a colour, or fully transparent) stay inside it,
+* **click it a second time, slowly** to rewrite the text right there (see
+  `Writing a text in place`), or **double click** it to open its dialog:
+  text, font size, font colour, and the `Surrounding box` section - the name
+  of that section is a **check button**, so switching it off leaves the
+  frame away, while its colour and the background (a colour, or fully
+  transparent) stay inside it,
 * `Delete` in that dialog - or an empty text - removes the box,
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,
@@ -6274,9 +6648,11 @@ The starting font, frame and background of new boxes come from the
 The title and both axis labels can be dragged with the pointer, just like
 the legend boxes: press on the text, move it, release it.  The pointer
 becomes a move cross over them.  Pressing and releasing without moving is a
-click, so it only selects the text (it turns blue); the second click opens
-its dialog.  A selected label also moves with the arrow keys, one pixel at
-a time, or ten with `Shift` - handy for the last bit of fine tuning.
+click, so it only selects the text (it turns blue); a slow second click
+writes the text in place (see `Writing a text in place`) and a double click
+opens its dialog.  A selected label also moves with the arrow keys, one
+pixel at a time, or ten with `Shift` - handy for the last bit of fine
+tuning.
 
 The drag is stored as a shift in pixels **on top of** the automatic
 placement, which has two useful consequences:
@@ -6298,10 +6674,12 @@ independently.
 * Click a box anywhere - on its frame or on its text - to select it: it is
   covered with the blue veil.  Then drag it to a new place with the
   pointer, or move it with the arrow keys (`Shift`: ten pixels).
-* Click the selected box again to open its own dialog: the text, the font
-  size and the font colour, the **frame** around the box (its colour, or no
-  frame at all) and the **background** (its colour, or fully transparent).
-  An empty text hides the box.
+* Click the selected box a second time, slowly, to rewrite its text on the
+  diagram itself (see `Writing a text in place`).
+* **Double click** it to open its own dialog: the text, the font size and
+  the font colour, the **frame** around the box (its colour, or no frame at
+  all) and the **background** (its colour, or fully transparent).  An empty
+  text hides the box.
 * The boxes keep their position when the data is updated, when the curve
   style changes and when a column is renamed, and they are stored in
   `.aplt` files.

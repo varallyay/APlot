@@ -363,6 +363,9 @@ worked on from the keyboard:
 The same commands are in the `Plot` menu as `Copy object`, `Paste object`
 and `Delete object`.
 
+A text that is selected can also be **rewritten on the spot** with a slow
+second click - see `Writing a text in place` below.
+
 The keys always belong to the window that was clicked last, so after a
 property window has been used, **one click anywhere in the diagram** brings
 them back - the click also keeps or changes the selection, so nothing is
@@ -385,6 +388,55 @@ be copied in one diagram and pasted into another one.  It is not the
 clipboard of the operating system: `Ctrl/Cmd+C` in the diagram does not
 disturb text that was copied elsewhere.
 
+### Writing a text in place
+
+The title, both axis labels, the legend boxes and the text boxes can be
+rewritten **on the diagram itself**, without opening any dialog.  It works
+exactly like renaming a file in the Finder of macOS or in a file manager:
+
+1. **click** the text once - it is selected and turns blue,
+2. **click it a second time**, slowly - about half a second to one and a
+   half seconds after the first click, clearly slower than a double click,
+3. a small white box appears over the text with a **blinking blue cursor
+   where the pointer was**, and the text can be edited there,
+4. `Enter` keeps the new text, `Esc` keeps the old one; clicking anywhere
+   else also keeps what was written.
+
+| Click | What happens |
+| --- | --- |
+| one click | selects the text (blue veil) |
+| a second click within 1.5 seconds | writes the text in place |
+| a double click (two fast clicks) | opens the property window |
+
+So nothing is lost: the property window - with the font size, the colour,
+the distance, the frame and the background - is still one double click
+away, and the fast way of fixing a typo or a unit is the slow second click.
+
+The cursor is a vertical line in the colour of the selection, as thick as
+the text is big, and it blinks - so it can be found at a glance even in a
+large title.  It is drawn by the program itself and not by the operating
+system, so it stays visible in a dark desktop theme as well.
+
+Moving the text is not disturbed either: the editor waits for the button to
+be **released** on the same spot, so pressing on a selected text and
+**dragging** it moves it, exactly as before.
+
+While the little editor is open the arrow keys, `Delete`, `Ctrl/Cmd+C` and
+`Ctrl/Cmd+V` belong to the **text**, not to the selected object, so the
+text is edited the way any text field is edited.  `Shift+Enter` starts a
+new line inside a text box.  Only the text is changed; the font size, the
+colour, the position, the distance from the axis, the frame and the
+background all stay as they were.
+
+Two texts are special, in the same way as in their dialogs:
+
+* writing **nothing** into a text box deletes that box,
+* writing **nothing** into a legend box hides that legend, exactly as an
+  empty text does in the legend dialog.
+
+Drawings and arrows hold no text, so a second click on them does nothing -
+they are simply selected.
+
 ### Text boxes on the diagram
 
 The **T** button on the right end of the toolbar, a little apart from the
@@ -404,10 +456,12 @@ A text box behaves like a legend box:
 * **click** it to select it - it turns blue - and **drag** it with the
   pointer to move it (the pointer becomes a move cross over it), or move it
   with the arrow keys,
-* **click it again** to open its dialog: text, font size, font colour, and
-  the `Surrounding box` section - the name of that section is a **check
-  button**, so switching it off leaves the frame away, while its colour and
-  the background (a colour, or fully transparent) stay inside it,
+* **click it a second time, slowly** to rewrite the text right there (see
+  `Writing a text in place`), or **double click** it to open its dialog:
+  text, font size, font colour, and the `Surrounding box` section - the name
+  of that section is a **check button**, so switching it off leaves the
+  frame away, while its colour and the background (a colour, or fully
+  transparent) stay inside it,
 * `Delete` in that dialog - or an empty text - removes the box,
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,
@@ -424,9 +478,11 @@ The starting font, frame and background of new boxes come from the
 The title and both axis labels can be dragged with the pointer, just like
 the legend boxes: press on the text, move it, release it.  The pointer
 becomes a move cross over them.  Pressing and releasing without moving is a
-click, so it only selects the text (it turns blue); the second click opens
-its dialog.  A selected label also moves with the arrow keys, one pixel at
-a time, or ten with `Shift` - handy for the last bit of fine tuning.
+click, so it only selects the text (it turns blue); a slow second click
+writes the text in place (see `Writing a text in place`) and a double click
+opens its dialog.  A selected label also moves with the arrow keys, one
+pixel at a time, or ten with `Shift` - handy for the last bit of fine
+tuning.
 
 The drag is stored as a shift in pixels **on top of** the automatic
 placement, which has two useful consequences:
@@ -448,10 +504,12 @@ independently.
 * Click a box anywhere - on its frame or on its text - to select it: it is
   covered with the blue veil.  Then drag it to a new place with the
   pointer, or move it with the arrow keys (`Shift`: ten pixels).
-* Click the selected box again to open its own dialog: the text, the font
-  size and the font colour, the **frame** around the box (its colour, or no
-  frame at all) and the **background** (its colour, or fully transparent).
-  An empty text hides the box.
+* Click the selected box a second time, slowly, to rewrite its text on the
+  diagram itself (see `Writing a text in place`).
+* **Double click** it to open its own dialog: the text, the font size and
+  the font colour, the **frame** around the box (its colour, or no frame at
+  all) and the **background** (its colour, or fully transparent).  An empty
+  text hides the box.
 * The boxes keep their position when the data is updated, when the curve
   style changes and when a column is renamed, and they are stored in
   `.aplt` files.
