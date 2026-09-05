@@ -54,7 +54,8 @@ Plot window
   moved with the arrow keys (Shift: ten pixels)
 * every curve has its own legend box, with its own text, font and colours
 * the "T" button of the toolbar adds a movable text box anywhere, the
-  drawing tool next to it adds rectangles, triangles, circles and ellipses
+  drawing tool next to it adds rectangles, triangles, circles, ellipses
+  and lines
   and the arrow tool adds arrows with triangle, chevron, concave or convex
   heads - all of them can be moved, resized and styled
 * a selected text box, drawing or arrow can be copied and pasted with all
@@ -65,6 +66,8 @@ Plot window
 * two clicks beside an axis -> combined axes dialog (X / Y / Frame tabs) with
                               range, step, minor ticks, grid, font sizes,
                               frame style and the size/origin of the axes
+* click an axis line        -> a control point on each of its two ends:
+                              drag one to make that axis longer or shorter
 * two clicks on the frame   -> the "Frame and origin" tab of that dialog
 * Plot menu                 -> axes dialog, title and font sizes, legend
 
@@ -180,7 +183,8 @@ LEGEND_STACK_STEP = 0.085
 NOTE_KEY = "note:"          # prefix that marks a free text box while dragging
 
 SHAPE_KINDS = [("Rectangle", "rect"), ("Triangle", "triangle"),
-               ("Circle", "circle"), ("Ellipse", "ellipse")]
+               ("Circle", "circle"), ("Ellipse", "ellipse"), ("Line", "line")]
+OPEN_SHAPES = ("line",)     # drawings that are a stroke, not an area
 
 ARROW_HEADS = [("Triangle head", "triangle"), ("Chevron head", "chevron"),
                ("Concave head", "concave"), ("Convex head", "convex")]
@@ -190,10 +194,12 @@ ROTATE_HANDLE = 8           # the round control point above the object
 ROTATE_GAP = 26.0           # pixels between the object and that point
 ROTATE_SNAP = 15.0          # degrees, while Shift is held
 MIN_SHAPE_SIZE = 0.01       # in axes coordinates
+MIN_AXIS_SIZE = 0.08        # smallest plot area, as a fraction of the figure
 
 # copy / paste and the keyboard
 OBJECT_NAMES = {"shape": "Drawing", "arrow": "Arrow", "note": "Text box",
-                "legend": "Legend box", "text": "Text", "frame": "Frame"}
+                "legend": "Legend box", "text": "Text", "frame": "Frame",
+                "axis": "Axis"}
 COPYABLE = ("shape", "arrow", "note")   # a legend or an axis label is not copied
 PASTE_STEP = 14.0           # pixels: how far a pasted copy sits from the original
 NUDGE_STEP = 1.0            # pixels: one press of an arrow key
@@ -781,6 +787,9 @@ class ShapeToolButton(tk.Canvas):
         elif kind == "triangle":
             self.create_polygon([(x0 + x1) / 2, y0, x0, y1, x1, y1],
                                 outline="#000000", fill="", width=2, tags="icon")
+        elif kind == "line":
+            self.create_line(x0, y1, x1, y0, fill="#000000", width=2,
+                             tags="icon")
         elif kind == "circle":
             self.create_oval(x0, y0, x1, y1, **style)
         elif kind == "ellipse":
@@ -978,17 +987,20 @@ class ShapeDialog(ToolDialog):
         self.on_apply = on_apply
         self.on_delete = on_delete
 
+        self.kind = state["kind"]
+        self.line_on_var = tk.BooleanVar(
+            value=not SeriesStyleDialog.is_off(state["style"]))
         self.style_var = tk.StringVar(
-            value=name_of(LINE_STYLES, state["style"], "Solid"))
+            value=SeriesStyleDialog.first_choice(LINE_STYLES, state["style"],
+                                                 "Solid"))
         self.width_var = tk.StringVar(value=f"{state['width']:g}")
         self.alpha_var = tk.StringVar(value=f"{state.get('alpha', 0.6):g}")
-        self.no_fill_var = tk.BooleanVar(value=state["face"] == "none")
+        self.fill_on_var = tk.BooleanVar(value=state["face"] != "none")
         self.angle_var = tk.StringVar(value=f"{float(state.get('angle', 0.0)):g}")
 
-        line = ttk.LabelFrame(self.body, text="Line", padding=8)
-        line.pack(fill="x")
+        line = self._section("Line", self.line_on_var)
         combo = ttk.Combobox(line, textvariable=self.style_var, state="readonly",
-                             values=names(LINE_STYLES), width=14)
+                             values=drawn_names(LINE_STYLES), width=14)
         self.field(line, 0, "Style:", combo)
         combo.bind("<<ComboboxSelected>>", lambda _e: self.apply())
         self.field(line, 1, "Thickness:",
@@ -998,32 +1010,47 @@ class ShapeDialog(ToolDialog):
                                       command=lambda _c: self.apply())
         self.field(line, 2, "Colour:", self.edge_color)
 
-        fill = ttk.LabelFrame(self.body, text="Fill", padding=8)
-        fill.pack(fill="x", pady=(10, 0))
-        self.face_color = ColorSwatch(
-            fill, "#cfe3f7" if state["face"] == "none" else state["face"],
-            command=lambda _c: self.apply())
-        self.field(fill, 0, "Colour:", self.face_color)
-        self.field(fill, 1, "", ttk.Checkbutton(fill, text="No fill (outline only)",
-                                                variable=self.no_fill_var,
-                                                command=self.apply))
-        self.field(fill, 2, "Opacity (0-1):",
-                   ttk.Spinbox(fill, from_=0, to=1, increment=0.05, width=8,
-                               textvariable=self.alpha_var, command=self.apply))
+        # a line is a stroke: there is nothing to fill in it
+        self.fill_box = None
+        if self.kind not in OPEN_SHAPES:
+            fill = self._section("Fill", self.fill_on_var, pady=(10, 0))
+            self.fill_box = fill
+            self.face_color = ColorSwatch(
+                fill, "#cfe3f7" if state["face"] == "none" else state["face"],
+                command=lambda _c: self.apply())
+            self.field(fill, 0, "Colour:", self.face_color)
+            self.field(fill, 1, "Opacity (0-1):",
+                       ttk.Spinbox(fill, from_=0, to=1, increment=0.05, width=8,
+                                   textvariable=self.alpha_var,
+                                   command=self.apply))
+        else:
+            self.face_color = ColorSwatch(self.body, "#cfe3f7")
+            self.face_color.pack_forget()
+            self.fill_on_var.set(False)
 
-        turn = ttk.LabelFrame(self.body, text="Rotation", padding=8)
-        turn.pack(fill="x", pady=(10, 0))
-        self.field(turn, 0, "Angle [deg]:",
-                   ttk.Spinbox(turn, from_=-360, to=360, increment=5, width=8,
-                               textvariable=self.angle_var, command=self.apply))
-        ttk.Button(turn, text="Upright",
-                   command=lambda: (self.angle_var.set("0"), self.apply())).grid(
-            row=0, column=2, padx=(8, 0))
-
+        # a line has no rotation of its own: its two ends give the direction
+        if self.kind not in OPEN_SHAPES:
+            turn = ttk.LabelFrame(self.body, text="Rotation", padding=8)
+            turn.pack(fill="x", pady=(10, 0))
+            self.field(turn, 0, "Angle [deg]:",
+                       ttk.Spinbox(turn, from_=-360, to=360, increment=5,
+                                   width=8, textvariable=self.angle_var,
+                                   command=self.apply))
+            ttk.Button(turn, text="Upright",
+                       command=lambda: (self.angle_var.set("0"),
+                                        self.apply())).grid(row=0, column=2,
+                                                            padx=(8, 0))
+            hint = ("Switch \"Line\" or \"Fill\" off to leave that part out.\n"
+                    "Drag the object to move it, drag a square handle to\n"
+                    "resize it and the round one above it to turn it\n"
+                    "(Shift: 15 degree steps).")
+        else:
+            hint = ("Switch \"Line\" off to hide it.\n"
+                    "Drag the line to move it, drag one of its two ends to\n"
+                    "change its length and direction\n"
+                    "(Shift: 45 degree steps).")
         ttk.Label(self.body, foreground="#666", justify="left",
-                  text="Drag the object to move it, drag a square handle to\n"
-                       "resize it and the round one above it to turn it\n"
-                       "(Shift: 15 degree steps).").pack(anchor="w", pady=(8, 0))
+                  text=hint).pack(anchor="w", pady=(8, 0))
 
         bar = ttk.Frame(self.body)
         bar.pack(fill="x", pady=(12, 0))
@@ -1033,12 +1060,22 @@ class ShapeDialog(ToolDialog):
                 side="left", padx=(6, 0))
         ttk.Button(bar, text="Close", command=self.close).pack(side="right")
 
+    def _section(self, title, variable, **pack):
+        """A section whose title is its own check button."""
+        box = ttk.LabelFrame(self.body, padding=8)
+        check = ttk.Checkbutton(box, text=title, variable=variable,
+                                command=self.apply)
+        box.configure(labelwidget=check)
+        box.pack(fill="x", **pack)
+        return box
+
     def values(self):
         return {
-            "style": code_of(LINE_STYLES, self.style_var.get(), "-"),
+            "style": (code_of(LINE_STYLES, self.style_var.get(), "-")
+                      if self.line_on_var.get() else "none"),
             "width": max(0.0, to_float(self.width_var.get(), 1.5)),
             "edge": self.edge_color.color,
-            "face": "none" if self.no_fill_var.get() else self.face_color.color,
+            "face": (self.face_color.color if self.fill_on_var.get() else "none"),
             "alpha": min(1.0, max(0.0, to_float(self.alpha_var.get(), 0.6))),
             "angle": to_float(self.angle_var.get(), 0.0) % 360.0,
         }
@@ -1819,24 +1856,27 @@ class TextBoxDialog(ToolDialog):
                   foreground="#666", justify="left").grid(
             row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        frame_box = ttk.LabelFrame(self.body, text="Surrounding box", padding=8)
+        # the name of the section is its own check button: no frame when off
+        frame_box = ttk.LabelFrame(self.body, padding=8)
+        frame_check = ttk.Checkbutton(frame_box, text="Surrounding box",
+                                      variable=self.frame_var,
+                                      command=self.apply)
+        frame_box.configure(labelwidget=frame_check)
         frame_box.pack(fill="x", pady=(10, 0))
-        self.field(frame_box, 0, "",
-                   ttk.Checkbutton(frame_box, text="Frame around the box",
-                                   variable=self.frame_var, command=self.apply))
+        self.frame_check = frame_check
         self.edge_color = ColorSwatch(frame_box, "#000000" if edge == "none" else edge,
                                       command=lambda _c: self.apply())
-        self.field(frame_box, 1, "Frame colour:", self.edge_color)
+        self.field(frame_box, 0, "Frame colour:", self.edge_color)
         self.face_color = ColorSwatch(frame_box,
                                       "#ffffff" if face == "none" else face,
                                       command=lambda _c: self.apply())
-        self.field(frame_box, 2, "Background colour:", self.face_color)
-        self.field(frame_box, 3, "",
+        self.field(frame_box, 1, "Background colour:", self.face_color)
+        self.field(frame_box, 2, "",
                    ttk.Checkbutton(frame_box, text="Transparent background",
                                    variable=self.transparent_var,
                                    command=self.apply))
         ttk.Label(frame_box, text="Drag the box with the pointer to move it.",
-                  foreground="#666").grid(row=4, column=0, columnspan=2,
+                  foreground="#666").grid(row=3, column=0, columnspan=2,
                                           sticky="w", pady=(4, 0))
 
         if rotation:
@@ -3283,7 +3323,7 @@ class PlotWindow(tk.Toplevel):
                 "Add text: click in the diagram to place a text box"))
         self.text_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
 
-        button_background = "#999999" #self.text_button.cget("background")
+        button_background = "#999999"
         self.shape_button = ShapeToolButton(
             toolbar, kind=self.shape_kind, family="shape",
             background=button_background,
@@ -3946,6 +3986,7 @@ class PlotWindow(tk.Toplevel):
         return {
             "kind": kind, "x": float(x), "y": float(y),
             "w": float(width), "h": float(height), "angle": 0.0,
+            "flip": False,          # a line drawn from top left to bottom right
             "style": code_of(LINE_STYLES, cfg["line_style"], "-"),
             "width": float(cfg["line_width"]),
             "edge": safe_hex(cfg["line_color"], "#000000"),
@@ -3989,8 +4030,11 @@ class PlotWindow(tk.Toplevel):
         if state is None:
             return None
         x, y = state["x"], state["y"]
-        w = max(MIN_SHAPE_SIZE, state["w"])
-        h = max(MIN_SHAPE_SIZE, state["h"])
+        if state["kind"] in OPEN_SHAPES:   # a horizontal line stays horizontal
+            w, h = state["w"], state["h"]
+        else:
+            w = max(MIN_SHAPE_SIZE, state["w"])
+            h = max(MIN_SHAPE_SIZE, state["h"])
         if state["kind"] == "circle":      # keep it round on the screen
             h = w * self._axes_aspect()
             state["h"] = h
@@ -4003,7 +4047,12 @@ class PlotWindow(tk.Toplevel):
             "facecolor": ("none" if face == "none"
                           else to_rgba(face, state.get("alpha", 0.6))),
         }
-        if state["kind"] == "triangle":
+        if state["kind"] == "line":
+            ends = ([[x, y + h], [x + w, y]] if state.get("flip")
+                    else [[x, y], [x + w, y + h]])
+            common["facecolor"] = "none"        # a stroke has nothing to fill
+            patch = Polygon(ends, closed=False, fill=False, **common)
+        elif state["kind"] == "triangle":
             patch = Polygon([[x + w / 2, y + h], [x, y], [x + w, y]],
                             closed=True, **common)
         elif state["kind"] in ("circle", "ellipse"):
@@ -4061,7 +4110,10 @@ class PlotWindow(tk.Toplevel):
         """The point the selected object turns around, in axes coordinates."""
         kind, key = self.selection or (None, None)
         if kind == "shape" and key in self.shape_state:
-            return self.shape_centre(self.shape_state[key])
+            state = self.shape_state[key]
+            if state["kind"] in OPEN_SHAPES:
+                return None      # its two ends give the direction, as an arrow
+            return self.shape_centre(state)
         if kind == "note" and key in self.note_state:
             return tuple(self.note_state[key]["pos"])
         return None
@@ -4324,7 +4376,7 @@ class PlotWindow(tk.Toplevel):
     def _selection_store(self, kind):
         return {"shape": self.shape_state, "arrow": self.arrow_state,
                 "note": self.note_state, "legend": self.legend_state,
-                "text": self.text_offset}.get(kind)
+                "text": self.text_offset, "axis": self.axis_cfg}.get(kind)
 
     def select_object(self, kind, key):
         """Remember the object the keyboard commands work on."""
@@ -4492,6 +4544,8 @@ class PlotWindow(tk.Toplevel):
         state = self.selected_state()
         if state is None:
             return False
+        if kind == "axis":
+            return self.move_axes(dx_pixels, dy_pixels)
         dx, dy = self._axes_delta(dx_pixels, dy_pixels)
         if kind == "text":
             # the title and the axis labels are shifted in pixels already
@@ -4568,8 +4622,13 @@ class PlotWindow(tk.Toplevel):
 
     def selected_handle_positions(self):
         kind, key = self.selection or (None, None)
+        if kind == "axis" and key in ("x", "y"):
+            return self.axis_handle_positions(key)
         if kind == "shape" and key in self.shape_state:
-            return self.shape_handle_positions(self.shape_state[key])
+            state = self.shape_state[key]
+            if state["kind"] in OPEN_SHAPES:
+                return list(self.line_ends(state))   # the two ends, as an arrow
+            return self.shape_handle_positions(state)
         if kind == "arrow" and key in self.arrow_state:
             return self.arrow_handle_positions(self.arrow_state[key])
         return None
@@ -4631,11 +4690,59 @@ class PlotWindow(tk.Toplevel):
                 return ROTATE_HANDLE
         return None
 
+    def line_ends(self, state):
+        """The two ends of a drawn line, in the coordinates of the plot area."""
+        x, y, w, h = state["x"], state["y"], state["w"], state["h"]
+        ends = ([(x, y + h), (x + w, y)] if state.get("flip")
+                else [(x, y), (x + w, y + h)])
+        angle = self.angle_of(state)
+        if angle:
+            centre = self.shape_centre(state)
+            ends = [self._turn_point(point, centre, angle) for point in ends]
+        return ends
+
+    def set_line_ends(self, key, first, second):
+        """Put the two ends of a drawn line where they are asked for.
+
+        The ends are the line, exactly as the tip and the tail are the arrow,
+        so any earlier rotation is taken into the new pair of points.
+        """
+        state = self.shape_state.get(key)
+        if state is None or state["kind"] not in OPEN_SHAPES:
+            return False
+        (x0, y0), (x1, y1) = first, second
+        state["x"], state["w"] = float(min(x0, x1)), float(abs(x1 - x0))
+        state["y"], state["h"] = float(min(y0, y1)), float(abs(y1 - y0))
+        state["flip"] = bool((x1 - x0) * (y1 - y0) < 0)
+        state["angle"] = 0.0
+        self.refresh_shape(key)
+        return True
+
+    def _line_hit(self, state, x, y, tolerance=None):
+        """Distance test against a drawn line: a stroke has no inside."""
+        first, second = (np.array(self.ax.transAxes.transform(point), dtype=float)
+                         for point in self.line_ends(state))
+        segment = second - first
+        length = float(np.hypot(*segment))
+        if length < 1e-6:
+            return False
+        point = np.array([x, y], dtype=float)
+        position = float(np.clip(np.dot(point - first, segment) / length ** 2,
+                                 0.0, 1.0))
+        distance = float(np.hypot(*(point - (first + position * segment))))
+        return distance <= (tolerance if tolerance is not None
+                            else max(4.0, float(state["width"]) + 3.0))
+
     def shape_at(self, x, y):
         """Key of the drawn object under the pointer, or None."""
         if x is None or y is None:
             return None
         for key in reversed(list(self.shapes)):        # topmost first
+            state = self.shape_state.get(key)
+            if state is not None and state["kind"] in OPEN_SHAPES:
+                if self._line_hit(state, x, y):
+                    return key
+                continue
             patch = self.shapes[key]
             try:
                 inside = patch.get_path().contains_point(
@@ -4977,6 +5084,12 @@ class PlotWindow(tk.Toplevel):
             drag = self._shape_drag
             key = drag["key"]
             mode = drag["mode"]
+            if mode == "axis-end":             # pull the end of an axis
+                self.resize_axis(drag["key"], drag["index"],
+                                 self._figure_point(event))
+                self._refresh_handles()
+                self.draw()
+                return
             if mode == "rotate":
                 pointer = self._pointer_angle(event, drag["centre"])
                 if pointer is None:
@@ -5017,9 +5130,27 @@ class PlotWindow(tk.Toplevel):
                 self._shape_drag = None
                 return
             point = self._axes_point(event)
+            state = self.shape_state[key]
+            snap = self._shift_active(event)
+            if mode == "line-end":             # one end of a line, as an arrow
+                fixed = drag.get("fixed")
+                if fixed is None:
+                    fixed = self.line_ends(state)[1 - drag["index"]]
+                if snap:
+                    point = self._snap_point(fixed, point)
+                self.set_line_ends(key, fixed, point)
+                self._refresh_handles()
+                self.draw()
+                return
             if drag["mode"] == "new":          # rubber band from the anchor
                 anchor = drag["anchor"]
-                state = self.shape_state[key]
+                if state["kind"] in OPEN_SHAPES:
+                    # Shift keeps the new line at 45 degree steps, as an arrow
+                    if snap:
+                        point = self._snap_point(anchor, point)
+                    self.set_line_ends(key, anchor, point)
+                    self.draw()
+                    return
                 state["x"], state["w"] = min(anchor[0], point[0]), abs(point[0] - anchor[0])
                 state["y"], state["h"] = min(anchor[1], point[1]), abs(point[1] - anchor[1])
                 self.refresh_shape(key)
@@ -5090,14 +5221,23 @@ class PlotWindow(tk.Toplevel):
                         self._refresh_handles()
                 self.draw()
             return
-        if shape_drag is not None and shape_drag["mode"] == "rotate":
+        if shape_drag is not None and shape_drag["mode"] in ("rotate", "axis-end"):
+            self._refresh_handles()
             self.draw()
             return
         if shape_drag is not None:
             key = shape_drag["key"]
             state = self.shape_state.get(key)
             if state is not None:
-                if shape_drag["mode"] == "new" and (
+                if shape_drag["mode"] == "new" and state["kind"] in OPEN_SHAPES:
+                    ends = self.line_ends(state)
+                    first = np.array(self.ax.transAxes.transform(ends[0]))
+                    second = np.array(self.ax.transAxes.transform(ends[1]))
+                    if float(np.hypot(*(second - first))) < 12.0:  # a plain click
+                        self.set_line_ends(key, ends[0],
+                                           (ends[0][0] + 0.18, ends[0][1]))
+                        self._refresh_handles()
+                elif shape_drag["mode"] == "new" and (
                         state["w"] < 0.02 or state["h"] < 0.02):
                     state["w"] = max(state["w"], 0.18)   # a plain click
                     state["h"] = max(state["h"], 0.14)
@@ -5123,7 +5263,11 @@ class PlotWindow(tk.Toplevel):
         cursor = ""
         _y_col, legend = self.legend_at(event.x, event.y)
         index = self.handle_at(event.x, event.y)
-        if index == ROTATE_HANDLE:
+        axis_end = self.axis_end_at(event.x, event.y)
+        if axis_end is not None:
+            kind, which = self.selection
+            cursor = "sb_h_double_arrow" if which == "x" else "sb_v_double_arrow"
+        elif index == ROTATE_HANDLE:
             cursor = "exchange"            # a round arrow: turn the object
         elif index is not None:
             cursor = "sizing"
@@ -5348,6 +5492,17 @@ class PlotWindow(tk.Toplevel):
             return ("frame", "frame")
         return (None, None)
 
+    def axis_end_at(self, x, y, tolerance=8.0):
+        """Index of the axis control point under the pointer, or None."""
+        kind, key = self.selection or (None, None)
+        if kind != "axis":
+            return None
+        for index, point in enumerate(self.axis_handle_positions(key)):
+            px, py = self.ax.transAxes.transform(point)
+            if abs(px - x) <= tolerance and abs(py - y) <= tolerance:
+                return index
+        return None
+
     def open_properties(self, kind, key):
         """The property window of one object, whatever kind it is."""
         if kind == "arrow":
@@ -5361,7 +5516,7 @@ class PlotWindow(tk.Toplevel):
         if kind == "text":
             return (self.edit_title() if key == "title"
                     else self.edit_axis_label(key))
-        if kind == "frame":
+        if kind in ("frame", "axis"):
             return self.open_axes_dialog("frame")
         return None
 
@@ -5423,9 +5578,20 @@ class PlotWindow(tk.Toplevel):
             return
         if index is not None:             # resize the selected object
             kind, key = self.selection
-            self._shape_drag = {"key": key, "index": index,
-                                "mode": ("arrow-end" if kind == "arrow"
-                                         else "resize")}
+            mode = "resize"
+            if kind == "axis":
+                mode = "axis-end"
+            elif kind == "arrow":
+                mode = "arrow-end"
+            elif (kind == "shape"
+                  and self.shape_state[key]["kind"] in OPEN_SHAPES):
+                mode = "line-end"         # a line is dragged by its two ends
+            self._shape_drag = {"key": key, "index": index, "mode": mode}
+            if mode == "line-end":
+                # the end that stays is remembered, so that dragging one end
+                # past the other one does not swap them mid-drag
+                ends = self.line_ends(self.shape_state[key])
+                self._shape_drag["fixed"] = tuple(ends[1 - index])
             return
         key = self.arrow_at(event.x, event.y)
         if key is not None:               # select an arrow and drag it
@@ -5469,16 +5635,21 @@ class PlotWindow(tk.Toplevel):
             self.draw()
             self._start_legend_drag(y_col, event)
             return
+        which = self.frame_axis_at(event.x, event.y)
+        if which is not None:             # an axis line: select it to resize
+            self.select_object("axis", which)
+            self.draw()
+            self.flash(f"{which.upper()} axis selected - drag one of its ends "
+                       "to resize it, click again for frame and origin")
+            return
         if self.selection is not None:    # clicking elsewhere deselects
             self.select_object(None, None)
             self.draw()
-        if self.frame_hit(event.x, event.y):
-            self.flash("Frame - click it again for frame and origin")
 
-    def frame_hit(self, x, y):
-        """True when the pointer is on one of the visible frame sides."""
+    def frame_side_at(self, x, y):
+        """Name of the visible frame side under the pointer, or None."""
         if x is None or y is None:
-            return False
+            return None
         box = self.ax.get_window_extent()
         tolerance = max(4.0, self.frame_cfg["width"] + 3.0)
         vertical = box.y0 - tolerance <= y <= box.y1 + tolerance
@@ -5487,8 +5658,73 @@ class PlotWindow(tk.Toplevel):
                  "right": horizontal and vertical and abs(x - box.x1) <= tolerance,
                  "bottom": horizontal and vertical and abs(y - box.y0) <= tolerance,
                  "top": horizontal and vertical and abs(y - box.y1) <= tolerance}
-        return any(hit and self.ax.spines[name].get_visible()
-                   for name, hit in sides.items())
+        for name, hit in sides.items():
+            if hit and self.ax.spines[name].get_visible():
+                return name
+        return None
+
+    def frame_axis_at(self, x, y):
+        """Which axis the frame line under the pointer belongs to.
+
+        The horizontal lines (the X axis and the top of the frame) carry the
+        width of the diagram, the vertical ones its height.
+        """
+        side = self.frame_side_at(x, y)
+        if side is None:
+            return None
+        return "x" if side in ("bottom", "top") else "y"
+
+    def frame_hit(self, x, y):
+        """True when the pointer is on one of the visible frame sides."""
+        return self.frame_side_at(x, y) is not None
+
+    # -- the axes are resized by their two ends ----------------------------
+    def axis_handle_positions(self, which):
+        """The two ends of one axis, in the coordinates of the plot area."""
+        return [(0.0, 0.0), (1.0, 0.0)] if which == "x" else [(0.0, 0.0), (0.0, 1.0)]
+
+    def _figure_point(self, event):
+        """The pointer as a fraction of the whole figure."""
+        point = self.fig.transFigure.inverted().transform((event.x, event.y))
+        return (float(point[0]), float(point[1]))
+
+    def resize_axis(self, which, index, point):
+        """Pull one end of an axis: the plot area grows or shrinks there."""
+        cfg = dict(self.frame_cfg)
+        left, bottom = float(cfg["left"]), float(cfg["bottom"])
+        width, height = float(cfg["x_length"]), float(cfg["y_length"])
+        if which == "x":
+            if index == 0:                      # the left end moves
+                right = left + width
+                left = min(max(0.02, point[0]), right - MIN_AXIS_SIZE)
+                width = right - left
+            else:                               # the right end moves
+                width = min(max(MIN_AXIS_SIZE, point[0] - left), 0.995 - left)
+        else:
+            if index == 0:                      # the bottom end moves
+                top = bottom + height
+                bottom = min(max(0.02, point[1]), top - MIN_AXIS_SIZE)
+                height = top - bottom
+            else:                               # the top end moves
+                height = min(max(MIN_AXIS_SIZE, point[1] - bottom), 0.995 - bottom)
+        cfg.update({"left": left, "bottom": bottom,
+                    "x_length": width, "y_length": height})
+        self.apply_frame(cfg)
+        return cfg
+
+    def move_axes(self, dx_pixels, dy_pixels):
+        """Shift the whole plot area, keeping its size (the arrow keys)."""
+        cfg = dict(self.frame_cfg)
+        width = float(self.fig.get_figwidth() * self.fig.get_dpi())
+        height = float(self.fig.get_figheight() * self.fig.get_dpi())
+        if width <= 0 or height <= 0:
+            return False
+        left = float(cfg["left"]) + float(dx_pixels) / width
+        bottom = float(cfg["bottom"]) + float(dy_pixels) / height
+        cfg["left"] = min(max(0.02, left), 0.995 - float(cfg["x_length"]))
+        cfg["bottom"] = min(max(0.02, bottom), 0.995 - float(cfg["y_length"]))
+        self.apply_frame(cfg)
+        return True
 
     def _axis_hit(self, event):
         """Which axis region (tick labels / axis label) was clicked?"""
@@ -5803,21 +6039,23 @@ properties at once.
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
-| Drag a control point | Resizes a drawing, or moves the tip or the tail of an arrow. |
-| Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps. |
+| Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
+| Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
 | `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
-| Click the frame (any axis line) twice | Frame and origin settings. |
+| Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
+| Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
+| Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
-| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
+| Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
 | Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, paste and delete of the selected object, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
 
-### Drawing rectangles, triangles, circles and ellipses
+### Drawing rectangles, triangles, circles, ellipses and lines
 
 The button next to **T** is the drawing tool.  Its icon shows the shape
 that will be drawn, with a small arrow in its lower right corner:
@@ -5825,8 +6063,8 @@ that will be drawn, with a small arrow in its lower right corner:
 * clicking the **icon** starts drawing with the shape that is shown (a
   rectangle at the first start, later whatever was used last),
 * clicking the **arrow** opens the list `Rectangle`, `Triangle`, `Circle`,
-  `Ellipse`; after choosing one the tool is armed with it and the icon
-  changes to that shape.
+  `Ellipse`, `Line`; after choosing one the tool is armed with it and the
+  icon changes to that shape.
 
 While the tool is armed the button stays pressed and the pointer becomes a
 cross.  Press in the diagram and drag: the object is drawn between the
@@ -5840,18 +6078,53 @@ An object that was drawn behaves like the other decorations:
   points** appear on its corners and on the middle of its sides; dragging
   one of them **resizes** the object (the pointer becomes a resize cross),
 * dragging the object itself **moves** it, and so do the arrow keys,
-* a **second click** opens its **properties**: line style (solid, dashed,
-  dash-dot, dotted, none), line thickness, line colour, fill colour with an
-  opacity, or `No fill (outline only)`, and a `Delete` button,
+* a **second click** opens its **properties**, where the name of the `Line`
+  and of the `Fill` section is its own **check button**: switched off, that
+  part of the object is simply not drawn (so the style lists have no "None"
+  entry, and the settings are remembered while a section is off).  The
+  sections hold the line style (solid, dashed, dash-dot, dotted), the line
+  thickness and colour, the fill colour with an opacity, the rotation, and
+  a `Delete` button,
 * clicking an empty part of the diagram deselects it,
 * a circle keeps its round shape: its height follows its width and the
   proportions of the plot area,
+* a **line** is drawn between the two points of the drag and is clicked on
+  the stroke itself, not anywhere in its bounding box.  It behaves like an
+  arrow: it has **two control points**, one on each end, dragging either of
+  them changes the length and the direction, and holding **Shift** while
+  drawing it or while dragging an end keeps it at 45 degree steps (exactly
+  horizontal, vertical or diagonal).  It has no fill and no rotation of its
+  own, so its property window has only the `Line` section,
 * it can be **turned** to any angle: see below.
 
 The positions and sizes are kept in the coordinates of the plot area, so
 the objects follow the diagram when the window is resized, and they are
 stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
+
+### Resizing the axes with the pointer
+
+The plot area does not have to be sized in a dialog: **click an axis line**
+and a small square control point appears on each of its two ends.
+
+* The **X axis** (the horizontal line) gets its points on the left and on
+  the right end.  Dragging the right one makes the diagram wider or
+  narrower and leaves the origin where it is; dragging the left one moves
+  the origin and keeps the right end in place.
+* The **Y axis** (the vertical line) gets its points at the bottom and at
+  the top, and they work the same way upwards.
+* The lines of a full frame belong to the same two axes: the horizontal
+  ones carry the width, the vertical ones the height.
+* The arrow keys move the **whole plot area** while an axis is selected
+  (`Shift`: ten pixels), keeping its size.
+* Everything in the diagram - the curves, the legend boxes, the text
+  boxes, the drawings and the arrows - keeps its place inside the plot
+  area and follows it.
+* Clicking the selected axis line **again** opens `Frame and origin`, where
+  the same numbers can be typed in fractions, centimetres or inches; the
+  dialog always shows what the pointer has made.
+* The size is kept in fractions of the window, so it survives a resize of
+  the diagram window, and it is stored in `.aplt` files.
 
 ### Turning the drawings and the text boxes
 
@@ -5872,7 +6145,8 @@ rectangle with square corners, a circle stays round, and a text stays
 readable.  Everything else keeps working on a turned object:
 
 * the eight square control points turn with it, and dragging one of them
-  keeps the opposite corner exactly where it is,
+  keeps the opposite corner exactly where it is (a line has two control
+  points instead, one on each end),
 * the pointer finds the object where it is really drawn, so a turned
   rectangle is not clicked by the empty corner beside it,
 * moving with the pointer or with the arrow keys, copying, pasting and
@@ -5980,9 +6254,10 @@ A text box behaves like a legend box:
 * **click** it to select it - it turns blue - and **drag** it with the
   pointer to move it (the pointer becomes a move cross over it), or move it
   with the arrow keys,
-* **click it again** to open its dialog: text, font size, font colour, the
-  frame around it (its colour, or no frame) and the background (a colour,
-  or fully transparent),
+* **click it again** to open its dialog: text, font size, font colour, and
+  the `Surrounding box` section - the name of that section is a **check
+  button**, so switching it off leaves the frame away, while its colour and
+  the background (a colour, or fully transparent) stay inside it,
 * `Delete` in that dialog - or an empty text - removes the box,
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,

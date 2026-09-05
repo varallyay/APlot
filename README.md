@@ -189,21 +189,23 @@ properties at once.
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
-| Drag a control point | Resizes a drawing, or moves the tip or the tail of an arrow. |
-| Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps. |
+| Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
+| Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
 | `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
-| Click the frame (any axis line) twice | Frame and origin settings. |
+| Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
+| Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
+| Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
-| Hold Shift while drawing or resizing an arrow | Keeps the arrow horizontal, vertical or at 45, 135, 225, 315 degrees. |
+| Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
 | Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, paste and delete of the selected object, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
 
-### Drawing rectangles, triangles, circles and ellipses
+### Drawing rectangles, triangles, circles, ellipses and lines
 
 The button next to **T** is the drawing tool.  Its icon shows the shape
 that will be drawn, with a small arrow in its lower right corner:
@@ -211,8 +213,8 @@ that will be drawn, with a small arrow in its lower right corner:
 * clicking the **icon** starts drawing with the shape that is shown (a
   rectangle at the first start, later whatever was used last),
 * clicking the **arrow** opens the list `Rectangle`, `Triangle`, `Circle`,
-  `Ellipse`; after choosing one the tool is armed with it and the icon
-  changes to that shape.
+  `Ellipse`, `Line`; after choosing one the tool is armed with it and the
+  icon changes to that shape.
 
 While the tool is armed the button stays pressed and the pointer becomes a
 cross.  Press in the diagram and drag: the object is drawn between the
@@ -226,18 +228,53 @@ An object that was drawn behaves like the other decorations:
   points** appear on its corners and on the middle of its sides; dragging
   one of them **resizes** the object (the pointer becomes a resize cross),
 * dragging the object itself **moves** it, and so do the arrow keys,
-* a **second click** opens its **properties**: line style (solid, dashed,
-  dash-dot, dotted, none), line thickness, line colour, fill colour with an
-  opacity, or `No fill (outline only)`, and a `Delete` button,
+* a **second click** opens its **properties**, where the name of the `Line`
+  and of the `Fill` section is its own **check button**: switched off, that
+  part of the object is simply not drawn (so the style lists have no "None"
+  entry, and the settings are remembered while a section is off).  The
+  sections hold the line style (solid, dashed, dash-dot, dotted), the line
+  thickness and colour, the fill colour with an opacity, the rotation, and
+  a `Delete` button,
 * clicking an empty part of the diagram deselects it,
 * a circle keeps its round shape: its height follows its width and the
   proportions of the plot area,
+* a **line** is drawn between the two points of the drag and is clicked on
+  the stroke itself, not anywhere in its bounding box.  It behaves like an
+  arrow: it has **two control points**, one on each end, dragging either of
+  them changes the length and the direction, and holding **Shift** while
+  drawing it or while dragging an end keeps it at 45 degree steps (exactly
+  horizontal, vertical or diagonal).  It has no fill and no rotation of its
+  own, so its property window has only the `Line` section,
 * it can be **turned** to any angle: see below.
 
 The positions and sizes are kept in the coordinates of the plot area, so
 the objects follow the diagram when the window is resized, and they are
 stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
+
+### Resizing the axes with the pointer
+
+The plot area does not have to be sized in a dialog: **click an axis line**
+and a small square control point appears on each of its two ends.
+
+* The **X axis** (the horizontal line) gets its points on the left and on
+  the right end.  Dragging the right one makes the diagram wider or
+  narrower and leaves the origin where it is; dragging the left one moves
+  the origin and keeps the right end in place.
+* The **Y axis** (the vertical line) gets its points at the bottom and at
+  the top, and they work the same way upwards.
+* The lines of a full frame belong to the same two axes: the horizontal
+  ones carry the width, the vertical ones the height.
+* The arrow keys move the **whole plot area** while an axis is selected
+  (`Shift`: ten pixels), keeping its size.
+* Everything in the diagram - the curves, the legend boxes, the text
+  boxes, the drawings and the arrows - keeps its place inside the plot
+  area and follows it.
+* Clicking the selected axis line **again** opens `Frame and origin`, where
+  the same numbers can be typed in fractions, centimetres or inches; the
+  dialog always shows what the pointer has made.
+* The size is kept in fractions of the window, so it survives a resize of
+  the diagram window, and it is stored in `.aplt` files.
 
 ### Turning the drawings and the text boxes
 
@@ -258,7 +295,8 @@ rectangle with square corners, a circle stays round, and a text stays
 readable.  Everything else keeps working on a turned object:
 
 * the eight square control points turn with it, and dragging one of them
-  keeps the opposite corner exactly where it is,
+  keeps the opposite corner exactly where it is (a line has two control
+  points instead, one on each end),
 * the pointer finds the object where it is really drawn, so a turned
   rectangle is not clicked by the empty corner beside it,
 * moving with the pointer or with the arrow keys, copying, pasting and
@@ -366,9 +404,10 @@ A text box behaves like a legend box:
 * **click** it to select it - it turns blue - and **drag** it with the
   pointer to move it (the pointer becomes a move cross over it), or move it
   with the arrow keys,
-* **click it again** to open its dialog: text, font size, font colour, the
-  frame around it (its colour, or no frame) and the background (a colour,
-  or fully transparent),
+* **click it again** to open its dialog: text, font size, font colour, and
+  the `Surrounding box` section - the name of that section is a **check
+  button**, so switching it off leaves the frame away, while its colour and
+  the background (a colour, or fully transparent) stay inside it,
 * `Delete` in that dialog - or an empty text - removes the box,
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,
