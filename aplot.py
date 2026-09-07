@@ -1654,68 +1654,92 @@ class AxisTab(ttk.Frame):
     # -- construction ------------------------------------------------------
     def _section(self, title, variable, **pack):
         """A section whose title is its own check button."""
-        box = ttk.LabelFrame(self, padding=8)
+        box = ttk.LabelFrame(self, padding=6)
         check = ttk.Checkbutton(box, text=title, variable=variable)
         box.configure(labelwidget=check)
         box.pack(fill="x", **pack)
         return box, check
 
+    @staticmethod
+    def _pair(box, row, first_text, first_widget, second_text, second_widget,
+              pady=3):
+        """Two settings on one line: label, widget, label, widget."""
+        ttk.Label(box, text=first_text).grid(row=row, column=0, sticky="w",
+                                             padx=(0, 4), pady=pady)
+        first_widget.grid(row=row, column=1, sticky="w", pady=pady)
+        ttk.Label(box, text=second_text).grid(row=row, column=2, sticky="w",
+                                              padx=(16, 4), pady=pady)
+        second_widget.grid(row=row, column=3, sticky="w", pady=pady)
+        return first_widget, second_widget
+
+    @staticmethod
+    def _wide(widget, row, pady=(4, 2)):
+        """One widget across the whole width of a section."""
+        widget.grid(row=row, column=0, columnspan=4, sticky="ew", pady=pady)
+        return widget
+
     def _build_label_box(self):
         """The axis label: its text, its font and how far it sits."""
         box, check = self._section("Axis label and fonts", self.label_on_var)
         self.label_box, self.label_check = box, check
-        ToolDialog.field(box, 0, "Label text:",
-                         ttk.Entry(box, textvariable=self.label_var, width=30))
-        ToolDialog.field(box, 1, "Label font size:",
-                         ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
-                                     textvariable=self.label_size_var))
+        ttk.Label(box, text="Label text:").grid(row=0, column=0, sticky="w",
+                                                padx=(0, 4), pady=3)
+        # the text field reaches across the whole section, so the colour of
+        # the row below it does not get pushed to the far right
+        ttk.Entry(box, textvariable=self.label_var, width=30).grid(
+            row=0, column=1, columnspan=3, sticky="ew", pady=3)
+        # the size and the colour of the label stand side by side
         self.label_color = ColorSwatch(box, self._label_color)
-        ToolDialog.field(box, 2, "Label font colour:", self.label_color)
-        ToolDialog.field(box, 3, "Label distance from the axis [px]:",
-                         ttk.Spinbox(box, from_=-200, to=400, increment=1, width=8,
+        self._pair(box, 1,
+                   "Label font size:",
+                   ttk.Spinbox(box, from_=4, to=48, increment=1, width=4,
+                               textvariable=self.label_size_var),
+                   "Colour:", self.label_color)
+        ToolDialog.field(box, 2, "Label offset [px]:",
+                         ttk.Spinbox(box, from_=-200, to=400, increment=1, width=4,
                                      textvariable=self.label_pad_var))
-        ttk.Label(box, foreground="#666", justify="left",
-                  text="Switch the section off to leave the label away.").grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self._wide(ttk.Label(box, foreground="#666", justify="left",
+                             text="Switch the section off to leave the label "
+                                  "away."), 3)
 
     def _build_range_box(self):
         """The numbers on the axis: their font, the range and the ticks."""
         box, check = self._section("Tick range, labels and fonts",
                                    self.ticks_on_var, pady=(10, 0))
         self.range_box, self.ticks_check = box, check
-        ToolDialog.field(box, 0, "Numbers (ticks) font size:",
-                         ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
-                                     textvariable=self.tick_size_var))
+        # the size and the colour of the numbers stand side by side
         self.tick_color = ColorSwatch(box, self._tick_color)
-        ToolDialog.field(box, 1, "Numbers (ticks) font colour:", self.tick_color)
-        ToolDialog.field(box, 2, "Numbers distance from the axis [px]:",
-                         ttk.Spinbox(box, from_=-200, to=400, increment=1, width=8,
+        self._pair(box, 0,
+                   "Numbers (ticks) font size:",
+                   ttk.Spinbox(box, from_=2, to=46, increment=1, width=4,
+                               textvariable=self.tick_size_var),
+                   "Colour:", self.tick_color)
+        ToolDialog.field(box, 1, "Numbers offset [px]:",
+                         ttk.Spinbox(box, from_=-200, to=400, increment=1, width=4,
                                      textvariable=self.tick_pad_var))
-        ttk.Separator(box, orient="horizontal").grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(8, 6))
-        ttk.Checkbutton(box, text="Automatic range and ticks",
-                        variable=self.auto_var, command=self._toggle_auto
-                        ).grid(row=4, column=0, columnspan=2, sticky="w",
-                               pady=(0, 4))
-        self.min_entry = ToolDialog.field(
-            box, 5, "From:", ttk.Entry(box, textvariable=self.min_var, width=12))
-        self.max_entry = ToolDialog.field(
-            box, 6, "To:", ttk.Entry(box, textvariable=self.max_var, width=12))
+        self._wide(ttk.Separator(box, orient="horizontal"), 2, pady=(8, 6))
+        self._wide(ttk.Checkbutton(box, text="Automatic range and ticks",
+                                   variable=self.auto_var,
+                                   command=self._toggle_auto), 3, pady=(0, 4))
+        # the two ends of the range share one line
+        self.min_entry, self.max_entry = self._pair(
+            box, 4,
+            "From:", ttk.Entry(box, textvariable=self.min_var, width=12),
+            "To:", ttk.Entry(box, textvariable=self.max_var, width=12))
         self.step_entry = ToolDialog.field(
-            box, 7, "Step (major ticks):",
+            box, 5, "Step (major ticks):",
             ttk.Entry(box, textvariable=self.step_var, width=12))
-        ToolDialog.field(box, 8, "Minor ticks between majors:",
-                         ttk.Spinbox(box, from_=0, to=20, increment=1, width=8,
+        ToolDialog.field(box, 6, "Minor ticks between majors:",
+                         ttk.Spinbox(box, from_=0, to=20, increment=1, width=4,
                                      textvariable=self.minor_var))
-        ttk.Separator(box, orient="horizontal").grid(
-            row=9, column=0, columnspan=2, sticky="ew", pady=(8, 6))
+        self._wide(ttk.Separator(box, orient="horizontal"), 7, pady=(8, 6))
         self.axis_color = ColorSwatch(box, self._axis_color)
-        ToolDialog.field(box, 10, "Axis colour:", self.axis_color)
-        ttk.Label(box, foreground="#666", justify="left",
-                  text="The colour of this axis line and of its tick marks.\n"
-                       "Switch the section off to leave the numbers and both\n"
-                       "kinds of tick marks away.").grid(
-            row=11, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ToolDialog.field(box, 8, "Axis colour:", self.axis_color)
+        self._wide(ttk.Label(
+            box, foreground="#666", justify="left",
+            text="The colour of this axis line and of its tick marks.\n"
+                 "Switch the section off to leave the numbers and both\n"
+                 "kinds of tick marks away."), 9)
 
     def _build_grid_box(self, color):
         """The grid: the section title switches the major lines on."""
@@ -1723,7 +1747,7 @@ class AxisTab(ttk.Frame):
                                    pady=(10, 0))
         self.grid_box, self.grid_check = box, check
         ttk.Checkbutton(box, text="Minor grid lines", variable=self.gminor_var
-                        ).grid(row=0, column=0, columnspan=2, sticky="w")
+                        ).grid(row=0, column=0, columnspan=4, sticky="w")
         self.grid_color = ColorSwatch(box, color)
         ToolDialog.field(box, 1, "Colour:", self.grid_color)
         ToolDialog.field(box, 2, "Style:",
@@ -1731,11 +1755,11 @@ class AxisTab(ttk.Frame):
                                       state="readonly", values=names(GRID_STYLES),
                                       width=12))
         ToolDialog.field(box, 3, "Width:",
-                         ttk.Spinbox(box, from_=0.2, to=5, increment=0.2, width=8,
+                         ttk.Spinbox(box, from_=0.2, to=5, increment=0.2, width=4,
                                      textvariable=self.gwidth_var))
-        ttk.Label(box, foreground="#666", justify="left",
-                  text="The section title draws the major grid lines.").grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self._wide(ttk.Label(
+            box, foreground="#666", justify="left",
+            text="The section title draws the major grid lines."), 4)
 
     # -- behaviour ---------------------------------------------------------
     def _toggle_auto(self):
@@ -7426,19 +7450,20 @@ own check button**:
 
 **Axis label and fonts** (switched on)
 
-* the label **text**, its **font size**, its **font colour** and its
-  **distance** from the axis in pixels - larger values push it away from
-  the diagram, negative values pull it inwards.
+* the label **text**, then its **font size** with the **Colour** of the
+  label next to it on the same line, and its **distance** from the axis in
+  pixels - larger values push it away from the diagram, negative values
+  pull it inwards.
 * Switching the section **off** makes the label disappear; the text is
   remembered, so switching it on again brings it back unchanged.
 
 **Tick range, labels and fonts** (switched on)
 
-* the **font size**, **font colour** and **distance** of the numbers
-  (measured from the end of the tick marks),
-* **Automatic range and ticks**, or an explicit `From`, `To` and `Step` for
-  the major ticks, plus the number of **minor ticks** between two major
-  ticks,
+* the **font size** of the numbers with their **Colour** next to it, and
+  their **distance** (measured from the end of the tick marks),
+* **Automatic range and ticks**, or an explicit range - `From` and `To`
+  side by side on one line - and a `Step` for the major ticks, plus the
+  number of **minor ticks** between two major ticks,
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click

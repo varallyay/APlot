@@ -653,19 +653,20 @@ own check button**:
 
 **Axis label and fonts** (switched on)
 
-* the label **text**, its **font size**, its **font colour** and its
-  **distance** from the axis in pixels - larger values push it away from
-  the diagram, negative values pull it inwards.
+* the label **text**, then its **font size** with the **Colour** of the
+  label next to it on the same line, and its **distance** from the axis in
+  pixels - larger values push it away from the diagram, negative values
+  pull it inwards.
 * Switching the section **off** makes the label disappear; the text is
   remembered, so switching it on again brings it back unchanged.
 
 **Tick range, labels and fonts** (switched on)
 
-* the **font size**, **font colour** and **distance** of the numbers
-  (measured from the end of the tick marks),
-* **Automatic range and ticks**, or an explicit `From`, `To` and `Step` for
-  the major ticks, plus the number of **minor ticks** between two major
-  ticks,
+* the **font size** of the numbers with their **Colour** next to it, and
+  their **distance** (measured from the end of the tick marks),
+* **Automatic range and ticks**, or an explicit range - `From` and `To`
+  side by side on one line - and a `Step` for the major ticks, plus the
+  number of **minor ticks** between two major ticks,
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click
