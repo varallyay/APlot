@@ -40,29 +40,53 @@ Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
 `File` menu.
 
-### Which columns are plotted
+### Which columns are plotted, and against which axis
 
-Above the column headings there is a row of **check buttons**, one for each
-column:
+Above the column headings there is a strip with **two check buttons for
+every column**, side by side:
 
-* every column is ticked when a file is opened, when random data is
-  generated and when the program starts, so `Plot` draws everything;
-* unticking a column leaves it out of the diagram - the data stays in the
-  table, it is simply not drawn;
-* the check button of the **first column** is fixed: that column is the X
-  axis of every curve;
-* `Plot` opens a diagram of the ticked columns only, and `Update plot`
-  follows the ticks - a column that was unticked disappears from the open
-  diagrams, and a column that is ticked again comes back, while the other
-  curves keep every style setting;
+| Above | The two boxes | What they mean |
+| --- | --- | --- |
+| the first column | `x_B` and `x_T` | the **bottom** and the **top** X axis |
+| every other column | `y_L` and `y_R` | the **left** and the **right** Y axis |
+
+Resting the pointer on any of them pops up its full name - `Bottom x-axis`,
+`Top x-axis`, `Left y-axis`, `Right y-axis` - so the short labels never have
+to be guessed.
+
+The rules are simple:
+
+* **one axis per column.**  Ticking one of the two boxes clears the other
+  one, so a column is never drawn against both axes at once.
+* the **first column** always feeds one of the two X axes: `x_B` is ticked
+  when the data arrives, and clicking `x_T` moves the whole X scale - its
+  numbers and its label - **above** the plot area.  Clicking the ticked box
+  does not switch it off; the data has to have an X axis.
+* every **other column** may have **both boxes empty**: then that column is
+  simply not plotted.  The data stays in the table, it is only left out of
+  the diagram.
+* ticking `y_R` gives that curve **its own scale on the right**, with its
+  own range, its own numbers and its own label.  This is what makes two
+  quantities of completely different size - per cent and counts, degrees and
+  volts - readable in one diagram.
+* `Plot` opens a diagram of the ticked columns, and `Update plot` follows
+  every change: a column that was unticked disappears, one that is ticked
+  again comes back, and moving a tick from `y_L` to `y_R` **moves that curve
+  to the other scale** while it keeps its colour, its line style and its
+  legend box.
 * with nothing ticked the program says so instead of drawing an empty
-  diagram;
+  diagram.
 * the ticks are kept while the table is edited (adding rows, renaming a
-  column, adding a column - a new column starts ticked) and are reset to
-  "all ticked" whenever new data is loaded.
+  column, adding a column - a new column starts on `y_L`) and are reset to
+  the first axis of every column whenever new data is loaded.
+
+The colours are handed out per curve, not per axis, so the first curve on
+the right is **not** painted in the same colour as the first one on the
+left.
 
 A saved `.aplt` file always contains the **whole** table, and the diagrams
-in it keep exactly the curves they had when they were saved.
+in it keep exactly the curves they had when they were saved, each one on
+the axis it was drawn against.
 
 ### Editing cells
 
@@ -251,6 +275,40 @@ The positions and sizes are kept in the coordinates of the plot area, so
 the objects follow the diagram when the window is resized, and they are
 stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
+
+### The second Y axis and the top X axis
+
+The `y_R` and `x_T` check buttons of the spreadsheet (see `Which columns are
+plotted, and against which axis`) give the diagram two more axes:
+
+* the **right hand Y axis** is a scale of its own.  It appears as soon as a
+  curve is drawn against it and goes away again when the last such curve is
+  unticked.  It has its own range, its own numbers, its own label and its
+  own automatic scaling, so a curve of a few tenths and one of tens of
+  thousands can share a diagram and both be readable.
+* the **top X axis** is the same X scale drawn above the plot area instead
+  of below it: the numbers and the axis label move up together, and the top
+  of the frame is drawn even when the frame style is `None`.
+
+Everything else works exactly as on the two original axes:
+
+* `Axes properties` grows a **`Right Y axis`** page next to `X axis` and
+  `Y axis` whenever the right axis is in use - range, step, minor ticks,
+  label, fonts, colours and distances, all of it separately from the left
+  axis.  Its grid is left to the main axes, so no line is drawn twice.
+* a **double click** next to the right hand numbers opens that page, just
+  as a double click under the X numbers opens the `X axis` page; with `x_T`
+  the X region is above the plot area instead of below it.
+* the **right axis label** is a text like any other: one click selects it
+  (blue veil), a slow second click rewrites it in place, a double click
+  opens its dialog, and the arrow keys move it.
+* a **filled area** under a curve on the right is filled on the right hand
+  scale, and `Fill down to the bottom of the axes` means the bottom of that
+  scale.
+* the whole arrangement - which side the X axis is on and which curve
+  belongs to which Y axis - is stored in `.aplt` files.  Files written by
+  an older version load with everything on the bottom and the left, as
+  before.
 
 ### Resizing the axes with the pointer
 

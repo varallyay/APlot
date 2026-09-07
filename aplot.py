@@ -225,6 +225,18 @@ BLOCK_LINE = 2              # thickness of the outline around the block
 AUTO_SCROLL_EDGE = 14       # pixels: how close to the border scrolling starts
 AUTO_SCROLL_MS = 55         # how often the table scrolls on during a drag
 CHECK_BAR_HEIGHT = 26       # the strip of "plot this column" check buttons
+# the two check buttons above every column of the table: they say which axis
+# that column belongs to.  The first column feeds one of the two X axes, all
+# the others one of the two Y axes - or none of them at all.
+AXIS_TAGS = {
+    "x": (("B", "x_B", "Bottom x-axis"), ("T", "x_T", "Top x-axis")),
+    "y": (("L", "y_L", "Left y-axis"), ("R", "y_R", "Right y-axis")),
+}
+X_SIDES = {"B": "bottom", "T": "top"}
+Y_SIDES = {"L": "left", "R": "right"}
+AXIS_NAMES = {"x": "X axis", "y": "Left Y axis", "y2": "Right Y axis"}
+TOOLTIP_DELAY = 250        # milliseconds before a hint pops up
+TOOLTIP_BACKGROUND = "#ffffe0"
 SELECT_FACE = to_rgba(SELECT_COLOR, 0.18)     # veil over a selected text
 SELECT_EDGE = to_rgba(SELECT_COLOR, 0.90)
 SELECT_BOX = {"boxstyle": "round,pad=0.28", "facecolor": SELECT_FACE,
@@ -727,6 +739,84 @@ def set_macos_app_name(name=APP_NAME):
 # --------------------------------------------------------------------------
 # reusable widgets
 # --------------------------------------------------------------------------
+
+class Tooltip:
+    """A small yellow hint that appears while the pointer rests on a widget."""
+
+    def __init__(self, widget, text, delay=TOOLTIP_DELAY):
+        self.widget = widget
+        self.text = str(text)
+        self.delay = int(delay)
+        self._timer = None
+        self._window = None
+        widget.bind("<Enter>", self._entered, add="+")
+        widget.bind("<Leave>", self._left, add="+")
+        widget.bind("<ButtonPress>", self._left, add="+")
+        widget.bind("<Destroy>", self._left, add="+")
+
+    # -- the pointer comes and goes ----------------------------------------
+    def _entered(self, _event=None):
+        self._cancel()
+        try:
+            self._timer = self.widget.after(self.delay, self.show)
+        except tk.TclError:
+            self._timer = None
+
+    def _left(self, _event=None):
+        self._cancel()
+        self.hide()
+
+    def _cancel(self):
+        if self._timer is not None:
+            try:
+                self.widget.after_cancel(self._timer)
+            except tk.TclError:
+                pass
+            self._timer = None
+
+    # -- the hint itself ---------------------------------------------------
+    def visible(self):
+        return bool(self._window is not None and self._window.winfo_exists())
+
+    def show(self):
+        """Show the hint right below the widget; returns the little window."""
+        self._timer = None
+        if self.visible() or not self.text:
+            return self._window
+        try:
+            if not self.widget.winfo_exists():
+                return None
+            x = self.widget.winfo_rootx()
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 3
+            window = tk.Toplevel(self.widget)
+            window.wm_overrideredirect(True)
+            window.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(window, text=self.text, justify="left",
+                             background=TOOLTIP_BACKGROUND, foreground="#000000",
+                             relief="solid", borderwidth=1, padx=5, pady=2)
+            label.pack()
+            self._window = window
+            self.label = label
+        except tk.TclError:
+            self._window = None
+        return self._window
+
+    def hide(self):
+        window, self._window = self._window, None
+        if window is not None:
+            try:
+                if window.winfo_exists():
+                    window.destroy()
+            except tk.TclError:
+                pass
+        return None
+
+    def set_text(self, text):
+        self.text = str(text)
+        if self.visible():
+            self.hide()
+            self.show()
+
 
 class ColorSwatch(ttk.Frame):
     """Colour preview + 'Choose...' button. Cross platform (uses a Canvas)."""
@@ -1792,6 +1882,10 @@ class AxesDialog(ToolDialog):
             tab = AxisTab(notebook, plot, which)
             notebook.add(tab, text=f"{which.upper()} axis")
             self.tabs[which] = tab
+        if plot.right_axis_active():   # only when a curve is drawn there
+            tab = AxisTab(notebook, plot, "y2")
+            notebook.add(tab, text="Right Y axis")
+            self.tabs["y2"] = tab
         self.frame_tab = FrameTab(notebook, plot)
         notebook.add(self.frame_tab, text="Frame and origin")
         self.notebook = notebook
@@ -1805,7 +1899,7 @@ class AxesDialog(ToolDialog):
         self.bind("<Return>", lambda _e: self.apply())
 
     def select_tab(self, which):
-        """which: 'x', 'y' or 'frame'."""
+        """which: 'x', 'y', 'y2' or 'frame'."""
         if which == "frame":
             self.notebook.select(self.frame_tab)
         else:
@@ -1818,7 +1912,7 @@ class AxesDialog(ToolDialog):
                 messagebox.showwarning(
                     "Axis range",
                     f"'From' and 'To' must be different on the "
-                    f"{which.upper()} axis.", parent=self)
+                    f"{AXIS_NAMES.get(which, which.upper())}.", parent=self)
                 return False
             self.plot.apply_axis(which, cfg, redraw=False)
 
@@ -2073,8 +2167,9 @@ class DataTable(ttk.Frame):
         self.check_bar = tk.Frame(self, height=CHECK_BAR_HEIGHT)
         self.check_bar.grid(row=0, column=0, sticky="ew")
         self.check_bar.grid_propagate(False)
-        self.plot_vars: dict = {}       # column name -> BooleanVar
-        self._checks: dict = {}         # column name -> Checkbutton
+        # column name -> {"B"/"T" or "L"/"R": BooleanVar} and the two widgets
+        self.axis_vars: dict = {}
+        self._checks: dict = {}
 
         self.tree.grid(row=1, column=0, sticky="nsew")
         v_scroll.grid(row=1, column=1, sticky="ns")
@@ -2092,32 +2187,71 @@ class DataTable(ttk.Frame):
         self._bind_grid_keys()
         self.apply_config()
 
-    # -- which columns are plotted -----------------------------------------
+    # -- which columns are plotted, and against which axis ------------------
+    def _is_x_column(self, name):
+        columns = [str(one) for one in self.df.columns]
+        return bool(columns) and str(name) == columns[0]
+
+    def _axis_family(self, index):
+        """The first column belongs to the X axes, every other one to the Y."""
+        return "x" if index == 0 else "y"
+
     def _build_checks(self, check_all=False):
-        """One check button per column, in the strip above the headings."""
+        """Two check buttons per column, in the strip above the headings.
+
+        Above the first column they read `x_B` and `x_T` - the bottom and the
+        top X axis - and exactly one of them is always ticked.  Above every
+        other column they read `y_L` and `y_R`: the left and the right Y
+        axis.  There at most one can be ticked, and both may be empty when
+        the column is not plotted at all.
+        """
         wanted = [str(name) for name in self.df.columns]
-        previous = dict(self.plot_vars)
-        for widget in list(self._checks.values()):
-            widget.destroy()
+        previous = {name: self.column_axis(name) for name in self.axis_vars}
+        for widgets in self._checks.values():
+            for widget in widgets.values():
+                widget.destroy()
         self._checks.clear()
-        self.plot_vars = {}
+        self.axis_vars = {}
         for index, name in enumerate(wanted):
-            value = True
-            if not check_all and name in previous:
-                value = bool(previous[name].get())
-            variable = tk.BooleanVar(value=value)
-            check = ttk.Checkbutton(self.check_bar, variable=variable,
-                                    takefocus=False, text="",
-                                    command=self._checks_changed)
-            if index == 0:              # the X column is always plotted
-                variable.set(True)
-                check.state(["disabled"])
-            self.plot_vars[name] = variable
-            self._checks[name] = check
+            family = self._axis_family(index)
+            first_code = AXIS_TAGS[family][0][0]
+            if check_all or name not in previous:
+                chosen = first_code            # a new column: the first axis
+            else:
+                chosen = previous[name]        # keep the choice, "none" too
+            if family == "x" and chosen not in X_SIDES:
+                chosen = "B"                   # the X column always feeds one
+            variables, widgets = {}, {}
+            for code, text, hint in AXIS_TAGS[family]:
+                variable = tk.BooleanVar(value=(code == chosen))
+                check = ttk.Checkbutton(
+                    self.check_bar, variable=variable, text=text,
+                    takefocus=False, style="APlot.Axis.TCheckbutton",
+                    command=lambda n=name, c=code: self._axis_clicked(n, c))
+                check.tooltip = Tooltip(check, hint)
+                variables[code] = variable
+                widgets[code] = check
+            self.axis_vars[name] = variables
+            self._checks[name] = widgets
         self._place_checks()
 
+    def _axis_clicked(self, name, code):
+        """One axis per column: ticking one check button clears the other."""
+        variables = self.axis_vars.get(str(name)) or {}
+        variable = variables.get(code)
+        if variable is None:
+            return
+        if variable.get():                      # it was just switched on
+            for other, one in variables.items():
+                if other != code:
+                    one.set(False)
+        elif self._is_x_column(name):
+            variable.set(True)         # the data has to have an X axis
+            return                     # nothing changed: no replot needed
+        self._changed()
+
     def _place_checks(self):
-        """Put every check button over the middle of its own column."""
+        """Put the two check buttons of every column over its middle."""
         if not self._checks:
             return
         rows = self.tree.get_children()
@@ -2127,7 +2261,7 @@ class DataTable(ttk.Frame):
         except tk.TclError:
             offset = 0
         width = self.check_bar.winfo_width() or self.winfo_width()
-        for index, (name, check) in enumerate(self._checks.items()):
+        for index, (name, widgets) in enumerate(self._checks.items()):
             box = None
             for row in rows:            # a visible row gives the exact place
                 box = self.tree.bbox(row, f"#{index + 1}")
@@ -2135,14 +2269,19 @@ class DataTable(ttk.Frame):
                     break
             if not box:
                 box = self._column_span(index)
+            pair = list(widgets.values())
             if box is None:
-                check.place_forget()
+                for check in pair:
+                    check.place_forget()
                 continue
             x = offset + box[0] + box[2] / 2
             if x < 0 or (width and x > width):
-                check.place_forget()
+                for check in pair:
+                    check.place_forget()
                 continue
-            check.place(x=int(x), y=CHECK_BAR_HEIGHT // 2, anchor="center")
+            middle = CHECK_BAR_HEIGHT // 2
+            pair[0].place(x=int(x) - 2, y=middle, anchor="e")
+            pair[1].place(x=int(x) + 2, y=middle, anchor="w")
 
     def _column_span(self, index):
         """(x, y, width, height) of one column when no row is visible."""
@@ -2160,20 +2299,58 @@ class DataTable(ttk.Frame):
         return (int(start - first * total), 0,
                 int(self.tree.column(columns[index], "width")), 0)
 
-    def _checks_changed(self):
+    def column_axis(self, name):
+        """"B"/"T" for the X column, "L"/"R" for a Y column, None if unused."""
+        for code, variable in (self.axis_vars.get(str(name)) or {}).items():
+            try:
+                if bool(variable.get()):
+                    return code
+            except tk.TclError:
+                return None
+        return None
+
+    def set_column_axis(self, name, code):
+        """Tick one of the two check buttons of a column (None: neither)."""
+        variables = self.axis_vars.get(str(name))
+        if variables is None:
+            return False
+        if code is not None and code not in variables:
+            return False
+        for one, variable in variables.items():
+            variable.set(one == code)
+        if code is None and self._is_x_column(name):
+            variables["B"].set(True)       # the X column keeps an axis
         self._changed()
+        return True
+
+    def axis_check(self, name, code):
+        """The check button widget itself - used by the hints and the tests."""
+        return (self._checks.get(str(name)) or {}).get(code)
 
     def plot_columns(self):
-        """The X column plus every Y column whose check button is ticked."""
+        """The X column plus every Y column that has an axis ticked."""
         names = [str(name) for name in self.df.columns]
         if not names:
             return []
         chosen = [names[0]]
         for name in names[1:]:
-            variable = self.plot_vars.get(name)
-            if variable is None or bool(variable.get()):
+            if self.column_axis(name) in Y_SIDES:
                 chosen.append(name)
         return chosen
+
+    def plot_layout(self):
+        """Which axis every plotted column belongs to."""
+        names = [str(name) for name in self.df.columns]
+        if not names:
+            return {"x": None, "x_side": "bottom", "y": {}}
+        x_name = names[0]
+        x_side = X_SIDES.get(self.column_axis(x_name) or "B", "bottom")
+        sides = {}
+        for name in names[1:]:
+            code = self.column_axis(name)
+            if code in Y_SIDES:
+                sides[name] = Y_SIDES[code]
+        return {"x": x_name, "x_side": x_side, "y": sides}
 
     def plot_dataframe(self):
         """The data of the ticked columns only."""
@@ -2183,16 +2360,23 @@ class DataTable(ttk.Frame):
         return self.df[columns].copy()
 
     def set_plot_column(self, name, plotted=True):
-        variable = self.plot_vars.get(str(name))
-        if variable is None:
+        """Plot this column on its first axis, or not at all."""
+        if not plotted and self._is_x_column(name):
             return False
-        variable.set(bool(plotted))
-        self._changed()
-        return True
+        if plotted:
+            index = [str(one) for one in self.df.columns].index(str(name)) \
+                if str(name) in [str(one) for one in self.df.columns] else 1
+            return self.set_column_axis(name,
+                                        AXIS_TAGS[self._axis_family(index)][0][0])
+        return self.set_column_axis(name, None)
 
     def check_all_columns(self):
-        for name, variable in self.plot_vars.items():
-            variable.set(True)
+        """Every column on its first axis: the bottom X and the left Y."""
+        for index, name in enumerate(self._checks):
+            variables = self.axis_vars[name]
+            first = AXIS_TAGS[self._axis_family(index)][0][0]
+            for code, variable in variables.items():
+                variable.set(code == first)
         self._changed()
 
     # -- the highlighted block of cells ------------------------------------
@@ -2456,6 +2640,9 @@ class DataTable(ttk.Frame):
         self.style.configure("APlot.Treeview", font=("TkDefaultFont", size),
                              rowheight=int(size * 2.2))
         self.style.configure("APlot.Treeview.Heading", font=("TkDefaultFont", size))
+        # the little x_B / x_T / y_L / y_R switches above the columns
+        self.style.configure("APlot.Axis.TCheckbutton",
+                             font=("TkDefaultFont", max(7, size - 2)), padding=0)
         width = max(40, int(self.config_obj.get("table", "column_width")))
         for column in self.tree["columns"]:
             self.tree.column(column, width=width)
@@ -3187,7 +3374,8 @@ class PlotWindow(tk.Toplevel):
             f"{ACCEL_NAME}+C / {ACCEL_NAME}+V: copy and paste   |   "
             "Arrow keys: move   |   Delete: remove")
 
-    def __init__(self, master, df: pd.DataFrame, config: Config, app=None):
+    def __init__(self, master, df: pd.DataFrame, config: Config, app=None,
+                 layout=None):
         super().__init__(master)
         self.title("Interactive Graph")
         self.settings = config
@@ -3202,6 +3390,13 @@ class PlotWindow(tk.Toplevel):
         self.series: dict = {}          # Y column name -> curve
         self.x_col = str(df.columns[0]) if len(df.columns) else ""
         self.legends: dict = {}         # Y column name -> its own legend box
+        # which axis every column belongs to: the single X column feeds the
+        # bottom or the top X axis, every curve the left or the right Y axis
+        self.layout = self._clean_layout(df, layout)
+        self.x_side = self.layout["x_side"]
+        self.series_axis: dict = {}     # Y column name -> "left" / "right"
+        self._color_index = 0           # one colour per curve, on both axes
+        self.ax2 = None                 # the right hand Y axis, when it is used
         self.legend_state: dict = {}    # Y column name -> {pos, loc, size, ...}
         self.fills: dict = {}           # Y column name -> filled area
         self.fill_state: dict = {}      # Y column name -> fill settings
@@ -3237,7 +3432,8 @@ class PlotWindow(tk.Toplevel):
         self.arrow_head = code_of(ARROW_HEADS,
                                   config.get("arrow", "head"), "triangle")
         # how far the title and the axis labels were dragged, in pixels
-        self.text_offset = {"title": (0.0, 0.0), "x": (0.0, 0.0), "y": (0.0, 0.0)}
+        self.text_offset = {"title": (0.0, 0.0), "x": (0.0, 0.0),
+                            "y": (0.0, 0.0), "y2": (0.0, 0.0)}
         self._text_base = {}
         self._cursor = ""
         self._dpi = float(plot_cfg["dpi"])
@@ -3262,7 +3458,7 @@ class PlotWindow(tk.Toplevel):
                     "label_pad": float(self.fonts["axis_label_pad"]),
                     "tick_pad": float(self.fonts["tick_label_pad"]),
                     "grid": dict(grid_defaults)}
-            for which in ("x", "y")
+            for which in ("x", "y", "y2")
         }
 
         self.fig = Figure(figsize=(plot_cfg["fig_width"], plot_cfg["fig_height"]),
@@ -3470,6 +3666,121 @@ class PlotWindow(tk.Toplevel):
         self.bind("<FocusOut>", lambda _e: setattr(self, "_shift_down", False),
                   add="+")
 
+    # -- the four axes: bottom / top X, left / right Y ----------------------
+    @staticmethod
+    def _clean_layout(df, layout):
+        """Which axis every column of the data belongs to, safely defaulted."""
+        columns = [str(one) for one in df.columns]
+        given = layout or {}
+        side = "top" if str(given.get("x_side")) == "top" else "bottom"
+        raw = given.get("y") or {}
+        sides = {name: ("right" if str(raw.get(name, "left")) == "right"
+                        else "left")
+                 for name in columns[1:]}
+        return {"x": columns[0] if columns else None,
+                "x_side": side, "y": sides}
+
+    def plot_axes(self):
+        """Every axes that can carry curves: the main one and the twin."""
+        return [self.ax] if self.ax2 is None else [self.ax, self.ax2]
+
+    def series_side(self, column):
+        """"left" or "right": the Y axis one curve is drawn against."""
+        return self.series_axis.get(column, "left")
+
+    def right_axis_active(self):
+        """True while at least one curve belongs to the right Y axis."""
+        return any(side == "right" for side in self.series_axis.values())
+
+    def axes_for_side(self, side):
+        return self.ensure_right_axis() if side == "right" else self.ax
+
+    def ensure_right_axis(self):
+        """The second Y axis on the right, built the first time it is needed."""
+        if self.ax2 is not None:
+            return self.ax2
+        ax2 = self.ax.twinx()          # same X axis, its own Y scale
+        self.ax2 = ax2
+        ax2.patch.set_visible(False)
+        ax2.grid(False)
+        for spine in ax2.spines.values():
+            spine.set_visible(False)   # the frame is drawn by the main axes
+        ax2.set_ylabel("")
+        ax2.yaxis.label.set_picker(True)
+        self._text_base["y2"] = ax2.yaxis.label.get_transform()
+        self.apply_axis("y2", {**self.axis_cfg["y2"], "label": ""}, redraw=False)
+        ax2.set_position(self.ax.get_position())
+        return ax2
+
+    def _apply_axis_sides(self):
+        """Draw the X axis at the bottom or at the top, and the right Y axis."""
+        top = self.x_side == "top"
+        both = self.frame_cfg.get("style") in ("box_in", "box_out")
+        right = self.right_axis_active()
+        self.ax.xaxis.set_ticks_position("top" if top else "bottom")
+        self.ax.xaxis.set_label_position("top" if top else "bottom")
+        self.ax.tick_params(axis="x", which="both",
+                            top=both or top, bottom=both or not top,
+                            labeltop=top, labelbottom=not top)
+        # with a closed frame the opposite side keeps its tick marks, but not
+        # when the right hand Y axis has a scale of its own
+        self.ax.tick_params(axis="y", which="both", left=True,
+                            right=both and not right,
+                            labelleft=True, labelright=False)
+        if self.ax2 is not None:
+            self.ax2.set_visible(right)
+            self.ax2.yaxis.set_ticks_position("right")
+            self.ax2.yaxis.set_label_position("right")
+            self.ax2.tick_params(axis="y", which="both", left=False, right=right,
+                                 labelleft=False, labelright=right)
+        return None
+
+    def set_x_side(self, side, redraw=True):
+        """Put the X axis under or above the plot area."""
+        side = "top" if str(side) == "top" else "bottom"
+        if side == self.x_side:
+            return False
+        self.x_side = side
+        self.layout["x_side"] = side
+        self.apply_frame(self.frame_cfg, redraw=False)   # spines follow
+        if redraw:
+            self.draw()
+        return True
+
+    def move_series(self, column, side):
+        """Draw one curve against the left or the right Y axis."""
+        side = "right" if str(side) == "right" else "left"
+        line = self.series.get(column)
+        if line is None:
+            return False
+        target = self.axes_for_side(side)
+        if line.axes is not target:
+            try:
+                line.remove()
+            except (ValueError, AttributeError):
+                pass
+            target.add_line(line)
+            line.set_transform(target.transData)
+        changed = self.series_axis.get(column) != side
+        self.series_axis[column] = side
+        self.refresh_fill(column)
+        if changed:
+            self._rescale()
+            self.apply_frame(self.frame_cfg, redraw=False)
+        return changed
+
+    def _rescale(self):
+        """Let the automatic ranges follow the data of both Y axes."""
+        auto_x = self.axis_cfg["x"]["auto"]
+        auto_y = self.axis_cfg["y"]["auto"]
+        if (auto_x or auto_y) and self.ax.lines:
+            self.ax.relim()
+            self.ax.autoscale_view(scalex=auto_x, scaley=auto_y)
+        if self.ax2 is not None and self.ax2.lines:
+            if self.axis_cfg["y2"]["auto"]:
+                self.ax2.relim()
+                self.ax2.autoscale_view(scalex=False, scaley=True)
+
     @staticmethod
     def _series_data(df, x_col, y_col):
         """Numeric X/Y pairs of one column, gaps kept as gaps.
@@ -3487,11 +3798,28 @@ class PlotWindow(tk.Toplevel):
         return (data["x"].to_numpy(dtype=float),
                 data["y"].to_numpy(dtype=float))
 
-    def _create_line(self, x, y, y_col, x_col):
-        """New curve drawn with the defaults of the configuration file."""
+    @staticmethod
+    def _cycle_color(index):
+        """The index-th colour of matplotlib's own colour sequence."""
+        cycle = matplotlib.rcParams.get("axes.prop_cycle")
+        colors = list((cycle.by_key().get("color") if cycle else None) or [])
+        if not colors:
+            return PALETTE_FALLBACK
+        return colors[int(index) % len(colors)]
+
+    def _create_line(self, x, y, y_col, x_col, side="left"):
+        """New curve drawn with the defaults of the configuration file.
+
+        The colour is taken from the sequence by hand, so that a curve on the
+        right hand Y axis is not painted in the same colour as the first one
+        on the left: the second axes would start the sequence again.
+        """
         plot_cfg = self.settings.section("plot")
-        line, = self.ax.plot(
-            x, y,
+        target = self.axes_for_side(side)
+        color = self._cycle_color(self._color_index)
+        self._color_index += 1
+        line, = target.plot(
+            x, y, color=color,
             linestyle=code_of(LINE_STYLES, plot_cfg["line_style"], "-"),
             linewidth=float(plot_cfg["line_width"]),
             marker=code_of(MARKERS, plot_cfg["marker"], "o"),
@@ -3506,6 +3834,7 @@ class PlotWindow(tk.Toplevel):
         line.aplot_series = str(y_col)  # used to detect custom legend texts
         self.lines.append(line)
         self.series[y_col] = line
+        self.series_axis[y_col] = "right" if target is self.ax2 else "left"
         self.fill_state.setdefault(y_col, self.default_fill_state(plot_cfg))
         self.refresh_fill(y_col)
         return line
@@ -3541,8 +3870,9 @@ class PlotWindow(tk.Toplevel):
         color = line.get_color() if cfg.get("follow") else cfg["color"]
         alpha = min(1.0, max(0.0, float(cfg.get("alpha", 0.35))))
         hatch = cfg.get("hatch") or None
-        base = 0.0 if cfg.get("base", "zero") == "zero" else self.ax.get_ylim()[0]
-        fill = self.ax.fill_between(
+        ax = line.axes if line.axes is not None else self.ax
+        base = 0.0 if cfg.get("base", "zero") == "zero" else ax.get_ylim()[0]
+        fill = ax.fill_between(
             x_data, y_data, base,
             facecolor=to_rgba(color, alpha),
             edgecolor=to_rgba(color, 1.0) if hatch else "none",
@@ -3574,6 +3904,8 @@ class PlotWindow(tk.Toplevel):
         # rebuild both dictionaries so that the column order is kept
         self.series = {(new if key == old else key): value
                        for key, value in self.series.items()}
+        self.series_axis = {(new if key == old else key): value
+                            for key, value in self.series_axis.items()}
         self.legend_state = {(new if key == old else key): value
                              for key, value in self.legend_state.items()}
         self.fill_state = {(new if key == old else key): value
@@ -3589,10 +3921,12 @@ class PlotWindow(tk.Toplevel):
     def _plot_data(self, _plot_cfg=None):
         columns = list(self.df.columns)
         x_col = columns[0]
+        sides = self.layout.get("y", {})
         for y_col in columns[1:]:
             x, y = self._series_data(self.df, x_col, y_col)
             if len(x) and bool(np.isfinite(y).any()):
-                self._create_line(x, y, y_col, x_col)
+                self._create_line(x, y, y_col, x_col,
+                                  sides.get(str(y_col), "left"))
         return len(self.lines)
 
     def remove_series(self, column):
@@ -3613,14 +3947,17 @@ class PlotWindow(tk.Toplevel):
         if legend is not None:
             legend.remove()
         self.legend_state.pop(column, None)
+        self.series_axis.pop(column, None)
         line.remove()
         return True
 
-    def update_data(self, df):
+    def update_data(self, df, layout=None):
         """Replace the plotted values but keep every style setting.
 
         Curves are matched by column name: existing ones only get new data,
-        a new column becomes a new curve, a deleted column disappears.
+        a new column becomes a new curve, a deleted column disappears.  The
+        layout says which axis every column belongs to now, so moving a tick
+        from `y_L` to `y_R` in the table moves that curve to the other side.
         """
         columns = list(df.columns)
         if len(columns) < 2:
@@ -3628,24 +3965,27 @@ class PlotWindow(tk.Toplevel):
         self.df = df
         x_col = columns[0]
         self.x_col = x_col
+        if layout is not None:
+            self.layout = self._clean_layout(df, layout)
+            self.x_side = self.layout["x_side"]
+        sides = self.layout.get("y", {})
 
         for y_col in columns[1:]:
             x, y = self._series_data(df, x_col, y_col)
+            side = sides.get(str(y_col), self.series_side(y_col))
             line = self.series.get(y_col)
             if line is None:
                 if len(x):
-                    self._create_line(x, y, y_col, x_col)
+                    self._create_line(x, y, y_col, x_col, side)
             else:
                 line.set_data(x, y)
+                self.move_series(y_col, side)
 
         for y_col in [name for name in self.series if name not in columns[1:]]:
             self.remove_series(y_col)
 
-        auto_x = self.axis_cfg["x"]["auto"]
-        auto_y = self.axis_cfg["y"]["auto"]
-        if auto_x or auto_y:  # manual ranges are left untouched
-            self.ax.relim()
-            self.ax.autoscale_view(scalex=auto_x, scaley=auto_y)
+        self._rescale()          # manual ranges are left untouched
+        self.apply_frame(self.frame_cfg, redraw=False)
         self.refresh_fills()
         self.refresh_legend()
         self.draw()
@@ -3655,7 +3995,9 @@ class PlotWindow(tk.Toplevel):
     def to_state(self):
         """Everything that makes this diagram look the way it looks."""
         axes = {}
-        for which in ("x", "y"):
+        for which in ("x", "y", "y2"):
+            if which == "y2" and self.ax2 is None:
+                continue
             low, high = self.current_limits(which)
             cfg = self.axis_cfg[which]
             axes[which] = {
@@ -3672,6 +4014,7 @@ class PlotWindow(tk.Toplevel):
             state = self.legend_state.get(y_col) or self.default_legend_state(0)
             series.append({
                 "column": str(y_col), "label": line.get_label(),
+                "axis": self.series_side(y_col),
                 "legend_pos": [float(state["pos"][0]), float(state["pos"][1])],
                 "legend_loc": state["loc"], "legend_size": int(state["size"]),
                 "legend_color": safe_hex(state.get("color", "#000000"), "#000000"),
@@ -3723,6 +4066,7 @@ class PlotWindow(tk.Toplevel):
                       for state in self.note_state.values()],
             "axes": axes,
             "series": series,
+            "x_side": self.x_side,
         }
 
     def apply_state(self, state):
@@ -3739,6 +4083,11 @@ class PlotWindow(tk.Toplevel):
         self.fonts["legend"] = int(legend.get("size", self.fonts["legend"]))
         self.fonts["legend_color"] = legend.get("color", self.fonts["legend_color"])
 
+        side = state.get("x_side")
+        if side in ("bottom", "top"):
+            self.x_side = side
+            self.layout["x_side"] = side
+
         saved_series = state.get("series")
         if saved_series is not None:
             # the file decides which curves exist: a column that was not
@@ -3752,6 +4101,8 @@ class PlotWindow(tk.Toplevel):
             line = self.series.get(column)
             if line is None:
                 continue
+            self.move_series(column, entry.get("axis", "left"))
+            self.layout.setdefault("y", {})[str(column)] = self.series_side(column)
             saved = self.default_legend_state(index)
             position = entry.get("legend_pos")
             self.legend_state[column] = {
@@ -3780,9 +4131,13 @@ class PlotWindow(tk.Toplevel):
                                                line.get_markeredgewidth()))
             line.set_visible(entry.get("visible", True))
 
-        for which, cfg in (state.get("axes") or {}).items():
-            if which in ("x", "y"):
-                self.apply_axis(which, cfg, redraw=False)
+        for which in ("x", "y", "y2"):
+            cfg = (state.get("axes") or {}).get(which)
+            if cfg is None:
+                continue
+            if which == "y2" and self.ax2 is None and not self.right_axis_active():
+                continue          # no curve on the right: nothing to restore
+            self.apply_axis(which, cfg, redraw=False)
 
         frame = state.get("frame")
         if frame:
@@ -3861,14 +4216,26 @@ class PlotWindow(tk.Toplevel):
         self._text_base = {"title": self.ax.title.get_transform(),
                            "x": self.ax.xaxis.label.get_transform(),
                            "y": self.ax.yaxis.label.get_transform()}
+        if self.ax2 is not None:
+            self._text_base["y2"] = self.ax2.yaxis.label.get_transform()
+            if not self.ax2.get_ylabel():
+                # the name of the first column drawn there is a useful start
+                right = [name for name, side in self.series_axis.items()
+                         if side == "right"]
+                if right:
+                    self.apply_axis("y2", {**self.axis_cfg["y2"],
+                                           "label": str(right[0])}, redraw=False)
+        self._rescale()
 
     def _reapply_distances(self):
         """Turn the stored pixel distances into points for the current dpi."""
-        for which in ("x", "y"):
-            axis = self.ax.xaxis if which == "x" else self.ax.yaxis
+        for which in ("x", "y", "y2"):
+            if which == "y2" and self.ax2 is None:
+                continue
+            ax, axis, axis_name = self._axis_pair(which)
             axis.labelpad = self.points(self.axis_cfg[which]["label_pad"])
-            self.ax.tick_params(axis=which, which="both",
-                                pad=self.points(self.axis_cfg[which]["tick_pad"]))
+            ax.tick_params(axis=axis_name, which="both",
+                           pad=self.points(self.axis_cfg[which]["tick_pad"]))
         self.ax.set_title(self.ax.get_title(), fontsize=self.fonts["title"],
                           color=safe_hex(self.fonts["title_color"], "#000000"),
                           pad=self.points(self.fonts["title_pad"]))
@@ -5260,6 +5627,8 @@ class PlotWindow(tk.Toplevel):
 
     # -- movable title and axis labels -------------------------------------
     def text_artist(self, name):
+        if name == "y2":
+            return None if self.ax2 is None else self.ax2.yaxis.label
         return {"title": self.ax.title,
                 "x": self.ax.xaxis.label,
                 "y": self.ax.yaxis.label}.get(name)
@@ -5294,11 +5663,11 @@ class PlotWindow(tk.Toplevel):
                 pass
 
     def apply_text_offsets(self):
-        for name in ("title", "x", "y"):
+        for name in ("title", "x", "y", "y2"):
             self.apply_text_offset(name)
 
     def reset_text_offsets(self):
-        for name in ("title", "x", "y"):
+        for name in ("title", "x", "y", "y2"):
             self.text_offset[name] = (0.0, 0.0)
         self.apply_text_offsets()
         self.draw()
@@ -5308,7 +5677,7 @@ class PlotWindow(tk.Toplevel):
         if x is None or y is None:
             return None
         renderer = self._renderer()
-        for name in ("title", "x", "y"):
+        for name in ("title", "x", "y", "y2"):
             artist = self.text_artist(name)
             if artist is None or not artist.get_text():
                 continue
@@ -5600,10 +5969,27 @@ class PlotWindow(tk.Toplevel):
 
     # -- axis helpers ------------------------------------------------------
     def axis_label(self, which):
-        return self.ax.get_xlabel() if which == "x" else self.ax.get_ylabel()
+        if which == "x":
+            return self.ax.get_xlabel()
+        if which == "y2":
+            return "" if self.ax2 is None else self.ax2.get_ylabel()
+        return self.ax.get_ylabel()
 
     def current_limits(self, which):
-        return self.ax.get_xlim() if which == "x" else self.ax.get_ylim()
+        if which == "x":
+            return self.ax.get_xlim()
+        if which == "y2":
+            return (0.0, 1.0) if self.ax2 is None else self.ax2.get_ylim()
+        return self.ax.get_ylim()
+
+    def _axis_pair(self, which):
+        """(axes, axis, "x"/"y") of one of the three axis pages."""
+        if which == "y2":
+            ax = self.ensure_right_axis()
+            return ax, ax.yaxis, "y"
+        if which == "x":
+            return self.ax, self.ax.xaxis, "x"
+        return self.ax, self.ax.yaxis, "y"
 
     # -- distances are given in pixels, matplotlib wants points ------------
     def points(self, pixels):
@@ -5638,7 +6024,12 @@ class PlotWindow(tk.Toplevel):
         closed = style != "none"
 
         for name, spine in self.ax.spines.items():
-            spine.set_visible(closed or name in ("left", "bottom"))
+            visible = closed or name in ("left", "bottom")
+            if name == "top" and self.x_side == "top":
+                visible = True       # the X axis needs a line to sit on
+            if name == "right" and self.right_axis_active():
+                visible = True       # so does the second Y axis
+            spine.set_visible(visible)
             spine.set_linewidth(width)
             spine.set_color(color)
             spine.set_picker(6)          # clicking the frame opens this dialog
@@ -5650,6 +6041,14 @@ class PlotWindow(tk.Toplevel):
             direction="in" if style == "box_in" else "out")
         self.ax.tick_params(which="major", length=major_length)
         self.ax.tick_params(which="minor", length=minor_length)
+        if self.ax2 is not None:
+            for spine in self.ax2.spines.values():
+                spine.set_visible(False)   # the main axes draws the frame
+            self.ax2.tick_params(which="both", color=color, width=width,
+                                 direction="in" if style == "box_in" else "out")
+            self.ax2.tick_params(which="major", length=major_length)
+            self.ax2.tick_params(which="minor", length=minor_length)
+            self.ax2.set_facecolor("none")
 
         background = cfg.get("background", "#ffffff")
         figure_background = cfg.get("figure_background", "#ffffff")
@@ -5659,6 +6058,8 @@ class PlotWindow(tk.Toplevel):
 
         self.ax.set_position([cfg["left"], cfg["bottom"],
                               cfg["x_length"], cfg["y_length"]])
+        if self.ax2 is not None:
+            self.ax2.set_position(self.ax.get_position())
         self.frame_cfg = {"style": style, "width": width, "color": color,
                           "major_tick_length": major_length,
                           "minor_tick_length": minor_length,
@@ -5667,6 +6068,7 @@ class PlotWindow(tk.Toplevel):
                           "left": float(cfg["left"]), "bottom": float(cfg["bottom"]),
                           "x_length": float(cfg["x_length"]),
                           "y_length": float(cfg["y_length"])}
+        self._apply_axis_sides()     # bottom or top X, left or right Y
         # the plot area moved: the pixel geometry of the objects is rebuilt
         self.refresh_shapes()
         self.refresh_arrows()
@@ -5676,8 +6078,7 @@ class PlotWindow(tk.Toplevel):
 
     def apply_axis(self, which, cfg, redraw=True):
         """Range / ticks / minor ticks / grid / fonts of one axis."""
-        ax = self.ax
-        axis = ax.xaxis if which == "x" else ax.yaxis
+        ax, axis, axis_name = self._axis_pair(which)
 
         if "label" in cfg:
             (ax.set_xlabel if which == "x" else ax.set_ylabel)(cfg["label"])
@@ -5695,12 +6096,12 @@ class PlotWindow(tk.Toplevel):
         axis.label.set_color(label_color)
         axis.label.set_picker(True)
         axis.labelpad = self.points(label_pad)      # distance of the label
-        ax.tick_params(axis=which, which="both", labelsize=tick_size,
+        ax.tick_params(axis=axis_name, which="both", labelsize=tick_size,
                        labelcolor=tick_color, pad=self.points(tick_pad))
 
         if cfg["auto"]:
             axis.set_major_locator(AutoLocator())
-            ax.autoscale(enable=True, axis=which)
+            ax.autoscale(enable=True, axis=axis_name)
             ax.relim()
             ax.autoscale_view()
         else:
@@ -5723,16 +6124,20 @@ class PlotWindow(tk.Toplevel):
         axis.set_minor_locator(AutoMinorLocator(minor + 1) if minor else NullLocator())
 
         grid = cfg.get("grid", self.axis_cfg[which]["grid"])
-        if grid["major"]:
-            ax.grid(True, which="major", axis=which, color=grid["color"],
+        if which == "y2":
+            # the grid belongs to the main axes: a second one on top of it
+            # would only double every line
+            ax.grid(False)
+        elif grid["major"]:
+            ax.grid(True, which="major", axis=axis_name, color=grid["color"],
                     linestyle=grid["style"], linewidth=grid["width"])
         else:
-            ax.grid(False, which="major", axis=which)
-        if grid["minor"] and minor:
-            ax.grid(True, which="minor", axis=which, color=grid["color"],
+            ax.grid(False, which="major", axis=axis_name)
+        if which != "y2" and grid["minor"] and minor:
+            ax.grid(True, which="minor", axis=axis_name, color=grid["color"],
                     linestyle=grid["style"], linewidth=max(0.3, grid["width"] * 0.6))
-        else:
-            ax.grid(False, which="minor", axis=which)
+        elif which != "y2":
+            ax.grid(False, which="minor", axis=axis_name)
 
         self.axis_cfg[which] = {
             "auto": cfg["auto"], "step": cfg.get("step"), "minor": minor,
@@ -5741,10 +6146,14 @@ class PlotWindow(tk.Toplevel):
             "label_pad": label_pad, "tick_pad": tick_pad,
             "grid": dict(grid),
         }
-        if which == "y":   # fills reaching the bottom follow the new range
+        if which in ("y", "y2"):  # fills reaching the bottom follow the range
             for column, fill_cfg in self.fill_state.items():
-                if fill_cfg.get("on") and fill_cfg.get("base") == "bottom":
+                if (fill_cfg.get("on") and fill_cfg.get("base") == "bottom"
+                        and self.series_side(column) == ("right" if which == "y2"
+                                                         else "left")):
                     self.refresh_fill(column)
+        if which == "x":
+            self._apply_axis_sides()
         if redraw:
             self.draw()
 
@@ -6051,10 +6460,17 @@ class PlotWindow(tk.Toplevel):
         if event.x is None or event.y is None:
             return None
         box = self.ax.get_window_extent()
-        if box.x0 <= event.x <= box.x1 and box.y0 - 80 <= event.y < box.y0:
-            return "x"
-        if box.y0 <= event.y <= box.y1 and box.x0 - 90 <= event.x < box.x0:
-            return "y"
+        if box.x0 <= event.x <= box.x1:
+            if self.x_side == "top":
+                if box.y1 < event.y <= box.y1 + 80:
+                    return "x"
+            elif box.y0 - 80 <= event.y < box.y0:
+                return "x"
+        if box.y0 <= event.y <= box.y1:
+            if box.x0 - 90 <= event.x < box.x0:
+                return "y"
+            if self.right_axis_active() and box.x1 < event.x <= box.x1 + 90:
+                return "y2"
         return None
 
     # -- dialogs -----------------------------------------------------------
@@ -6135,7 +6551,8 @@ class PlotWindow(tk.Toplevel):
             self.apply_axis(which, cfg)
 
         return self._show_dialog(f"label-{which}", lambda: TextStyleDialog(
-            self, f"{which.upper()} axis label", self.axis_label(which),
+            self, f"{AXIS_NAMES.get(which, which.upper())} label",
+            self.axis_label(which),
             self.axis_cfg[which]["label_size"], apply,
             color=self.axis_cfg[which]["label_color"],
             distance=self.axis_cfg[which]["label_pad"],
@@ -6210,29 +6627,53 @@ Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
 `File` menu.
 
-### Which columns are plotted
+### Which columns are plotted, and against which axis
 
-Above the column headings there is a row of **check buttons**, one for each
-column:
+Above the column headings there is a strip with **two check buttons for
+every column**, side by side:
 
-* every column is ticked when a file is opened, when random data is
-  generated and when the program starts, so `Plot` draws everything;
-* unticking a column leaves it out of the diagram - the data stays in the
-  table, it is simply not drawn;
-* the check button of the **first column** is fixed: that column is the X
-  axis of every curve;
-* `Plot` opens a diagram of the ticked columns only, and `Update plot`
-  follows the ticks - a column that was unticked disappears from the open
-  diagrams, and a column that is ticked again comes back, while the other
-  curves keep every style setting;
+| Above | The two boxes | What they mean |
+| --- | --- | --- |
+| the first column | `x_B` and `x_T` | the **bottom** and the **top** X axis |
+| every other column | `y_L` and `y_R` | the **left** and the **right** Y axis |
+
+Resting the pointer on any of them pops up its full name - `Bottom x-axis`,
+`Top x-axis`, `Left y-axis`, `Right y-axis` - so the short labels never have
+to be guessed.
+
+The rules are simple:
+
+* **one axis per column.**  Ticking one of the two boxes clears the other
+  one, so a column is never drawn against both axes at once.
+* the **first column** always feeds one of the two X axes: `x_B` is ticked
+  when the data arrives, and clicking `x_T` moves the whole X scale - its
+  numbers and its label - **above** the plot area.  Clicking the ticked box
+  does not switch it off; the data has to have an X axis.
+* every **other column** may have **both boxes empty**: then that column is
+  simply not plotted.  The data stays in the table, it is only left out of
+  the diagram.
+* ticking `y_R` gives that curve **its own scale on the right**, with its
+  own range, its own numbers and its own label.  This is what makes two
+  quantities of completely different size - per cent and counts, degrees and
+  volts - readable in one diagram.
+* `Plot` opens a diagram of the ticked columns, and `Update plot` follows
+  every change: a column that was unticked disappears, one that is ticked
+  again comes back, and moving a tick from `y_L` to `y_R` **moves that curve
+  to the other scale** while it keeps its colour, its line style and its
+  legend box.
 * with nothing ticked the program says so instead of drawing an empty
-  diagram;
+  diagram.
 * the ticks are kept while the table is edited (adding rows, renaming a
-  column, adding a column - a new column starts ticked) and are reset to
-  "all ticked" whenever new data is loaded.
+  column, adding a column - a new column starts on `y_L`) and are reset to
+  the first axis of every column whenever new data is loaded.
+
+The colours are handed out per curve, not per axis, so the first curve on
+the right is **not** painted in the same colour as the first one on the
+left.
 
 A saved `.aplt` file always contains the **whole** table, and the diagrams
-in it keep exactly the curves they had when they were saved.
+in it keep exactly the curves they had when they were saved, each one on
+the axis it was drawn against.
 
 ### Editing cells
 
@@ -6421,6 +6862,40 @@ The positions and sizes are kept in the coordinates of the plot area, so
 the objects follow the diagram when the window is resized, and they are
 stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
+
+### The second Y axis and the top X axis
+
+The `y_R` and `x_T` check buttons of the spreadsheet (see `Which columns are
+plotted, and against which axis`) give the diagram two more axes:
+
+* the **right hand Y axis** is a scale of its own.  It appears as soon as a
+  curve is drawn against it and goes away again when the last such curve is
+  unticked.  It has its own range, its own numbers, its own label and its
+  own automatic scaling, so a curve of a few tenths and one of tens of
+  thousands can share a diagram and both be readable.
+* the **top X axis** is the same X scale drawn above the plot area instead
+  of below it: the numbers and the axis label move up together, and the top
+  of the frame is drawn even when the frame style is `None`.
+
+Everything else works exactly as on the two original axes:
+
+* `Axes properties` grows a **`Right Y axis`** page next to `X axis` and
+  `Y axis` whenever the right axis is in use - range, step, minor ticks,
+  label, fonts, colours and distances, all of it separately from the left
+  axis.  Its grid is left to the main axes, so no line is drawn twice.
+* a **double click** next to the right hand numbers opens that page, just
+  as a double click under the X numbers opens the `X axis` page; with `x_T`
+  the X region is above the plot area instead of below it.
+* the **right axis label** is a text like any other: one click selects it
+  (blue veil), a slow second click rewrites it in place, a double click
+  opens its dialog, and the arrow keys move it.
+* a **filled area** under a curve on the right is filled on the right hand
+  scale, and `Fill down to the bottom of the axes` means the bottom of that
+  scale.
+* the whole arrangement - which side the X axis is on and which curve
+  belongs to which Y axis - is stored in `.aplt` files.  Files written by
+  an older version load with everything on the bottom and the left, as
+  before.
 
 ### Resizing the axes with the pointer
 
@@ -7412,13 +7887,17 @@ class App:
             messagebox.showinfo(
                 "Information",
                 "No column is ticked for plotting.\n"
-                "Tick at least one column above the table.")
+                "Tick 'y_L' or 'y_R' above at least one column.")
             return False
         return True
 
     def plot_data(self):
         """The data that goes to the diagrams: the ticked columns only."""
         return self.table.plot_dataframe()
+
+    def plot_layout(self):
+        """Which axis every ticked column belongs to."""
+        return self.table.plot_layout()
 
     def open_windows(self):
         """The diagrams that are still open."""
@@ -7430,7 +7909,8 @@ class App:
         """Open a new diagram of the ticked columns, with the default style."""
         if not self._plottable():
             return None
-        window = PlotWindow(self.root, self.plot_data(), self.settings, app=self)
+        window = PlotWindow(self.root, self.plot_data(), self.settings, app=self,
+                            layout=self.plot_layout())
         if window.winfo_exists():
             self.plot_windows.append(window)
             return window
@@ -7445,8 +7925,9 @@ class App:
             self.open_plot()  # nothing to update yet: open the first diagram
             return
         data = self.plot_data()
+        layout = self.plot_layout()
         for window in windows:
-            window.update_data(data.copy())
+            window.update_data(data.copy(), layout=layout)
             window.lift()
 
 
