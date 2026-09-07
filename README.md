@@ -287,8 +287,9 @@ plotted, and against which axis`) give the diagram two more axes:
   own automatic scaling, so a curve of a few tenths and one of tens of
   thousands can share a diagram and both be readable.
 * the **top X axis** is the same X scale drawn above the plot area instead
-  of below it: the numbers and the axis label move up together, and the top
-  of the frame is drawn even when the frame style is `None`.
+  of below it: the numbers and the axis label move up together, and with
+  `No frame` the line above the plot area is the one that is drawn while
+  the one below it stays away.
 
 Everything else works exactly as on the two original axes:
 
@@ -305,6 +306,9 @@ Everything else works exactly as on the two original axes:
 * a **filled area** under a curve on the right is filled on the right hand
   scale, and `Fill down to the bottom of the axes` means the bottom of that
   scale.
+* both new lines are **resized by the pointer** exactly like the two
+  original ones: click the line, drag one of its two ends (see `Resizing
+  the axes with the pointer`).
 * the whole arrangement - which side the X axis is on and which curve
   belongs to which Y axis - is stored in `.aplt` files.  Files written by
   an older version load with everything on the bottom and the left, as
@@ -312,27 +316,56 @@ Everything else works exactly as on the two original axes:
 
 ### Resizing the axes with the pointer
 
-The plot area does not have to be sized in a dialog: **click an axis line**
-and a small square control point appears on each of its two ends.
+The plot area does not have to be sized in a dialog: **click any axis
+line** and a small square control point appears on each of its two ends.
+All four sides work, each with the points on its own line:
 
-* The **X axis** (the horizontal line) gets its points on the left and on
-  the right end.  Dragging the right one makes the diagram wider or
-  narrower and leaves the origin where it is; dragging the left one moves
-  the origin and keeps the right end in place.
-* The **Y axis** (the vertical line) gets its points at the bottom and at
-  the top, and they work the same way upwards.
-* The lines of a full frame belong to the same two axes: the horizontal
-  ones carry the width, the vertical ones the height.
+| Clicked line | Its two points | Dragging them |
+| --- | --- | --- |
+| bottom X axis | the lower two corners | the width |
+| top X axis | the upper two corners | the width |
+| left Y axis | the left two corners | the height |
+| right Y axis | the right two corners | the height |
+
+* The **horizontal** lines carry the width of the diagram: dragging the
+  right point makes it wider or narrower and leaves the origin where it is,
+  dragging the left one moves the origin and keeps the right end in place.
+  The **vertical** lines work the same way upwards, with the height.
+* So a diagram drawn against the **top X axis** and the **right Y axis** is
+  sized exactly like any other one - by the two lines that are actually
+  there.
+* Only a line that is really **drawn** can be clicked, and a line that
+  disappears (because the X axis moved to the other side, or the last curve
+  of one Y axis was unticked) drops out of the selection by itself.
 * The arrow keys move the **whole plot area** while an axis is selected
   (`Shift`: ten pixels), keeping its size.
 * Everything in the diagram - the curves, the legend boxes, the text
   boxes, the drawings and the arrows - keeps its place inside the plot
   area and follows it.
-* Clicking the selected axis line **again** opens `Frame and origin`, where
-  the same numbers can be typed in fractions, centimetres or inches; the
-  dialog always shows what the pointer has made.
+* **Double clicking** an axis line opens `Frame and origin`, where the same
+  numbers can be typed in fractions, centimetres or inches; the dialog
+  always shows what the pointer has made.
 * The size is kept in fractions of the window, so it survives a resize of
   the diagram window, and it is stored in `.aplt` files.
+
+### Which frame lines are drawn
+
+`Frame and origin` offers four frame styles.  `Full frame` and the two
+`Frame with ticks` styles always draw **all four** lines, as before.
+`No frame (X and Y only)` draws exactly the axes that are **in use**:
+
+| In use | `No frame` draws |
+| --- | --- |
+| `x_B` + `y_L` | the bottom and the left line (the classical pair) |
+| `x_T` + `y_R` | the top and the right line - and nothing else |
+| `x_B` + `y_R` | the bottom and the right line; the left and the top stay away |
+| `x_B` + `y_L` + `y_R` | the bottom line and **both** vertical lines |
+
+An axis that carries no curve is not only left without a frame line: its
+**numbers, tick marks and label disappear** as well, so a diagram whose
+every curve is on the right hand scale has no empty left axis standing
+next to it.  The Y **grid** follows the Y axis whose numbers are shown, so
+it is drawn once, on the scale it belongs to.
 
 ### Turning the drawings and the text boxes
 
@@ -613,22 +646,42 @@ perfectly possible.  The legend always mirrors what the curve looks like.
 
 ### Axes properties
 
-One window with an **X axis**, a **Y axis** and a **Frame and origin** tab.
-The two axis tabs have:
+One window with an **X axis** tab, a **Y axis** tab, a **Right Y axis** tab
+(whenever a curve is drawn there) and a **Frame and origin** tab.  Every
+axis tab has the same three sections, and **the name of each section is its
+own check button**:
 
-* **Axis label and fonts**: the label text, the font size, font colour and
-  **distance** of the label, and the font size, font colour and
-  **distance** of the numbers (ticks).  Both distances are given in pixels
-  and are measured from the axis (from the end of the tick marks in the
-  case of the numbers); larger values push the text away from the diagram,
-  negative values pull it inwards.  The colour of the tick *marks* is not
-  set here - it belongs to the frame, so a black frame can carry grey
-  numbers.
-* **Range and ticks**: automatic range, or an explicit `From`, `To` and
-  `Step` for the major ticks, plus the number of minor ticks between two
-  major ticks.
-* **Grid of this axis**: major and minor grid lines with their own colour,
-  style and width.
+**Axis label and fonts** (switched on)
+
+* the label **text**, its **font size**, its **font colour** and its
+  **distance** from the axis in pixels - larger values push it away from
+  the diagram, negative values pull it inwards.
+* Switching the section **off** makes the label disappear; the text is
+  remembered, so switching it on again brings it back unchanged.
+
+**Tick range, labels and fonts** (switched on)
+
+* the **font size**, **font colour** and **distance** of the numbers
+  (measured from the end of the tick marks),
+* **Automatic range and ticks**, or an explicit `From`, `To` and `Step` for
+  the major ticks, plus the number of **minor ticks** between two major
+  ticks,
+* **Axis colour** at the end of the section: the colour of *this* axis line
+  and of *its* tick marks.  Each of the three axes has its own, so a black
+  bottom axis and a red right axis - matching a red curve - are one click
+  apart.  It is deliberately not the colour of the numbers: the number
+  colour is the row above it, so a black axis can carry grey numbers.
+* Switching the section **off** removes the **numbers and both the major
+  and the minor tick marks** of that axis.  The axis line itself and the
+  label stay.
+
+**Grid of this axis** (switched off)
+
+* the section title itself draws the **major grid lines**; inside it,
+  **Minor grid lines** adds the finer ones,
+* **Colour**, **Style** and **Width** of the lines.
+* The Y grid is drawn by the Y axis whose numbers are shown, so it appears
+  once even when both Y axes are in use.
 
 ### Frame and origin
 
@@ -638,16 +691,20 @@ The third tab of the axes dialog, also reachable with
 **Frame**
 
 * **Style**:
-  * `No frame (X and Y only) (default)` - only the left and the bottom side
-    are drawn, there is no top X axis and no right Y axis,
+  * `No frame (X and Y only) (default)` - only the sides that carry an axis
+    in use are drawn (see `Which frame lines are drawn`),
   * `Full frame` - all four sides, ticks on the bottom and on the left, as
     matplotlib draws it by default,
   * `Frame with ticks (inward)` - all four sides with ticks on every side,
     pointing into the diagram,
   * `Frame with ticks (outward)` - all four sides with ticks on every side,
     pointing outwards.
-* **Thickness** and **Colour** of the frame; the tick marks follow them, so
-  the whole frame stays consistent.
+* **Thickness** of the frame lines; the tick marks follow it.
+* The **colour** is not here: every axis paints its own line and its own
+  tick marks with the `Axis colour` of its page (see `Axes properties`).
+  In a full frame the two horizontal sides take the colour of the X axis,
+  the left side that of the left Y axis and the right side that of the
+  right Y axis.
 * **Major tick length** and **Minor tick length** in points.  Zero hides
   that kind of tick mark.
 

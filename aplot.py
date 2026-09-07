@@ -235,6 +235,15 @@ AXIS_TAGS = {
 X_SIDES = {"B": "bottom", "T": "top"}
 Y_SIDES = {"L": "left", "R": "right"}
 AXIS_NAMES = {"x": "X axis", "y": "Left Y axis", "y2": "Right Y axis"}
+# the four sides of the plot area, as the pointer sees them
+FRAME_ENDS = {"bottom": ((0.0, 0.0), (1.0, 0.0)),
+              "top": ((0.0, 1.0), (1.0, 1.0)),
+              "left": ((0.0, 0.0), (0.0, 1.0)),
+              "right": ((1.0, 0.0), (1.0, 1.0))}
+SIDE_ALIASES = {"x": "bottom", "y": "left", "y2": "right"}
+SIDE_NAMES = {"bottom": "Bottom X axis", "top": "Top X axis",
+              "left": "Left Y axis", "right": "Right Y axis"}
+HORIZONTAL_SIDES = ("bottom", "top")
 TOOLTIP_DELAY = 250        # milliseconds before a hint pops up
 TOOLTIP_BACKGROUND = "#ffffe0"
 SELECT_FACE = to_rgba(SELECT_COLOR, 0.18)     # veil over a selected text
@@ -629,7 +638,7 @@ SETTINGS_SPEC = [
     ("frame", "Frame", [
         ("style", "Frame style", "choice", names(FRAME_STYLES)),
         ("width", "Frame thickness", "float"),
-        ("color", "Frame colour", "color"),
+        ("color", "Axis colour (starting value)", "color"),
         ("major_tick_length", "Major tick length", "float"),
         ("minor_tick_length", "Minor tick length", "float"),
         ("background", "Plot area background", "color"),
@@ -1629,6 +1638,9 @@ class AxisTab(ttk.Frame):
         self.step_var = tk.StringVar(
             value="" if cfg["step"] in (None, 0) else f"{cfg['step']:g}")
         self.minor_var = tk.StringVar(value=str(cfg["minor"]))
+        self._axis_color = safe_hex(cfg.get("axis_color", "#000000"), "#000000")
+        self.label_on_var = tk.BooleanVar(value=cfg.get("label_on", True))
+        self.ticks_on_var = tk.BooleanVar(value=cfg.get("ticks_on", True))
         self.gmajor_var = tk.BooleanVar(value=grid["major"])
         self.gminor_var = tk.BooleanVar(value=grid["minor"])
         self.gstyle_var = tk.StringVar(value=name_of(GRID_STYLES, grid["style"], "Dotted"))
@@ -1640,9 +1652,18 @@ class AxisTab(ttk.Frame):
         self._toggle_auto()
 
     # -- construction ------------------------------------------------------
+    def _section(self, title, variable, **pack):
+        """A section whose title is its own check button."""
+        box = ttk.LabelFrame(self, padding=8)
+        check = ttk.Checkbutton(box, text=title, variable=variable)
+        box.configure(labelwidget=check)
+        box.pack(fill="x", **pack)
+        return box, check
+
     def _build_label_box(self):
-        box = ttk.LabelFrame(self, text="Axis label and fonts", padding=8)
-        box.pack(fill="x")
+        """The axis label: its text, its font and how far it sits."""
+        box, check = self._section("Axis label and fonts", self.label_on_var)
+        self.label_box, self.label_check = box, check
         ToolDialog.field(box, 0, "Label text:",
                          ttk.Entry(box, textvariable=self.label_var, width=30))
         ToolDialog.field(box, 1, "Label font size:",
@@ -1653,48 +1674,68 @@ class AxisTab(ttk.Frame):
         ToolDialog.field(box, 3, "Label distance from the axis [px]:",
                          ttk.Spinbox(box, from_=-200, to=400, increment=1, width=8,
                                      textvariable=self.label_pad_var))
-        ToolDialog.field(box, 4, "Numbers (ticks) font size:",
+        ttk.Label(box, foreground="#666", justify="left",
+                  text="Switch the section off to leave the label away.").grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _build_range_box(self):
+        """The numbers on the axis: their font, the range and the ticks."""
+        box, check = self._section("Tick range, labels and fonts",
+                                   self.ticks_on_var, pady=(10, 0))
+        self.range_box, self.ticks_check = box, check
+        ToolDialog.field(box, 0, "Numbers (ticks) font size:",
                          ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
                                      textvariable=self.tick_size_var))
         self.tick_color = ColorSwatch(box, self._tick_color)
-        ToolDialog.field(box, 5, "Numbers (ticks) font colour:", self.tick_color)
-        ToolDialog.field(box, 6, "Numbers distance from the axis [px]:",
+        ToolDialog.field(box, 1, "Numbers (ticks) font colour:", self.tick_color)
+        ToolDialog.field(box, 2, "Numbers distance from the axis [px]:",
                          ttk.Spinbox(box, from_=-200, to=400, increment=1, width=8,
                                      textvariable=self.tick_pad_var))
-
-    def _build_range_box(self):
-        box = ttk.LabelFrame(self, text="Range and ticks", padding=8)
-        box.pack(fill="x", pady=(10, 0))
+        ttk.Separator(box, orient="horizontal").grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(8, 6))
         ttk.Checkbutton(box, text="Automatic range and ticks",
                         variable=self.auto_var, command=self._toggle_auto
-                        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+                        ).grid(row=4, column=0, columnspan=2, sticky="w",
+                               pady=(0, 4))
         self.min_entry = ToolDialog.field(
-            box, 1, "From:", ttk.Entry(box, textvariable=self.min_var, width=12))
+            box, 5, "From:", ttk.Entry(box, textvariable=self.min_var, width=12))
         self.max_entry = ToolDialog.field(
-            box, 2, "To:", ttk.Entry(box, textvariable=self.max_var, width=12))
+            box, 6, "To:", ttk.Entry(box, textvariable=self.max_var, width=12))
         self.step_entry = ToolDialog.field(
-            box, 3, "Step (major ticks):",
+            box, 7, "Step (major ticks):",
             ttk.Entry(box, textvariable=self.step_var, width=12))
-        ToolDialog.field(box, 4, "Minor ticks between majors:",
+        ToolDialog.field(box, 8, "Minor ticks between majors:",
                          ttk.Spinbox(box, from_=0, to=20, increment=1, width=8,
                                      textvariable=self.minor_var))
+        ttk.Separator(box, orient="horizontal").grid(
+            row=9, column=0, columnspan=2, sticky="ew", pady=(8, 6))
+        self.axis_color = ColorSwatch(box, self._axis_color)
+        ToolDialog.field(box, 10, "Axis colour:", self.axis_color)
+        ttk.Label(box, foreground="#666", justify="left",
+                  text="The colour of this axis line and of its tick marks.\n"
+                       "Switch the section off to leave the numbers and both\n"
+                       "kinds of tick marks away.").grid(
+            row=11, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     def _build_grid_box(self, color):
-        box = ttk.LabelFrame(self, text="Grid of this axis", padding=8)
-        box.pack(fill="x", pady=(10, 0))
-        ttk.Checkbutton(box, text="Major grid lines", variable=self.gmajor_var
-                        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        """The grid: the section title switches the major lines on."""
+        box, check = self._section("Grid of this axis", self.gmajor_var,
+                                   pady=(10, 0))
+        self.grid_box, self.grid_check = box, check
         ttk.Checkbutton(box, text="Minor grid lines", variable=self.gminor_var
-                        ).grid(row=1, column=0, columnspan=2, sticky="w")
+                        ).grid(row=0, column=0, columnspan=2, sticky="w")
         self.grid_color = ColorSwatch(box, color)
-        ToolDialog.field(box, 2, "Colour:", self.grid_color)
-        ToolDialog.field(box, 3, "Style:",
+        ToolDialog.field(box, 1, "Colour:", self.grid_color)
+        ToolDialog.field(box, 2, "Style:",
                          ttk.Combobox(box, textvariable=self.gstyle_var,
                                       state="readonly", values=names(GRID_STYLES),
                                       width=12))
-        ToolDialog.field(box, 4, "Width:",
+        ToolDialog.field(box, 3, "Width:",
                          ttk.Spinbox(box, from_=0.2, to=5, increment=0.2, width=8,
                                      textvariable=self.gwidth_var))
+        ttk.Label(box, foreground="#666", justify="left",
+                  text="The section title draws the major grid lines.").grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     # -- behaviour ---------------------------------------------------------
     def _toggle_auto(self):
@@ -1717,6 +1758,9 @@ class AxisTab(ttk.Frame):
             "tick_color": self.tick_color.color,
             "label_pad": to_float(self.label_pad_var.get(), 5.5),
             "tick_pad": to_float(self.tick_pad_var.get(), 5.0),
+            "axis_color": self.axis_color.color,
+            "label_on": bool(self.label_on_var.get()),
+            "ticks_on": bool(self.ticks_on_var.get()),
             "grid": {
                 "major": self.gmajor_var.get(),
                 "minor": self.gminor_var.get(),
@@ -1750,13 +1794,13 @@ class FrameTab(ttk.Frame):
                            "x_length": width, "y_length": height}
         self.value_vars = {key: tk.StringVar() for key in self._fractions}
 
-        self._build_frame_box(cfg["color"])
+        self._build_frame_box()
         self._build_background_box(cfg)
         self._build_size_box()
         self._show_values()
 
     # -- construction ------------------------------------------------------
-    def _build_frame_box(self, color):
+    def _build_frame_box(self):
         box = ttk.LabelFrame(self, text="Frame", padding=8)
         box.pack(fill="x")
         ToolDialog.field(box, 0, "Style:",
@@ -1766,19 +1810,18 @@ class FrameTab(ttk.Frame):
         ToolDialog.field(box, 1, "Thickness:",
                          ttk.Spinbox(box, from_=0, to=10, increment=0.2, width=8,
                                      textvariable=self.width_var))
-        self.color = ColorSwatch(box, color)
-        ToolDialog.field(box, 2, "Colour:", self.color)
-        ToolDialog.field(box, 3, "Major tick length:",
+        ToolDialog.field(box, 2, "Major tick length:",
                          ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=8,
                                      textvariable=self.major_len_var))
-        ToolDialog.field(box, 4, "Minor tick length:",
+        ToolDialog.field(box, 3, "Minor tick length:",
                          ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=8,
                                      textvariable=self.minor_len_var))
         ttk.Label(box, foreground="#666", justify="left",
-                  text="\"No frame\" hides the top and the right side; the two\n"
-                       "\"with ticks\" styles put ticks on all four sides.\n"
-                       "Clicking any side of the frame opens this dialog.").grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+                  text="\"No frame\" draws only the axes that are in use; the\n"
+                       "two \"with ticks\" styles put ticks on all four sides.\n"
+                       "The colour of each axis line is on its own page,\n"
+                       "as \"Axis colour\".").grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     def _build_background_box(self, cfg):
         box = ttk.LabelFrame(self, text="Background", padding=8)
@@ -1856,7 +1899,8 @@ class FrameTab(ttk.Frame):
         return {
             "style": code_of(FRAME_STYLES, self.style_var.get(), "none"),
             "width": max(0.0, to_float(self.width_var.get(), 1.0)),
-            "color": self.color.color,
+            # the colour lives on the three axis pages now
+            "color": self.plot.frame_cfg.get("color", "#000000"),
             "major_tick_length": max(0.0, to_float(self.major_len_var.get(), 3.5)),
             "minor_tick_length": max(0.0, to_float(self.minor_len_var.get(), 2.0)),
             "background": ("none" if self.transparent_var.get()
@@ -3415,6 +3459,8 @@ class PlotWindow(tk.Toplevel):
         # a second click opens the properties of the selected object
         self.selection = None
         self._marked = None             # the text that wears the blue veil
+        # the four sides of the plot area can be selected and pulled
+        self.frame_sides = {name: name for name in FRAME_ENDS}
         self._inline = None             # the in-place text editor, while open
         self._rename_click = None       # (kind, key, time) of the last click
         self._rename_prev = None        # the same, one click earlier
@@ -3457,6 +3503,10 @@ class PlotWindow(tk.Toplevel):
                     "tick_color": safe_hex(self.fonts["tick_label_color"], "#000000"),
                     "label_pad": float(self.fonts["axis_label_pad"]),
                     "tick_pad": float(self.fonts["tick_label_pad"]),
+                    # every axis carries its own colour and its two switches
+                    "axis_color": safe_hex(config.get("frame", "color"),
+                                           "#000000"),
+                    "label_on": True, "ticks_on": True,
                     "grid": dict(grid_defaults)}
             for which in ("x", "y", "y2")
         }
@@ -3712,27 +3762,113 @@ class PlotWindow(tk.Toplevel):
         ax2.set_position(self.ax.get_position())
         return ax2
 
+    def left_axis_active(self):
+        """True while at least one curve belongs to the left Y axis."""
+        return any(side == "left" for side in self.series_axis.values())
+
+    def used_sides(self):
+        """The sides of the plot area that really carry an axis.
+
+        `No frame (X and Y only)` draws exactly these: the X axis on the
+        side the `x_B` / `x_T` check button chose, and the Y axis - or both
+        Y axes - the curves are drawn against.  So a diagram of a top X axis
+        and a right Y axis shows those two lines and nothing else.
+        """
+        sides = ["top" if self.x_side == "top" else "bottom"]
+        right = self.right_axis_active()
+        if self.left_axis_active() or not right:
+            sides.append("left")
+        if right:
+            sides.append("right")
+        return sides
+
+    def left_axis_shown(self):
+        """True while the left Y axis carries a scale worth drawing."""
+        return self.left_axis_active() or not self.right_axis_active()
+
     def _apply_axis_sides(self):
-        """Draw the X axis at the bottom or at the top, and the right Y axis."""
+        """Draw the X axis at the bottom or at the top, and the right Y axis.
+
+        Only the axes that are really used show their numbers: with every
+        curve on the right hand scale the left one disappears completely,
+        numbers, tick marks and label together.
+        """
         top = self.x_side == "top"
         both = self.frame_cfg.get("style") in ("box_in", "box_out")
         right = self.right_axis_active()
+        left = self.left_axis_shown()
+        # the "Tick range, labels and fonts" switch of each axis page
+        x_ticks = bool(self.axis_cfg["x"].get("ticks_on", True))
+        y_ticks = bool(self.axis_cfg["y"].get("ticks_on", True))
+        y2_ticks = bool(self.axis_cfg["y2"].get("ticks_on", True))
         self.ax.xaxis.set_ticks_position("top" if top else "bottom")
         self.ax.xaxis.set_label_position("top" if top else "bottom")
         self.ax.tick_params(axis="x", which="both",
-                            top=both or top, bottom=both or not top,
-                            labeltop=top, labelbottom=not top)
+                            top=(both or top) and x_ticks,
+                            bottom=(both or not top) and x_ticks,
+                            labeltop=top and x_ticks,
+                            labelbottom=(not top) and x_ticks)
         # with a closed frame the opposite side keeps its tick marks, but not
         # when the right hand Y axis has a scale of its own
-        self.ax.tick_params(axis="y", which="both", left=True,
-                            right=both and not right,
-                            labelleft=True, labelright=False)
+        self.ax.yaxis.set_visible(left)
+        self.ax.tick_params(axis="y", which="both",
+                            left=(left or both) and y_ticks,
+                            right=(both and not right) and y_ticks,
+                            labelleft=left and y_ticks, labelright=False)
         if self.ax2 is not None:
             self.ax2.set_visible(right)
             self.ax2.yaxis.set_ticks_position("right")
             self.ax2.yaxis.set_label_position("right")
-            self.ax2.tick_params(axis="y", which="both", left=False, right=right,
-                                 labelleft=False, labelright=right)
+            self.ax2.tick_params(axis="y", which="both", left=False,
+                                 right=right and y2_ticks,
+                                 labelleft=False, labelright=right and y2_ticks)
+        self._apply_y_grid()
+        self._apply_axis_colors()
+        return None
+
+    def spine_owner(self, name):
+        """Which axis page owns the colour of one side of the plot area."""
+        if name in HORIZONTAL_SIDES:
+            return "x"
+        if name == "left":
+            return "y"
+        return "y2" if self.right_axis_active() else "y"
+
+    def axis_color(self, which):
+        """The colour of one axis line and of its tick marks."""
+        cfg = self.axis_cfg.get(which) or {}
+        return safe_hex(cfg.get("axis_color", "#000000"), "#000000")
+
+    def _apply_axis_colors(self):
+        """Every axis paints its own line and its own tick marks."""
+        for name, spine in self.ax.spines.items():
+            spine.set_color(self.axis_color(self.spine_owner(name)))
+        self.ax.tick_params(axis="x", which="both", color=self.axis_color("x"))
+        self.ax.tick_params(axis="y", which="both", color=self.axis_color("y"))
+        if self.ax2 is not None:
+            self.ax2.tick_params(axis="y", which="both",
+                                 color=self.axis_color("y2"))
+        return None
+
+    def _apply_y_grid(self):
+        """The Y grid belongs to the Y axis whose numbers are shown."""
+        owner = "y" if self.left_axis_shown() else "y2"
+        for which, ax in (("y", self.ax), ("y2", self.ax2)):
+            if ax is None:
+                continue
+            cfg = self.axis_cfg[which]
+            grid = cfg["grid"]
+            if which == owner and grid["major"]:
+                ax.grid(True, which="major", axis="y", color=grid["color"],
+                        linestyle=grid["style"], linewidth=grid["width"])
+            else:
+                ax.grid(False, which="major", axis="y")
+            if which == owner and grid["minor"] and cfg["minor"]:
+                ax.grid(True, which="minor", axis="y", color=grid["color"],
+                        linestyle=grid["style"],
+                        linewidth=max(0.3, grid["width"] * 0.6))
+            else:
+                ax.grid(False, which="minor", axis="y")
         return None
 
     def set_x_side(self, side, redraw=True):
@@ -3984,6 +4120,13 @@ class PlotWindow(tk.Toplevel):
         for y_col in [name for name in self.series if name not in columns[1:]]:
             self.remove_series(y_col)
 
+        # the curves follow the order of the columns, so a column that is
+        # ticked again comes back in its own place and not at the end
+        order = [name for name in columns[1:] if name in self.series]
+        self.series = {name: self.series[name] for name in order}
+        self.series_axis = {name: self.series_axis[name] for name in order
+                            if name in self.series_axis}
+
         self._rescale()          # manual ranges are left untouched
         self.apply_frame(self.frame_cfg, redraw=False)
         self.refresh_fills()
@@ -4007,6 +4150,9 @@ class PlotWindow(tk.Toplevel):
                 "label_size": cfg["label_size"], "tick_size": cfg["tick_size"],
                 "label_color": cfg["label_color"], "tick_color": cfg["tick_color"],
                 "label_pad": cfg["label_pad"], "tick_pad": cfg["tick_pad"],
+                "axis_color": self.axis_color(which),
+                "label_on": bool(cfg.get("label_on", True)),
+                "ticks_on": bool(cfg.get("ticks_on", True)),
                 "grid": dict(cfg["grid"]),
             }
         series = []
@@ -4131,12 +4277,17 @@ class PlotWindow(tk.Toplevel):
                                                line.get_markeredgewidth()))
             line.set_visible(entry.get("visible", True))
 
+        # a file written before the axis colours existed carried one colour
+        # for the whole frame: give it to all three axes, so it looks the same
+        old_color = (state.get("frame") or {}).get("color")
         for which in ("x", "y", "y2"):
             cfg = (state.get("axes") or {}).get(which)
             if cfg is None:
                 continue
             if which == "y2" and self.ax2 is None and not self.right_axis_active():
                 continue          # no curve on the right: nothing to restore
+            if "axis_color" not in cfg and old_color:
+                cfg = {**cfg, "axis_color": old_color}
             self.apply_axis(which, cfg, redraw=False)
 
         frame = state.get("frame")
@@ -4767,16 +4918,16 @@ class PlotWindow(tk.Toplevel):
     def _selection_store(self, kind):
         return {"shape": self.shape_state, "arrow": self.arrow_state,
                 "note": self.note_state, "legend": self.legend_state,
-                "text": self.text_offset, "axis": self.axis_cfg}.get(kind)
+                "text": self.text_offset, "axis": self.frame_sides}.get(kind)
 
     def select_object(self, kind, key):
         """Remember the object the keyboard commands work on."""
         store = self._selection_store(kind)
         if store is not None and key in store:
-            if kind == "text":          # only a text that is really there
-                artist = self.text_artist(key)
-                if artist is None or not artist.get_text():
-                    kind = None
+            if kind == "text" and not self.text_shown(key):
+                kind = None             # only a text that is really there
+            if kind == "axis" and not self.ax.spines[key].get_visible():
+                kind = None             # only a line that is really drawn
         if store is not None and key in store and kind is not None:
             self.selection = (kind, key)
         else:
@@ -4798,8 +4949,7 @@ class PlotWindow(tk.Toplevel):
         if kind == "legend":
             return self.legends.get(key)
         if kind == "text":
-            artist = self.text_artist(key)
-            return artist if artist is not None and artist.get_text() else None
+            return self.text_artist(key) if self.text_shown(key) else None
         return None
 
     def is_marked(self):
@@ -4840,7 +4990,7 @@ class PlotWindow(tk.Toplevel):
             return None
         if kind == "text":
             artist = self.text_artist(key)
-            if artist is None or not artist.get_text():
+            if artist is None or not self.text_shown(key):
                 return None
             artist.set_bbox(dict(SELECT_BOX))
         elif kind == "note":
@@ -4922,8 +5072,7 @@ class PlotWindow(tk.Toplevel):
         if kind == "note":
             return self.notes.get(key)
         if kind == "text":
-            artist = self.text_artist(key)
-            return artist if artist is not None and artist.get_text() else None
+            return self.text_artist(key) if self.text_shown(key) else None
         if kind == "legend":
             legend = self.legends.get(key)
             if legend is None:
@@ -5287,7 +5436,7 @@ class PlotWindow(tk.Toplevel):
 
     def selected_handle_positions(self):
         kind, key = self.selection or (None, None)
-        if kind == "axis" and key in ("x", "y"):
+        if kind == "axis" and self.axis_side(key) is not None:
             return self.axis_handle_positions(key)
         if kind == "shape" and key in self.shape_state:
             state = self.shape_state[key]
@@ -5626,6 +5775,17 @@ class PlotWindow(tk.Toplevel):
             on_close=lambda _d: self._dialogs.pop(f"note-{key}", None)))
 
     # -- movable title and axis labels -------------------------------------
+    def text_shown(self, name):
+        """True while one of the three axis texts is really on the diagram."""
+        artist = self.text_artist(name)
+        if artist is None or not artist.get_text() or not artist.get_visible():
+            return False
+        if name == "y":
+            return self.left_axis_shown()
+        if name == "y2":
+            return self.right_axis_active()
+        return True
+
     def text_artist(self, name):
         if name == "y2":
             return None if self.ax2 is None else self.ax2.yaxis.label
@@ -5679,7 +5839,7 @@ class PlotWindow(tk.Toplevel):
         renderer = self._renderer()
         for name in ("title", "x", "y", "y2"):
             artist = self.text_artist(name)
-            if artist is None or not artist.get_text():
+            if artist is None or not self.text_shown(name):
                 continue
             try:
                 box = artist.get_window_extent(renderer)
@@ -5942,8 +6102,10 @@ class PlotWindow(tk.Toplevel):
         index = self.handle_at(event.x, event.y)
         axis_end = self.axis_end_at(event.x, event.y)
         if axis_end is not None:
-            kind, which = self.selection
-            cursor = "sb_h_double_arrow" if which == "x" else "sb_v_double_arrow"
+            _kind, which = self.selection
+            cursor = ("sb_h_double_arrow"
+                      if self.axis_side(which) in HORIZONTAL_SIDES
+                      else "sb_v_double_arrow")
         elif index == ROTATE_HANDLE:
             cursor = "exchange"            # a round arrow: turn the object
         elif index is not None:
@@ -6023,19 +6185,17 @@ class PlotWindow(tk.Toplevel):
         minor_length = max(0.0, to_float(cfg.get("minor_tick_length"), 2.0))
         closed = style != "none"
 
+        used = self.used_sides()
         for name, spine in self.ax.spines.items():
-            visible = closed or name in ("left", "bottom")
-            if name == "top" and self.x_side == "top":
-                visible = True       # the X axis needs a line to sit on
-            if name == "right" and self.right_axis_active():
-                visible = True       # so does the second Y axis
-            spine.set_visible(visible)
+            # a closed frame draws all four sides, "no frame" only the lines
+            # the axes in use actually sit on
+            spine.set_visible(closed or name in used)
             spine.set_linewidth(width)
-            spine.set_color(color)
             spine.set_picker(6)          # clicking the frame opens this dialog
 
+        # the colours belong to the three axis pages (see _apply_axis_colors)
         self.ax.tick_params(
-            which="both", color=color, width=width,
+            which="both", width=width,
             top=(style == "box_in" or style == "box_out"),
             right=(style == "box_in" or style == "box_out"),
             direction="in" if style == "box_in" else "out")
@@ -6044,7 +6204,7 @@ class PlotWindow(tk.Toplevel):
         if self.ax2 is not None:
             for spine in self.ax2.spines.values():
                 spine.set_visible(False)   # the main axes draws the frame
-            self.ax2.tick_params(which="both", color=color, width=width,
+            self.ax2.tick_params(which="both", width=width,
                                  direction="in" if style == "box_in" else "out")
             self.ax2.tick_params(which="major", length=major_length)
             self.ax2.tick_params(which="minor", length=minor_length)
@@ -6069,6 +6229,9 @@ class PlotWindow(tk.Toplevel):
                           "x_length": float(cfg["x_length"]),
                           "y_length": float(cfg["y_length"])}
         self._apply_axis_sides()     # bottom or top X, left or right Y
+        kind, key = self.selection or (None, None)
+        if kind == "axis" and not self.ax.spines[key].get_visible():
+            self.select_object(None, None)   # that line is not drawn any more
         # the plot area moved: the pixel geometry of the objects is rebuilt
         self.refresh_shapes()
         self.refresh_arrows()
@@ -6092,8 +6255,15 @@ class PlotWindow(tk.Toplevel):
                                       self.fonts["tick_label_color"]), "#000000")
         label_pad = to_float(cfg.get("label_pad"), self.fonts["axis_label_pad"])
         tick_pad = to_float(cfg.get("tick_pad"), self.fonts["tick_label_pad"])
+        stored = self.axis_cfg.get(which, {})
+        axis_color = safe_hex(cfg.get("axis_color",
+                                      stored.get("axis_color", "#000000")),
+                              "#000000")
+        label_on = bool(cfg.get("label_on", stored.get("label_on", True)))
+        ticks_on = bool(cfg.get("ticks_on", stored.get("ticks_on", True)))
         axis.label.set_fontsize(label_size)
         axis.label.set_color(label_color)
+        axis.label.set_visible(label_on)     # the section switch of the dialog
         axis.label.set_picker(True)
         axis.labelpad = self.points(label_pad)      # distance of the label
         ax.tick_params(axis=axis_name, which="both", labelsize=tick_size,
@@ -6124,26 +6294,26 @@ class PlotWindow(tk.Toplevel):
         axis.set_minor_locator(AutoMinorLocator(minor + 1) if minor else NullLocator())
 
         grid = cfg.get("grid", self.axis_cfg[which]["grid"])
-        if which == "y2":
-            # the grid belongs to the main axes: a second one on top of it
-            # would only double every line
-            ax.grid(False)
-        elif grid["major"]:
-            ax.grid(True, which="major", axis=axis_name, color=grid["color"],
-                    linestyle=grid["style"], linewidth=grid["width"])
-        else:
-            ax.grid(False, which="major", axis=axis_name)
-        if which != "y2" and grid["minor"] and minor:
-            ax.grid(True, which="minor", axis=axis_name, color=grid["color"],
-                    linestyle=grid["style"], linewidth=max(0.3, grid["width"] * 0.6))
-        elif which != "y2":
-            ax.grid(False, which="minor", axis=axis_name)
+        if which == "x":
+            if grid["major"]:
+                ax.grid(True, which="major", axis="x", color=grid["color"],
+                        linestyle=grid["style"], linewidth=grid["width"])
+            else:
+                ax.grid(False, which="major", axis="x")
+            if grid["minor"] and minor:
+                ax.grid(True, which="minor", axis="x", color=grid["color"],
+                        linestyle=grid["style"],
+                        linewidth=max(0.3, grid["width"] * 0.6))
+            else:
+                ax.grid(False, which="minor", axis="x")
 
         self.axis_cfg[which] = {
             "auto": cfg["auto"], "step": cfg.get("step"), "minor": minor,
             "label_size": label_size, "tick_size": tick_size,
             "label_color": label_color, "tick_color": tick_color,
             "label_pad": label_pad, "tick_pad": tick_pad,
+            "axis_color": axis_color, "label_on": label_on,
+            "ticks_on": ticks_on,
             "grid": dict(grid),
         }
         if which in ("y", "y2"):  # fills reaching the bottom follow the range
@@ -6152,8 +6322,7 @@ class PlotWindow(tk.Toplevel):
                         and self.series_side(column) == ("right" if which == "y2"
                                                          else "left")):
                     self.refresh_fill(column)
-        if which == "x":
-            self._apply_axis_sides()
+        self._apply_axis_sides()     # which numbers are shown, and the grid
         if redraw:
             self.draw()
 
@@ -6364,12 +6533,12 @@ class PlotWindow(tk.Toplevel):
             self.draw()
             self._start_legend_drag(y_col, event)
             return
-        which = self.frame_axis_at(event.x, event.y)
-        if which is not None:             # an axis line: select it to resize
-            self.select_object("axis", which)
+        side = self.frame_axis_at(event.x, event.y)
+        if side is not None:              # an axis line: select it to resize
+            self.select_object("axis", side)
             self.draw()
-            self.flash(f"{which.upper()} axis selected - drag one of its ends "
-                       "to resize it, click again for frame and origin")
+            self.flash(f"{SIDE_NAMES.get(side, side)} selected - drag one of "
+                       "its ends to resize it, double click for frame and origin")
             return
         if self.selection is not None:    # clicking elsewhere deselects
             self.select_object(None, None)
@@ -6393,24 +6562,35 @@ class PlotWindow(tk.Toplevel):
         return None
 
     def frame_axis_at(self, x, y):
-        """Which axis the frame line under the pointer belongs to.
+        """The side of the plot area whose line is under the pointer.
 
-        The horizontal lines (the X axis and the top of the frame) carry the
-        width of the diagram, the vertical ones its height.
+        One of "bottom", "top", "left" and "right" - the side itself, so
+        that the control points appear on the line that was clicked.
         """
-        side = self.frame_side_at(x, y)
-        if side is None:
-            return None
-        return "x" if side in ("bottom", "top") else "y"
+        return self.frame_side_at(x, y)
 
     def frame_hit(self, x, y):
         """True when the pointer is on one of the visible frame sides."""
         return self.frame_side_at(x, y) is not None
 
     # -- the axes are resized by their two ends ----------------------------
+    @staticmethod
+    def axis_side(which):
+        """The frame side one name means ("x" and "y" are the old names)."""
+        name = SIDE_ALIASES.get(str(which), str(which))
+        return name if name in FRAME_ENDS else None
+
     def axis_handle_positions(self, which):
-        """The two ends of one axis, in the coordinates of the plot area."""
-        return [(0.0, 0.0), (1.0, 0.0)] if which == "x" else [(0.0, 0.0), (0.0, 1.0)]
+        """The two ends of one axis, in the coordinates of the plot area.
+
+        Each of the four sides has its own pair: the bottom and the top line
+        end in the lower and the upper corners, the left and the right line
+        in the corners of their own edge.
+        """
+        side = self.axis_side(which)
+        if side is None:
+            return [(0.0, 0.0), (1.0, 0.0)]
+        return [tuple(point) for point in FRAME_ENDS[side]]
 
     def _figure_point(self, event):
         """The pointer as a fraction of the whole figure."""
@@ -6418,11 +6598,17 @@ class PlotWindow(tk.Toplevel):
         return (float(point[0]), float(point[1]))
 
     def resize_axis(self, which, index, point):
-        """Pull one end of an axis: the plot area grows or shrinks there."""
+        """Pull one end of an axis: the plot area grows or shrinks there.
+
+        The two horizontal sides (the bottom and the top X axis) carry the
+        width of the diagram, the two vertical ones (the left and the right
+        Y axis) its height - whichever of them is pulled.
+        """
+        side = self.axis_side(which) or "bottom"
         cfg = dict(self.frame_cfg)
         left, bottom = float(cfg["left"]), float(cfg["bottom"])
         width, height = float(cfg["x_length"]), float(cfg["y_length"])
-        if which == "x":
+        if side in HORIZONTAL_SIDES:
             if index == 0:                      # the left end moves
                 right = left + width
                 left = min(max(0.02, point[0]), right - MIN_AXIS_SIZE)
@@ -6467,7 +6653,7 @@ class PlotWindow(tk.Toplevel):
             elif box.y0 - 80 <= event.y < box.y0:
                 return "x"
         if box.y0 <= event.y <= box.y1:
-            if box.x0 - 90 <= event.x < box.x0:
+            if box.x0 - 90 <= event.x < box.x0 and self.left_axis_shown():
                 return "y"
             if self.right_axis_active() and box.x1 < event.x <= box.x1 + 90:
                 return "y2"
@@ -6874,8 +7060,9 @@ plotted, and against which axis`) give the diagram two more axes:
   own automatic scaling, so a curve of a few tenths and one of tens of
   thousands can share a diagram and both be readable.
 * the **top X axis** is the same X scale drawn above the plot area instead
-  of below it: the numbers and the axis label move up together, and the top
-  of the frame is drawn even when the frame style is `None`.
+  of below it: the numbers and the axis label move up together, and with
+  `No frame` the line above the plot area is the one that is drawn while
+  the one below it stays away.
 
 Everything else works exactly as on the two original axes:
 
@@ -6892,6 +7079,9 @@ Everything else works exactly as on the two original axes:
 * a **filled area** under a curve on the right is filled on the right hand
   scale, and `Fill down to the bottom of the axes` means the bottom of that
   scale.
+* both new lines are **resized by the pointer** exactly like the two
+  original ones: click the line, drag one of its two ends (see `Resizing
+  the axes with the pointer`).
 * the whole arrangement - which side the X axis is on and which curve
   belongs to which Y axis - is stored in `.aplt` files.  Files written by
   an older version load with everything on the bottom and the left, as
@@ -6899,27 +7089,56 @@ Everything else works exactly as on the two original axes:
 
 ### Resizing the axes with the pointer
 
-The plot area does not have to be sized in a dialog: **click an axis line**
-and a small square control point appears on each of its two ends.
+The plot area does not have to be sized in a dialog: **click any axis
+line** and a small square control point appears on each of its two ends.
+All four sides work, each with the points on its own line:
 
-* The **X axis** (the horizontal line) gets its points on the left and on
-  the right end.  Dragging the right one makes the diagram wider or
-  narrower and leaves the origin where it is; dragging the left one moves
-  the origin and keeps the right end in place.
-* The **Y axis** (the vertical line) gets its points at the bottom and at
-  the top, and they work the same way upwards.
-* The lines of a full frame belong to the same two axes: the horizontal
-  ones carry the width, the vertical ones the height.
+| Clicked line | Its two points | Dragging them |
+| --- | --- | --- |
+| bottom X axis | the lower two corners | the width |
+| top X axis | the upper two corners | the width |
+| left Y axis | the left two corners | the height |
+| right Y axis | the right two corners | the height |
+
+* The **horizontal** lines carry the width of the diagram: dragging the
+  right point makes it wider or narrower and leaves the origin where it is,
+  dragging the left one moves the origin and keeps the right end in place.
+  The **vertical** lines work the same way upwards, with the height.
+* So a diagram drawn against the **top X axis** and the **right Y axis** is
+  sized exactly like any other one - by the two lines that are actually
+  there.
+* Only a line that is really **drawn** can be clicked, and a line that
+  disappears (because the X axis moved to the other side, or the last curve
+  of one Y axis was unticked) drops out of the selection by itself.
 * The arrow keys move the **whole plot area** while an axis is selected
   (`Shift`: ten pixels), keeping its size.
 * Everything in the diagram - the curves, the legend boxes, the text
   boxes, the drawings and the arrows - keeps its place inside the plot
   area and follows it.
-* Clicking the selected axis line **again** opens `Frame and origin`, where
-  the same numbers can be typed in fractions, centimetres or inches; the
-  dialog always shows what the pointer has made.
+* **Double clicking** an axis line opens `Frame and origin`, where the same
+  numbers can be typed in fractions, centimetres or inches; the dialog
+  always shows what the pointer has made.
 * The size is kept in fractions of the window, so it survives a resize of
   the diagram window, and it is stored in `.aplt` files.
+
+### Which frame lines are drawn
+
+`Frame and origin` offers four frame styles.  `Full frame` and the two
+`Frame with ticks` styles always draw **all four** lines, as before.
+`No frame (X and Y only)` draws exactly the axes that are **in use**:
+
+| In use | `No frame` draws |
+| --- | --- |
+| `x_B` + `y_L` | the bottom and the left line (the classical pair) |
+| `x_T` + `y_R` | the top and the right line - and nothing else |
+| `x_B` + `y_R` | the bottom and the right line; the left and the top stay away |
+| `x_B` + `y_L` + `y_R` | the bottom line and **both** vertical lines |
+
+An axis that carries no curve is not only left without a frame line: its
+**numbers, tick marks and label disappear** as well, so a diagram whose
+every curve is on the right hand scale has no empty left axis standing
+next to it.  The Y **grid** follows the Y axis whose numbers are shown, so
+it is drawn once, on the scale it belongs to.
 
 ### Turning the drawings and the text boxes
 
@@ -7200,22 +7419,42 @@ perfectly possible.  The legend always mirrors what the curve looks like.
 
 ### Axes properties
 
-One window with an **X axis**, a **Y axis** and a **Frame and origin** tab.
-The two axis tabs have:
+One window with an **X axis** tab, a **Y axis** tab, a **Right Y axis** tab
+(whenever a curve is drawn there) and a **Frame and origin** tab.  Every
+axis tab has the same three sections, and **the name of each section is its
+own check button**:
 
-* **Axis label and fonts**: the label text, the font size, font colour and
-  **distance** of the label, and the font size, font colour and
-  **distance** of the numbers (ticks).  Both distances are given in pixels
-  and are measured from the axis (from the end of the tick marks in the
-  case of the numbers); larger values push the text away from the diagram,
-  negative values pull it inwards.  The colour of the tick *marks* is not
-  set here - it belongs to the frame, so a black frame can carry grey
-  numbers.
-* **Range and ticks**: automatic range, or an explicit `From`, `To` and
-  `Step` for the major ticks, plus the number of minor ticks between two
-  major ticks.
-* **Grid of this axis**: major and minor grid lines with their own colour,
-  style and width.
+**Axis label and fonts** (switched on)
+
+* the label **text**, its **font size**, its **font colour** and its
+  **distance** from the axis in pixels - larger values push it away from
+  the diagram, negative values pull it inwards.
+* Switching the section **off** makes the label disappear; the text is
+  remembered, so switching it on again brings it back unchanged.
+
+**Tick range, labels and fonts** (switched on)
+
+* the **font size**, **font colour** and **distance** of the numbers
+  (measured from the end of the tick marks),
+* **Automatic range and ticks**, or an explicit `From`, `To` and `Step` for
+  the major ticks, plus the number of **minor ticks** between two major
+  ticks,
+* **Axis colour** at the end of the section: the colour of *this* axis line
+  and of *its* tick marks.  Each of the three axes has its own, so a black
+  bottom axis and a red right axis - matching a red curve - are one click
+  apart.  It is deliberately not the colour of the numbers: the number
+  colour is the row above it, so a black axis can carry grey numbers.
+* Switching the section **off** removes the **numbers and both the major
+  and the minor tick marks** of that axis.  The axis line itself and the
+  label stay.
+
+**Grid of this axis** (switched off)
+
+* the section title itself draws the **major grid lines**; inside it,
+  **Minor grid lines** adds the finer ones,
+* **Colour**, **Style** and **Width** of the lines.
+* The Y grid is drawn by the Y axis whose numbers are shown, so it appears
+  once even when both Y axes are in use.
 
 ### Frame and origin
 
@@ -7225,16 +7464,20 @@ The third tab of the axes dialog, also reachable with
 **Frame**
 
 * **Style**:
-  * `No frame (X and Y only) (default)` - only the left and the bottom side
-    are drawn, there is no top X axis and no right Y axis,
+  * `No frame (X and Y only) (default)` - only the sides that carry an axis
+    in use are drawn (see `Which frame lines are drawn`),
   * `Full frame` - all four sides, ticks on the bottom and on the left, as
     matplotlib draws it by default,
   * `Frame with ticks (inward)` - all four sides with ticks on every side,
     pointing into the diagram,
   * `Frame with ticks (outward)` - all four sides with ticks on every side,
     pointing outwards.
-* **Thickness** and **Colour** of the frame; the tick marks follow them, so
-  the whole frame stays consistent.
+* **Thickness** of the frame lines; the tick marks follow it.
+* The **colour** is not here: every axis paints its own line and its own
+  tick marks with the `Axis colour` of its page (see `Axes properties`).
+  In a full frame the two horizontal sides take the colour of the X axis,
+  the left side that of the left Y axis and the right side that of the
+  right Y axis.
 * **Major tick length** and **Minor tick length** in points.  Zero hides
   that kind of tick mark.
 
