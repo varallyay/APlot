@@ -627,17 +627,30 @@ If the old behaviour is preferred, `Property windows always on top` in the
 
 ### Curve properties
 
-* **Legend**: the text of this curve's legend box with its font size and
-  font colour.  An empty text removes the box.
-* **Line**: style (solid, dashed, dash-dot, dotted, none), width, colour.
-* **Marker**: style (13 shapes plus "None"), size, fill colour, "Hollow"
-  (unfilled marker), edge colour, edge width.
-* **Fill under the curve**: fills the area between the curve and the zero
-  line (or the bottom of the axes).  The fill takes the colour of the curve
-  or an own colour, has an adjustable opacity, and can carry a **pattern**
-  (diagonal, vertical, horizontal, crossed, circles, dots, stars and their
-  dense variants).  The pattern is drawn in the full colour over the
-  semi-transparent area, so both stay visible.
+Four sections, each with **its own check button as the title**: switched
+off, that part of the curve is simply not drawn.  As in the axes dialog,
+the settings that belong together share a line, and the four sections share
+their column widths so everything lines up.
+
+* **Legend**: the `Text` of this curve's legend box, then its `Font size`
+  with the `Colour` of the text next to it.  An empty text removes the box.
+* **Line**: `Style` (solid, dashed, dash-dot, dotted), then `Width` with
+  the `Colour` of the line next to it.
+* **Marker**: `Hollow (no fill)` at the top of the section - an outlined
+  marker has no fill colour at all - then `Style` (12 shapes), `Size` with
+  `Fill colour` next to it, and `Edge width` with `Edge colour` next to it.
+* **Fill under the curve**: `Same colour as the curve` at the top, then
+  `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
+  vertical, horizontal, crossed, circles, dots, stars and their dense
+  variants), and finally `Fill down to zero line`.
+  * That last check button is **off** to begin with: the area is then
+    filled all the way down to the axis, and it follows the axis when the
+    range is changed.
+  * Switched **on**, the area is filled between the curve and the **zero
+    line** instead, so positive and negative parts are shown separately.
+  * The pattern is drawn in the full colour over the semi-transparent area,
+    so both stay visible.  The filled area never changes the automatic
+    range of the axis: it is a picture of the curve, not data of its own.
 * **Marker colour = line colour** copies the line colour into both marker
   colours.
 
@@ -651,22 +664,27 @@ One window with an **X axis** tab, a **Y axis** tab, a **Right Y axis** tab
 axis tab has the same three sections, and **the name of each section is its
 own check button**:
 
+The three sections share their column widths - the labels **and** the
+boxes behind them - so every second setting of a shared line (`To`,
+`Minor ticks`, and all three `Colour` boxes) starts at exactly the same
+place on the page.
+
 **Axis label and fonts** (switched on)
 
 * the label **text**, then its **font size** with the **Colour** of the
-  label next to it on the same line, and its **distance** from the axis in
-  pixels - larger values push it away from the diagram, negative values
-  pull it inwards.
+  label next to it on the same line, and `Label offset [px]` - the distance
+  from the axis: larger values push the label away from the diagram,
+  negative values pull it inwards.
 * Switching the section **off** makes the label disappear; the text is
   remembered, so switching it on again brings it back unchanged.
 
 **Tick range, labels and fonts** (switched on)
 
 * the **font size** of the numbers with their **Colour** next to it, and
-  their **distance** (measured from the end of the tick marks),
+  `Number offset [px]` (measured from the end of the tick marks),
 * **Automatic range and ticks**, or an explicit range - `From` and `To`
-  side by side on one line - and a `Step` for the major ticks, plus the
-  number of **minor ticks** between two major ticks,
+  side by side on one line - and `Step (major ticks)` with `Minor ticks`
+  (how many minor ones sit between two major ones) on the next line,
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click
@@ -680,7 +698,7 @@ own check button**:
 
 * the section title itself draws the **major grid lines**; inside it,
   **Minor grid lines** adds the finer ones,
-* **Colour**, **Style** and **Width** of the lines.
+* **Style** with its **Colour** next to it, and the **Width** of the lines.
 * The Y grid is drawn by the Y axis whose numbers are shown, so it appears
   once even when both Y axes are in use.
 

@@ -5199,7 +5199,7 @@
       "geometry": "960x720+178+70",
       "figure": {
         "width": 9.6,
-        "height": 6.24,
+        "height": 6.4,
         "dpi": 100.0
       },
       "title": {
@@ -5239,6 +5239,10 @@
         "y": [
           -7.0,
           -9.0
+        ],
+        "y2": [
+          0.0,
+          0.0
         ]
       },
       "shapes": [
@@ -5248,6 +5252,8 @@
           "y": 0.8535797535797537,
           "w": 0.10752688172043023,
           "h": 0.06660006660006679,
+          "angle": 0.0,
+          "flip": false,
           "style": "--",
           "width": 3.0,
           "edge": "#935100",
@@ -5294,6 +5300,7 @@
             0.7379032258064517,
             0.09720071595071594
           ],
+          "angle": 0.0,
           "size": 14,
           "color": "#000000",
           "edge": "#000000",
@@ -5305,6 +5312,7 @@
             0.3360215053763441,
             0.5684482184482185
           ],
+          "angle": 0.0,
           "size": 14,
           "color": "#ff2600",
           "edge": "none",
@@ -5318,13 +5326,16 @@
           "min": 950.0,
           "max": 1150.0,
           "step": 20.0,
-          "minor": 3,
+          "minor": 4,
           "label_size": 18,
           "tick_size": 16,
           "label_color": "#000000",
           "tick_color": "#000000",
           "label_pad": 10.0,
           "tick_pad": 12.0,
+          "axis_color": "#000000",
+          "label_on": true,
+          "ticks_on": true,
           "grid": {
             "major": false,
             "minor": false,
@@ -5339,13 +5350,16 @@
           "min": 0.0,
           "max": 100.0,
           "step": 20.0,
-          "minor": 3,
+          "minor": 4,
           "label_size": 18,
           "tick_size": 16,
           "label_color": "#000000",
           "tick_color": "#000000",
           "label_pad": 5.5,
           "tick_pad": 5.0,
+          "axis_color": "#000000",
+          "label_on": true,
+          "ticks_on": true,
           "grid": {
             "major": false,
             "minor": false,
@@ -5359,6 +5373,7 @@
         {
           "column": "Spectrum (arb. u.)",
           "label": "Spectrum (arb. u.)",
+          "axis": "left",
           "legend_pos": [
             0.4531182795698924,
             0.9698855039041956
@@ -5387,7 +5402,8 @@
           "markeredgewidth": 1.0,
           "visible": true
         }
-      ]
+      ],
+      "x_side": "bottom"
     }
   ]
 }

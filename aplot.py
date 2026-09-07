@@ -246,6 +246,9 @@ SIDE_NAMES = {"bottom": "Bottom X axis", "top": "Top X axis",
 HORIZONTAL_SIDES = ("bottom", "top")
 TOOLTIP_DELAY = 250        # milliseconds before a hint pops up
 TOOLTIP_BACKGROUND = "#ffffe0"
+SPIN_WIDTH = 4             # characters in the little number boxes
+ENTRY_WIDTH = 12           # characters in the range and style boxes
+COMBO_WIDTH = 14           # characters in the style lists
 SELECT_FACE = to_rgba(SELECT_COLOR, 0.18)     # veil over a selected text
 SELECT_EDGE = to_rgba(SELECT_COLOR, 0.90)
 SELECT_BOX = {"boxstyle": "round,pad=0.28", "facecolor": SELECT_FACE,
@@ -533,7 +536,8 @@ DEFAULTS = {
         "legend_frame": False, "legend_edge_color": "#000000",
         "legend_background": "#ffffff", "legend_transparent": True,
         "fill_under": False, "fill_color": "#1f77b4", "fill_alpha": 0.35,
-        "fill_pattern": "None (plain colour)", "fill_base": "Zero line",
+        "fill_pattern": "None (plain colour)",
+        "fill_base": "Bottom of the axes",
         "fill_follows_line": True,
     },
     "fonts": {
@@ -748,6 +752,75 @@ def set_macos_app_name(name=APP_NAME):
 # --------------------------------------------------------------------------
 # reusable widgets
 # --------------------------------------------------------------------------
+
+class PairedFields:
+    """Sections whose lines may carry two settings, aligned across sections.
+
+    Every section is a grid of four columns: label, widget, label, widget.
+    `align_columns` gives a group of sections the same column widths, so the
+    second setting of every shared line starts at the same place - the
+    labels and the boxes behind them alike.
+    """
+
+    @staticmethod
+    def _padding(info):
+        """The horizontal padding of one grid cell, whatever Tk reports."""
+        value = info.get("padx", 0)
+        if isinstance(value, (list, tuple)):
+            parts = [str(one) for one in value]
+        else:
+            parts = str(value).split()
+        total = 0
+        for part in parts:
+            try:
+                total += int(float(part))
+            except (TypeError, ValueError):
+                pass
+        return total
+
+    @staticmethod
+    def _pair(box, row, first_text, first_widget, second_text, second_widget,
+              pady=3):
+        """Two settings on one line: label, widget, label, widget."""
+        ttk.Label(box, text=first_text).grid(row=row, column=0, sticky="w",
+                                             padx=(0, 8), pady=pady)
+        first_widget.grid(row=row, column=1, sticky="w", pady=pady)
+        ttk.Label(box, text=second_text).grid(row=row, column=2, sticky="w",
+                                              padx=(16, 8), pady=pady)
+        second_widget.grid(row=row, column=3, sticky="w", pady=pady)
+        return first_widget, second_widget
+
+    @staticmethod
+    def _wide(widget, row, pady=(6, 0), columnspan=4):
+        """One widget across the whole width of a section."""
+        widget.grid(row=row, column=0, columnspan=columnspan, sticky="ew",
+                    pady=pady)
+        return widget
+
+    def _align_columns(self, boxes):
+        """Give a group of sections the same first three column widths."""
+        try:      # the colour boxes only know their size once they are laid out
+            self.update_idletasks()
+        except tk.TclError:
+            pass
+        # column 2 carries the second label of a shared line ("Colour:",
+        # "To:", "Minor ticks:"); it has to be as wide everywhere, or the
+        # widget behind it would start at a different place in every section
+        widest = {0: 0, 1: 0, 2: 0}
+        for box in boxes:
+            for child in box.winfo_children():
+                info = child.grid_info()
+                if not info or int(info.get("columnspan", 1)) != 1:
+                    continue
+                column = int(info.get("column", 0))
+                if column in widest:
+                    # the free space around the widget belongs to the cell
+                    needed = child.winfo_reqwidth() + self._padding(info)
+                    widest[column] = max(widest[column], needed)
+        for box in boxes:
+            for column, width in widest.items():
+                box.grid_columnconfigure(column, minsize=width + 4)
+
 
 class Tooltip:
     """A small yellow hint that appears while the pointer rests on a widget."""
@@ -1372,7 +1445,7 @@ class TextStyleDialog(ToolDialog):
 # curve (line + marker) properties
 # --------------------------------------------------------------------------
 
-class SeriesStyleDialog(ToolDialog):
+class SeriesStyleDialog(PairedFields, ToolDialog):
     """Line and marker properties of one curve; changes are applied live."""
 
     def __init__(self, master, line: Line2D, on_change, on_close=None,
@@ -1418,14 +1491,18 @@ class SeriesStyleDialog(ToolDialog):
         self.fill_hatch_var = tk.StringVar(
             value=name_of(HATCH_PATTERNS, self._fill.get("hatch", ""),
                           names(HATCH_PATTERNS)[0]))
-        self.fill_base_var = tk.StringVar(
-            value=name_of(FILL_BASES, self._fill.get("base", "zero"), "Zero line"))
+        # a check button instead of a list: on means the zero line, off (the
+        # default) means the bottom of the axes
+        self.fill_zero_var = tk.BooleanVar(
+            value=str(self._fill.get("base", "bottom")) == "zero")
 
         line_color = safe_hex(line.get_color())
         self._build_legend_box()
         self._build_line_box(line_color)
         self._build_marker_box(line_color, face)
         self._build_fill_box(line_color)
+        self._align_columns((self.legend_box, self.line_box,
+                             self.marker_box, self.fill_box))
         self._build_buttons()
         self._loading = False
 
@@ -1465,91 +1542,116 @@ class SeriesStyleDialog(ToolDialog):
     # -- construction ------------------------------------------------------
     def _build_legend_box(self):
         box = self._section("Legend", self.legend_on_var)
-        self.field(box, 0, "Text:", ttk.Entry(box, textvariable=self.label_var, width=30))
+        self.legend_box = box
+        ttk.Label(box, text="Text:").grid(row=0, column=0, sticky="w",
+                                          padx=(0, 8), pady=3)
+        ttk.Entry(box, textvariable=self.label_var, width=30).grid(
+            row=0, column=1, columnspan=3, sticky="ew", pady=3)
         self.label_var.trace_add("write", self._apply)
-        self.field(box, 1, "Font size:",
-                   ttk.Spinbox(box, from_=4, to=72, increment=1, width=8,
-                               textvariable=self.legend_size_var,
-                               command=self._apply))
-        self.legend_size_var.trace_add("write", self._apply)
+        # the size of the text and its colour stand side by side
         self.legend_color = ColorSwatch(box, self._legend_color,
                                         command=lambda _c: self._apply())
-        self.field(box, 2, "Font colour:", self.legend_color)
-        ttk.Label(box, text="Switch \"Legend\" off to hide this curve's box.",
-                  foreground="#666").grid(row=3, column=0, columnspan=2,
-                                          sticky="w", pady=(4, 0))
+        self._pair(box, 1,
+                   "Font size:",
+                   ttk.Spinbox(box, from_=4, to=72, increment=1, width=SPIN_WIDTH,
+                               textvariable=self.legend_size_var,
+                               command=self._apply),
+                   "Colour:", self.legend_color)
+        self.legend_size_var.trace_add("write", self._apply)
+        self._wide(ttk.Label(
+            box, text="Switch \"Legend\" off to hide this curve's box.",
+            foreground="#666"), 2, pady=(4, 0))
 
     def _build_line_box(self, line_color):
         box = self._section("Line", self.line_on_var, pady=(10, 0))
+        self.line_box = box
 
         combo = ttk.Combobox(box, textvariable=self.lstyle_var, state="readonly",
-                             values=drawn_names(LINE_STYLES), width=14)
+                             values=drawn_names(LINE_STYLES), width=COMBO_WIDTH)
         self.field(box, 0, "Style:", combo)
         combo.bind("<<ComboboxSelected>>", self._apply)
 
-        self.field(box, 1, "Width:",
-                   ttk.Spinbox(box, from_=0, to=20, increment=0.5, width=8,
-                               textvariable=self.lwidth_var, command=self._apply))
+        # the thickness of the line and its colour stand side by side
+        self.line_color = ColorSwatch(box, line_color,
+                                      command=lambda _c: self._apply())
+        self._pair(box, 1,
+                   "Width:",
+                   ttk.Spinbox(box, from_=0, to=20, increment=0.5,
+                               width=SPIN_WIDTH, textvariable=self.lwidth_var,
+                               command=self._apply),
+                   "Colour:", self.line_color)
         self.lwidth_var.trace_add("write", self._apply)
-
-        self.line_color = ColorSwatch(box, line_color, command=lambda _c: self._apply())
-        self.field(box, 2, "Colour:", self.line_color)
 
     def _build_marker_box(self, line_color, face):
         box = self._section("Marker", self.marker_on_var, pady=(10, 0))
+        self.marker_box = box
+
+        # an outlined marker has no fill at all: the switch belongs on top
+        self._wide(ttk.Checkbutton(box, text="Hollow (no fill)",
+                                   variable=self.hollow_var,
+                                   command=self._apply), 0, pady=(0, 4))
 
         combo = ttk.Combobox(box, textvariable=self.mstyle_var, state="readonly",
-                             values=drawn_names(MARKERS), width=14)
-        self.field(box, 0, "Style:", combo)
+                             values=drawn_names(MARKERS), width=COMBO_WIDTH)
+        self.field(box, 1, "Style:", combo)
         combo.bind("<<ComboboxSelected>>", self._apply)
-
-        self.field(box, 1, "Size:",
-                   ttk.Spinbox(box, from_=0, to=40, increment=1, width=8,
-                               textvariable=self.msize_var, command=self._apply))
-        self.msize_var.trace_add("write", self._apply)
 
         self.face_color = ColorSwatch(box, safe_hex(face, line_color),
                                       command=lambda _c: self._apply())
-        self.field(box, 2, "Fill colour:", self.face_color)
-        self.field(box, 3, "", ttk.Checkbutton(box, text="Hollow (no fill)",
-                                               variable=self.hollow_var,
-                                               command=self._apply))
+        self._pair(box, 2,
+                   "Size:",
+                   ttk.Spinbox(box, from_=0, to=40, increment=1,
+                               width=SPIN_WIDTH, textvariable=self.msize_var,
+                               command=self._apply),
+                   "Fill colour:", self.face_color)
+        self.msize_var.trace_add("write", self._apply)
 
         self.edge_color = ColorSwatch(
             box, safe_hex(self.line.get_markeredgecolor(), line_color),
             command=lambda _c: self._apply())
-        self.field(box, 4, "Edge colour:", self.edge_color)
-
-        self.field(box, 5, "Edge width:",
-                   ttk.Spinbox(box, from_=0, to=10, increment=0.5, width=8,
-                               textvariable=self.mwidth_var, command=self._apply))
+        self._pair(box, 3,
+                   "Edge width:",
+                   ttk.Spinbox(box, from_=0, to=10, increment=0.5,
+                               width=SPIN_WIDTH, textvariable=self.mwidth_var,
+                               command=self._apply),
+                   "Edge colour:", self.edge_color)
         self.mwidth_var.trace_add("write", self._apply)
 
     def _build_fill_box(self, line_color):
         box = self._section("Fill under the curve", self.fill_on_var,
                             pady=(10, 0))
+        self.fill_box = box
 
-        self.field(box, 0, "", ttk.Checkbutton(box, text="Same colour as the curve",
-                                               variable=self.fill_follow_var,
-                                               command=self._apply))
+        self._wide(ttk.Checkbutton(box, text="Same colour as the curve",
+                                   variable=self.fill_follow_var,
+                                   command=self._apply), 0, pady=(0, 4))
+        # the colour of the area and how transparent it is belong together
         self.fill_color = ColorSwatch(box, self._fill.get("color", line_color),
                                       command=lambda _c: self._apply())
-        self.field(box, 1, "Fill colour:", self.fill_color)
-        self.field(box, 2, "Opacity (0-1):",
-                   ttk.Spinbox(box, from_=0, to=1, increment=0.05, width=8,
-                               textvariable=self.fill_alpha_var, command=self._apply))
+        self._pair(box, 1,
+                   "Fill colour:", self.fill_color,
+                   "Opacity (0-1):",
+                   ttk.Spinbox(box, from_=0, to=1, increment=0.05,
+                               width=SPIN_WIDTH,
+                               textvariable=self.fill_alpha_var,
+                               command=self._apply))
         self.fill_alpha_var.trace_add("write", self._apply)
 
         pattern = ttk.Combobox(box, textvariable=self.fill_hatch_var,
                                state="readonly", values=names(HATCH_PATTERNS),
                                width=22)
-        self.field(box, 3, "Pattern:", pattern)
+        ttk.Label(box, text="Pattern:").grid(row=2, column=0, sticky="w",
+                                             padx=(0, 8), pady=3)
+        pattern.grid(row=2, column=1, columnspan=3, sticky="w", pady=3)
         pattern.bind("<<ComboboxSelected>>", self._apply)
 
-        base = ttk.Combobox(box, textvariable=self.fill_base_var, state="readonly",
-                            values=names(FILL_BASES), width=22)
-        self.field(box, 4, "Fill down to:", base)
-        base.bind("<<ComboboxSelected>>", self._apply)
+        self.fill_zero_check = self._wide(
+            ttk.Checkbutton(box, text="Fill down to zero line",
+                            variable=self.fill_zero_var, command=self._apply),
+            3, pady=(4, 0))
+        self._wide(ttk.Label(
+            box, foreground="#666", justify="left",
+            text="Switched off, the area is filled down to the axis."), 4)
 
     def _build_buttons(self):
         bar = ttk.Frame(self.body)
@@ -1604,7 +1706,7 @@ class SeriesStyleDialog(ToolDialog):
                 "color": self.fill_color.color,
                 "alpha": to_float(self.fill_alpha_var.get(), 0.35),
                 "hatch": code_of(HATCH_PATTERNS, self.fill_hatch_var.get(), ""),
-                "base": code_of(FILL_BASES, self.fill_base_var.get(), "zero"),
+                "base": "zero" if self.fill_zero_var.get() else "bottom",
             })
         self.on_change()
 
@@ -1613,7 +1715,7 @@ class SeriesStyleDialog(ToolDialog):
 # axes properties: one window, one tab per axis
 # --------------------------------------------------------------------------
 
-class AxisTab(ttk.Frame):
+class AxisTab(PairedFields, ttk.Frame):
     """One page of the axes dialog (X or Y)."""
 
     def __init__(self, master, plot, which):
@@ -1649,41 +1751,25 @@ class AxisTab(ttk.Frame):
         self._build_label_box()
         self._build_range_box()
         self._build_grid_box(grid["color"])
+        self._align_columns((self.label_box, self.range_box,
+                             self.grid_box))
         self._toggle_auto()
 
     # -- construction ------------------------------------------------------
     def _section(self, title, variable, **pack):
         """A section whose title is its own check button."""
-        box = ttk.LabelFrame(self, padding=6)
+        box = ttk.LabelFrame(self, padding=8)
         check = ttk.Checkbutton(box, text=title, variable=variable)
         box.configure(labelwidget=check)
         box.pack(fill="x", **pack)
         return box, check
-
-    @staticmethod
-    def _pair(box, row, first_text, first_widget, second_text, second_widget,
-              pady=3):
-        """Two settings on one line: label, widget, label, widget."""
-        ttk.Label(box, text=first_text).grid(row=row, column=0, sticky="w",
-                                             padx=(0, 4), pady=pady)
-        first_widget.grid(row=row, column=1, sticky="w", pady=pady)
-        ttk.Label(box, text=second_text).grid(row=row, column=2, sticky="w",
-                                              padx=(16, 4), pady=pady)
-        second_widget.grid(row=row, column=3, sticky="w", pady=pady)
-        return first_widget, second_widget
-
-    @staticmethod
-    def _wide(widget, row, pady=(4, 2)):
-        """One widget across the whole width of a section."""
-        widget.grid(row=row, column=0, columnspan=4, sticky="ew", pady=pady)
-        return widget
 
     def _build_label_box(self):
         """The axis label: its text, its font and how far it sits."""
         box, check = self._section("Axis label and fonts", self.label_on_var)
         self.label_box, self.label_check = box, check
         ttk.Label(box, text="Label text:").grid(row=0, column=0, sticky="w",
-                                                padx=(0, 4), pady=3)
+                                                padx=(0, 8), pady=3)
         # the text field reaches across the whole section, so the colour of
         # the row below it does not get pushed to the far right
         ttk.Entry(box, textvariable=self.label_var, width=30).grid(
@@ -1692,11 +1778,12 @@ class AxisTab(ttk.Frame):
         self.label_color = ColorSwatch(box, self._label_color)
         self._pair(box, 1,
                    "Label font size:",
-                   ttk.Spinbox(box, from_=4, to=48, increment=1, width=4,
+                   ttk.Spinbox(box, from_=4, to=48, increment=1, width=SPIN_WIDTH,
                                textvariable=self.label_size_var),
                    "Colour:", self.label_color)
         ToolDialog.field(box, 2, "Label offset [px]:",
-                         ttk.Spinbox(box, from_=-200, to=400, increment=1, width=4,
+                         ttk.Spinbox(box, from_=-200, to=400, increment=1,
+                                     width=SPIN_WIDTH,
                                      textvariable=self.label_pad_var))
         self._wide(ttk.Label(box, foreground="#666", justify="left",
                              text="Switch the section off to leave the label "
@@ -1711,11 +1798,12 @@ class AxisTab(ttk.Frame):
         self.tick_color = ColorSwatch(box, self._tick_color)
         self._pair(box, 0,
                    "Numbers (ticks) font size:",
-                   ttk.Spinbox(box, from_=2, to=46, increment=1, width=4,
+                   ttk.Spinbox(box, from_=4, to=48, increment=1, width=SPIN_WIDTH,
                                textvariable=self.tick_size_var),
                    "Colour:", self.tick_color)
-        ToolDialog.field(box, 1, "Numbers offset [px]:",
-                         ttk.Spinbox(box, from_=-200, to=400, increment=1, width=4,
+        ToolDialog.field(box, 1, "Number offset [px]:",
+                         ttk.Spinbox(box, from_=-200, to=400, increment=1,
+                                     width=SPIN_WIDTH,
                                      textvariable=self.tick_pad_var))
         self._wide(ttk.Separator(box, orient="horizontal"), 2, pady=(8, 6))
         self._wide(ttk.Checkbutton(box, text="Automatic range and ticks",
@@ -1724,22 +1812,25 @@ class AxisTab(ttk.Frame):
         # the two ends of the range share one line
         self.min_entry, self.max_entry = self._pair(
             box, 4,
-            "From:", ttk.Entry(box, textvariable=self.min_var, width=12),
-            "To:", ttk.Entry(box, textvariable=self.max_var, width=12))
-        self.step_entry = ToolDialog.field(
-            box, 5, "Step (major ticks):",
-            ttk.Entry(box, textvariable=self.step_var, width=12))
-        ToolDialog.field(box, 6, "Minor ticks between majors:",
-                         ttk.Spinbox(box, from_=0, to=20, increment=1, width=4,
-                                     textvariable=self.minor_var))
-        self._wide(ttk.Separator(box, orient="horizontal"), 7, pady=(8, 6))
+            "From:", ttk.Entry(box, textvariable=self.min_var, width=ENTRY_WIDTH),
+            "To:", ttk.Entry(box, textvariable=self.max_var, width=ENTRY_WIDTH))
+        # the step of the major ticks and the number of minor ones between
+        # them belong together: one line
+        self.step_entry, _minor = self._pair(
+            box, 5,
+            "Step (major ticks):",
+            ttk.Entry(box, textvariable=self.step_var, width=ENTRY_WIDTH),
+            "Minor ticks:",
+            ttk.Spinbox(box, from_=0, to=20, increment=1, width=SPIN_WIDTH,
+                        textvariable=self.minor_var))
+        self._wide(ttk.Separator(box, orient="horizontal"), 6, pady=(8, 6))
         self.axis_color = ColorSwatch(box, self._axis_color)
-        ToolDialog.field(box, 8, "Axis colour:", self.axis_color)
+        ToolDialog.field(box, 7, "Axis colour:", self.axis_color)
         self._wide(ttk.Label(
             box, foreground="#666", justify="left",
             text="The colour of this axis line and of its tick marks.\n"
                  "Switch the section off to leave the numbers and both\n"
-                 "kinds of tick marks away."), 9)
+                 "kinds of tick marks away."), 8)
 
     def _build_grid_box(self, color):
         """The grid: the section title switches the major lines on."""
@@ -1748,18 +1839,21 @@ class AxisTab(ttk.Frame):
         self.grid_box, self.grid_check = box, check
         ttk.Checkbutton(box, text="Minor grid lines", variable=self.gminor_var
                         ).grid(row=0, column=0, columnspan=4, sticky="w")
+        # the style of the lines and their colour stand side by side
         self.grid_color = ColorSwatch(box, color)
-        ToolDialog.field(box, 1, "Colour:", self.grid_color)
-        ToolDialog.field(box, 2, "Style:",
-                         ttk.Combobox(box, textvariable=self.gstyle_var,
-                                      state="readonly", values=names(GRID_STYLES),
-                                      width=12))
-        ToolDialog.field(box, 3, "Width:",
-                         ttk.Spinbox(box, from_=0.2, to=5, increment=0.2, width=4,
+        self._pair(box, 1,
+                   "Style:",
+                   ttk.Combobox(box, textvariable=self.gstyle_var,
+                                state="readonly", values=names(GRID_STYLES),
+                                width=ENTRY_WIDTH),
+                   "Colour:", self.grid_color)
+        ToolDialog.field(box, 2, "Width:",
+                         ttk.Spinbox(box, from_=0.2, to=5, increment=0.2,
+                                     width=SPIN_WIDTH,
                                      textvariable=self.gwidth_var))
         self._wide(ttk.Label(
             box, foreground="#666", justify="left",
-            text="The section title draws the major grid lines."), 4)
+            text="The section title draws the major grid lines."), 3)
 
     # -- behaviour ---------------------------------------------------------
     def _toggle_auto(self):
@@ -4008,7 +4102,7 @@ class PlotWindow(tk.Toplevel):
             "color": safe_hex(plot_cfg.get("fill_color"), PALETTE_FALLBACK),
             "alpha": float(plot_cfg.get("fill_alpha", 0.35)),
             "hatch": code_of(HATCH_PATTERNS, plot_cfg.get("fill_pattern"), ""),
-            "base": code_of(FILL_BASES, plot_cfg.get("fill_base"), "zero"),
+            "base": code_of(FILL_BASES, plot_cfg.get("fill_base"), "bottom"),
         }
 
     def refresh_fill(self, column):
@@ -4032,12 +4126,22 @@ class PlotWindow(tk.Toplevel):
         hatch = cfg.get("hatch") or None
         ax = line.axes if line.axes is not None else self.ax
         base = 0.0 if cfg.get("base", "zero") == "zero" else ax.get_ylim()[0]
+        # the filled area is only a picture of the curve: it must not grow
+        # the data limits, or a fill reaching the bottom of the axes would
+        # push that bottom further down at every redraw
+        limits = ax.dataLim.get_points().copy()
+        ignoring = getattr(ax, "ignore_existing_data_limits", False)
         fill = ax.fill_between(
             x_data, y_data, base,
             facecolor=to_rgba(color, alpha),
             edgecolor=to_rgba(color, 1.0) if hatch else "none",
             hatch=hatch, linewidth=0.0, label="_nolegend_",
             zorder=line.get_zorder() - 0.5)
+        try:
+            ax.dataLim.set_points(limits)
+            ax.ignore_existing_data_limits = ignoring
+        except (AttributeError, ValueError):
+            pass
         self.fills[column] = fill
         return fill
 
@@ -7424,17 +7528,30 @@ If the old behaviour is preferred, `Property windows always on top` in the
 
 ### Curve properties
 
-* **Legend**: the text of this curve's legend box with its font size and
-  font colour.  An empty text removes the box.
-* **Line**: style (solid, dashed, dash-dot, dotted, none), width, colour.
-* **Marker**: style (13 shapes plus "None"), size, fill colour, "Hollow"
-  (unfilled marker), edge colour, edge width.
-* **Fill under the curve**: fills the area between the curve and the zero
-  line (or the bottom of the axes).  The fill takes the colour of the curve
-  or an own colour, has an adjustable opacity, and can carry a **pattern**
-  (diagonal, vertical, horizontal, crossed, circles, dots, stars and their
-  dense variants).  The pattern is drawn in the full colour over the
-  semi-transparent area, so both stay visible.
+Four sections, each with **its own check button as the title**: switched
+off, that part of the curve is simply not drawn.  As in the axes dialog,
+the settings that belong together share a line, and the four sections share
+their column widths so everything lines up.
+
+* **Legend**: the `Text` of this curve's legend box, then its `Font size`
+  with the `Colour` of the text next to it.  An empty text removes the box.
+* **Line**: `Style` (solid, dashed, dash-dot, dotted), then `Width` with
+  the `Colour` of the line next to it.
+* **Marker**: `Hollow (no fill)` at the top of the section - an outlined
+  marker has no fill colour at all - then `Style` (12 shapes), `Size` with
+  `Fill colour` next to it, and `Edge width` with `Edge colour` next to it.
+* **Fill under the curve**: `Same colour as the curve` at the top, then
+  `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
+  vertical, horizontal, crossed, circles, dots, stars and their dense
+  variants), and finally `Fill down to zero line`.
+  * That last check button is **off** to begin with: the area is then
+    filled all the way down to the axis, and it follows the axis when the
+    range is changed.
+  * Switched **on**, the area is filled between the curve and the **zero
+    line** instead, so positive and negative parts are shown separately.
+  * The pattern is drawn in the full colour over the semi-transparent area,
+    so both stay visible.  The filled area never changes the automatic
+    range of the axis: it is a picture of the curve, not data of its own.
 * **Marker colour = line colour** copies the line colour into both marker
   colours.
 
@@ -7448,22 +7565,27 @@ One window with an **X axis** tab, a **Y axis** tab, a **Right Y axis** tab
 axis tab has the same three sections, and **the name of each section is its
 own check button**:
 
+The three sections share their column widths - the labels **and** the
+boxes behind them - so every second setting of a shared line (`To`,
+`Minor ticks`, and all three `Colour` boxes) starts at exactly the same
+place on the page.
+
 **Axis label and fonts** (switched on)
 
 * the label **text**, then its **font size** with the **Colour** of the
-  label next to it on the same line, and its **distance** from the axis in
-  pixels - larger values push it away from the diagram, negative values
-  pull it inwards.
+  label next to it on the same line, and `Label offset [px]` - the distance
+  from the axis: larger values push the label away from the diagram,
+  negative values pull it inwards.
 * Switching the section **off** makes the label disappear; the text is
   remembered, so switching it on again brings it back unchanged.
 
 **Tick range, labels and fonts** (switched on)
 
 * the **font size** of the numbers with their **Colour** next to it, and
-  their **distance** (measured from the end of the tick marks),
+  `Number offset [px]` (measured from the end of the tick marks),
 * **Automatic range and ticks**, or an explicit range - `From` and `To`
-  side by side on one line - and a `Step` for the major ticks, plus the
-  number of **minor ticks** between two major ticks,
+  side by side on one line - and `Step (major ticks)` with `Minor ticks`
+  (how many minor ones sit between two major ones) on the next line,
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click
@@ -7477,7 +7599,7 @@ own check button**:
 
 * the section title itself draws the **major grid lines**; inside it,
   **Minor grid lines** adds the finer ones,
-* **Colour**, **Style** and **Width** of the lines.
+* **Style** with its **Colour** next to it, and the **Width** of the lines.
 * The Y grid is drawn by the Y axis whose numbers are shown, so it appears
   once even when both Y axes are in use.
 
