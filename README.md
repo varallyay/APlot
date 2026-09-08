@@ -28,7 +28,7 @@ separate curve.
 
 | Button | What it does |
 | --- | --- |
-| Plot | Opens a NEW diagram from the current data, with the default style. |
+| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 6 styles. |
 | Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
 | Add row | Appends an empty row and starts editing it. |
 | Delete row | Deletes every row the highlighted block touches. |
@@ -39,6 +39,123 @@ separate curve.
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
 `File` menu.
+
+### Plotting styles (Plot Split Button)
+
+The **Plot** button in the main window toolbar is a split button that combines
+an immediate action with a style menu:
+
+* **Clicking the main button** opens a new diagram drawn with whichever style is
+  currently active (indicated by its vector icon on the button face).
+* **Clicking the dropdown arrow** opens the menu of all **6 plotting styles**:
+  * **Line + Symbol**: A smooth or solid line connecting data points, with
+    distinct marker symbols (circles, squares, diamonds, etc.).
+  * **Line**: Clean continuous lines without markers, ideal for dense time
+    series, spectra, and continuous functions.
+  * **Scatter**: Discrete data markers without connecting lines (crosses `x`,
+    plus signs `+`, circles, squares, etc.), ideal for point clouds and
+    uncorrelated samples.
+  * **Bar Chart**: Vertical rectangular bars for categorical, discrete, or
+    binned data. Bar width, fill opacity (alpha), edge line width, and colors
+    can be customized in Curve Properties.
+  * **Error Bar**: Data points with vertical error bars and horizontal end caps.
+    Error bounds can be calculated automatically (as a percentage, a fixed
+    value, or standard deviation) or driven directly from a separate column in
+    the spreadsheet table.
+  * **Histogram**: Frequency distribution representation of continuous data,
+    grouping values into configurable bins.
+
+Selecting a style updates the button icon and immediately opens a diagram
+rendered in that style. Any curve's style can also be switched individually at
+any time from the **Curve properties** dialog.
+
+### The formula bar and Excel-like operations
+
+Directly above the table sits the **Formula Bar**, giving APlot full spreadsheet
+capabilities similar to Excel:
+
+* **Cell Address Box** (left): Displays the coordinate of the currently focused
+  cell (e.g., `A1`, `B3`). You can type any valid cell reference here and press
+  `Enter` to jump straight to that cell.
+* **fx Symbol**: Indicates formula entry mode.
+* **Formula / Value Entry**: Displays and edits either the raw formula (starting
+  with `=`) or the plain text value of the active cell.
+* **Commit (`✓`) button**: Confirms and saves the formula or value (`Enter`).
+* **Cancel (`✕`) button**: Discards edits and restores previous content (`Esc`).
+* **Fill Down (`Ctrl/Cmd+D`) button**: Copies the top cell's formula or value down
+  across the selected block of rows, automatically adjusting relative row
+  references (e.g. `=A1+B1` becomes `=A2+B2`, `=A3+B3`) while preserving
+  absolute references (e.g. `$A$1`).
+* **Column Math... button**: Opens the Column Math dialog to calculate entire
+  columns at once using presets or mathematical formulas.
+
+#### Formula syntax and functions
+
+Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
+`A1`, `B2`), absolute coordinates (`$A$1`, `A$1`, `$A1`), and ranges (`A1:A10`,
+`B2:D10`) are fully supported:
+
+* **Arithmetic**: `+`, `-`, `*`, `/`, `^` (exponentiation), `%`.
+* **Comparisons**: `=`, `<>`, `<`, `<=`, `>`, `>=`.
+* **Math & Statistics**: `SUM(range)`, `AVERAGE(range)` / `AVG(range)`,
+  `COUNT(range)`, `MIN(...)`, `MAX(...)`, `ABS(x)`, `ROUND(x, decimals)`,
+  `INT(x)`, `SQRT(x)`, `POWER(base, exp)`, `EXP(x)`, `LN(x)` / `LOG(x)`,
+  `LOG10(x)`, `MOD(n, d)`.
+* **Trigonometry**: `SIN(x)`, `COS(x)`, `TAN(x)`, `ASIN(x)`, `ACOS(x)`,
+  `ATAN(x)`, `DEGREES(rad)`, `RADIANS(deg)`, `PI()`.
+* **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2)`,
+  `OR(c1, c2)`, `NOT(c)`.
+
+#### Error reporting and safety
+
+Formulas are evaluated using an AST-based calculation engine with cycle
+detection. When an invalid expression or calculation issue occurs, Excel-style
+error codes are displayed:
+
+* `#DIV/0!`: Division by zero.
+* `#NAME?`: Unrecognized function or variable name.
+* `#CYCLE!`: Circular dependency detected between cells (e.g., `A1` depends on
+  `B1` which depends back on `A1`).
+* `#REF!`: Cell reference outside table bounds.
+* `#VALUE!`: Incompatible operand types.
+
+#### Status bar summary
+
+Whenever a block of cells is selected in the table, the status bar at the bottom
+of the window immediately shows a live statistical summary of the numeric
+cells:
+
+> `Average: 24.50   Count: 12   Sum: 294.00   Min: 10.00   Max: 45.00`
+
+#### Right-click context menus
+
+Right-clicking inside the table opens a context menu:
+* On any **cell**: `Cut`, `Copy`, `Paste`, `Clear Cells`, `Fill Down`, `Column Math...`,
+  `Insert Row`, `Delete Row`.
+* On any **column header**: `Rename Column...`, `Column Math...`, `Insert Column`,
+  `Delete Column`, `Fill Down`.
+
+### Column Math dialog
+
+The **Column Math** dialog (`Column Math...` button in the formula bar, or
+right-click a column header) lets you compute entire columns quickly without
+having to drag formulas across every row:
+
+* **Target column**: Choose an existing column to overwrite, or select `[New Column]`
+  to create a new one automatically.
+* **Presets**:
+  * **Scale and Offset**: `a * x + b` (e.g., multiply by a gain factor and add a bias).
+  * **Normalize**: Rescales values linearly into the range `[0, 1]`.
+  * **Standardize (z-score)**: Subtracts the mean and divides by standard deviation:
+    `(x - mean) / std`.
+  * **Subtract Mean**: Centers the column around zero: `x - mean(x)`.
+  * **Cumulative Sum**: Running sum down the column: `cumsum(x)`.
+  * **Difference / Gradient**: Numerical derivative: `diff(x)`.
+  * **Moving Average / Smooth**: Rolling window mean: `smooth(x, window=5)`.
+  * **Linspace / Index**: Evenly spaced numbers or row index sequence:
+    `linspace(0, 100)`.
+* **Custom Expressions**: Write any algebraic expression referencing column
+  names or letters directly (e.g., `A * 2 + B` or `col('Y1') / 1000`).
 
 ### Which columns are plotted, and against which axis
 
@@ -52,7 +169,11 @@ every column**, side by side:
 
 Resting the pointer on any of them pops up its full name - `Bottom x-axis`,
 `Top x-axis`, `Left y-axis`, `Right y-axis` - so the short labels never have
-to be guessed.
+to be guessed.  A column is never made **narrower than its two check
+buttons**: pulling the window in stops there and the horizontal scroll bar
+takes over, so neither the switches nor the numbers under them can be
+squeezed out of sight.  `Settings > Table > Column width` sets the starting
+width; anything smaller than that minimum is raised to it.
 
 The rules are simple:
 
@@ -445,7 +566,7 @@ worked on from the keyboard:
 
 | Keys | What happens |
 | --- | --- |
-| `Ctrl+C` / `Cmd+C` | The selected object goes to the clipboard with every one of its properties. |
+| `Ctrl+C` / `Cmd+C` | The selected object goes to the clipboard with every one of its properties - and with **nothing** selected, a picture of the whole diagram. |
 | `Ctrl+V` / `Cmd+V` | Another copy appears a little to the lower right of the original and is selected; each further paste steps further, so a series of copies does not pile up. |
 | Left / Right / Up / Down | Moves the selected object by one pixel. |
 | `Shift` + an arrow key | Moves it by ten pixels. |
@@ -627,10 +748,15 @@ If the old behaviour is preferred, `Property windows always on top` in the
 
 ### Curve properties
 
-Four sections, each with **its own check button as the title**: switched
-off, that part of the curve is simply not drawn.  As in the axes dialog,
-the settings that belong together share a line, and the four sections share
-their column widths so everything lines up.
+At the top of the dialog, a **Plot Style** dropdown selector allows switching the
+representation of any individual curve between all 6 styles: **Line + Symbol**,
+**Line**, **Scatter**, **Bar Chart**, **Error Bar**, and **Histogram**.  The
+dialog dynamically adapts its sections and options to match the active style.
+
+The dialog sections each have **their own check button as the title**: switched
+off, that part of the curve is simply not drawn.  The settings that belong
+together share a line, and the sections share their column widths so everything
+lines up cleanly.
 
 * **Legend**: the `Text` of this curve's legend box, then its `Font size`
   with the `Colour` of the text next to it.  An empty text removes the box.
@@ -639,6 +765,24 @@ their column widths so everything lines up.
 * **Marker**: `Hollow (no fill)` at the top of the section - an outlined
   marker has no fill colour at all - then `Style` (12 shapes), `Size` with
   `Fill colour` next to it, and `Edge width` with `Edge colour` next to it.
+* **Bar properties** (visible for Bar Charts):
+  * `Width`: the width of the bars in X-axis data units.
+  * `Alpha`: transparency of the bar fill (from 0.0 transparent to 1.0 opaque).
+  * `Edge line width`: thickness of the bar outline.
+  * `Fill colour` and `Edge colour`: independently selectable colours for the
+    bar body and border.
+  * *Tip:* Clicking any bar directly inside the diagram window opens this dialog.
+* **Error Bar properties** (visible for Error Bars):
+  * `Source`: determines how error bars are calculated:
+    * `Percentage`: symmetric error computed as a percentage of the Y value (e.g. ±5%).
+    * `Fixed value`: constant symmetric error across all points (e.g. ±0.5).
+    * `Standard deviation`: column standard deviation used as uniform error bounds.
+    * `From column`: select any other column from the table to specify individual error values for each row.
+  * `Value / Column`: sets the percentage or fixed value, or selects the error column.
+  * `Cap width`: width of the horizontal end caps.
+  * `Line width`: thickness of the error bar stems and caps.
+  * `Colour`: colour of the error bars.
+  * *Tip:* Clicking on any error bar stem or horizontal cap directly opens this dialog.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
   vertical, horizontal, crossed, circles, dots, stars and their dense
@@ -795,12 +939,56 @@ come from the `Fonts` tab of the settings.
 
 ## 3. Files
 
-| Menu item | Format |
-| --- | --- |
-| Open data file (CSV, TXT, DAT) | Reads a text data file into the table; the separator is recognised automatically. |
-| Save data file | Writes the table into a text data file. |
-| Open graph (.aplt) | Loads a complete APlot document: the data and the diagrams. |
-| Save graph (.aplt) | Saves the data together with every diagram that is open. |
+| Menu item | Key | What it does |
+| --- | --- | --- |
+| Open data file (CSV, TXT, DAT) | `Cmd/Ctrl+Alt+O` | Reads a text data file into the table; the separator is recognised automatically. |
+| Save data file | `Cmd/Ctrl+Alt+S` | Writes the table into a text data file (`.csv`, `.txt`, `.dat`). |
+| Open graph (.aplt) | `Cmd/Ctrl+O` | Loads a complete APlot document: the data and the diagrams. |
+| Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open. |
+| Save graph as... | | The same, always asking for a new name. |
+| Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
+| Export as matplotlib script... | `Cmd/Ctrl+Alt+E` | Writes the diagram as a Python program. |
+| Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
+
+**Saving with one key.**  `Cmd/Ctrl+S` asks for a name only the **first**
+time.  From then on the graph belongs to that file: every further
+`Cmd/Ctrl+S` simply brings it up to date, with no dialog and no message,
+and the name of the file is shown in the title bar of the table window.
+`Save graph as...` asks for a new name whenever it is needed.
+
+**Nothing is lost by accident.**  The program knows whether anything has
+been changed since the last save (moving or resizing a window does not
+count).  If it has, then closing the diagram, opening another graph or
+leaving the program asks first:
+
+> This graph has been edited and not saved.  Save it now?
+
+`Yes` saves it (asking for a name if the graph is new), `No` throws the
+changes away, `Cancel` leaves everything as it is.  With several diagrams
+open, closing one of them does not ask - only the **last** one carries the
+whole graph.
+
+### Exporting the diagram
+
+* **Export figure (image)...** (`Cmd/Ctrl+E`) is the same as the save
+  button of the toolbar: a picture in any format matplotlib can write, and
+  the control points of a selected object are never on it.
+* **Copy figure to the clipboard** (`Cmd/Ctrl+C` in the diagram window,
+  with nothing selected) puts a 200 dpi picture on the clipboard, ready to
+  be pasted into a text editor, a presentation or an e-mail.  With an
+  object **selected**, the same key copies that object instead, as before -
+  so both uses of `Cmd/Ctrl+C` live side by side.  If the system has no
+  tool for pictures on the clipboard, the program says where it wrote the
+  file instead.
+* **Export as matplotlib script...** (`Cmd/Ctrl+Alt+E`) writes a
+  **stand-alone Python program** that draws the very same diagram.  It
+  needs nothing but numpy and matplotlib: the data is written into the file
+  as plain lists, and so is everything else - the two or three axes with
+  their ranges, ticks, colours and grids, the frame, every curve with its
+  style and its filled area, the legend boxes at their places, the title
+  with its dragged position, the text boxes, the drawings and the arrows.
+  Run it with `python3 diagram.py`, change a number, and it is a diagram of
+  your own; the last line is a commented-out `savefig` for a batch run.
 
 An `.aplt` file is a readable JSON document.  Besides the table it stores,
 for each open diagram:

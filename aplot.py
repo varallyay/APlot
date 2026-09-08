@@ -92,10 +92,16 @@ App                      main window, menus, file I/O
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
+import math
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import tkinter as tk
 from pathlib import Path
@@ -124,6 +130,22 @@ CONFIG_FILE = Path.home() / ".aplot" / "config.json"
 # --------------------------------------------------------------------------
 # option tables
 # --------------------------------------------------------------------------
+
+PLOT_STYLES = [
+    ("Line + Symbol", "line_symbol", "Curves with markers (points and line)"),
+    ("Line", "line", "Continuous curve without markers"),
+    ("Scatter", "scatter", "Discrete symbols/markers only"),
+    ("Bar Chart", "bar", "Vertical bar chart"),
+    ("Error Bar", "errorbar", "Points with vertical error bars and caps"),
+    ("Histogram", "histogram", "Frequency distribution bins"),
+]
+
+ERROR_SOURCES = [
+    ("Percentage (%)", "percent"),
+    ("Fixed value", "fixed"),
+    ("Standard deviation", "std"),
+    ("From column...", "column"),
+]
 
 MARKERS = [
     ("None", "None"), ("Point", "."), ("Circle", "o"), ("Square", "s"),
@@ -246,6 +268,11 @@ SIDE_NAMES = {"bottom": "Bottom X axis", "top": "Top X axis",
 HORIZONTAL_SIDES = ("bottom", "top")
 TOOLTIP_DELAY = 250        # milliseconds before a hint pops up
 TOOLTIP_BACKGROUND = "#ffffe0"
+AXIS_CHECK_FONT = 10       # the x_B / x_T / y_L / y_R labels
+# a table column is never narrower than its two check buttons
+MIN_COLUMN_WIDTH = 104
+CLIPBOARD_DPI = 200        # the picture put on the clipboard is a good one
+SCRIPT_SUFFIX = ".py"      # the diagram exported as a matplotlib program
 SPIN_WIDTH = 4             # characters in the little number boxes
 ENTRY_WIDTH = 12           # characters in the range and style boxes
 COMBO_WIDTH = 14           # characters in the style lists
@@ -319,6 +346,47 @@ def make_letter_icon(letter="T", size=24, color="#000000"):
         icon.put(color, to=(middle - thick // 2 - 1, top,            # the stem
                             middle + thick // 2 + 1, bottom))
     return icon
+
+
+def copy_png_to_clipboard(path):
+    """Put a PNG file on the clipboard of the system.
+
+    Every desktop does this its own way and none of them through Tk, so the
+    small command line tool of the platform is used.  Returns True when one
+    of them was there and did the work.
+    """
+    path = str(path)
+    if sys.platform == "darwin":
+        script = ('set the clipboard to '
+                  f'(read (POSIX file "{path}") as \u00abclass PNGf\u00bb)')
+        commands = [["osascript", "-e", script]]
+    elif sys.platform.startswith("win"):
+        powershell = (
+            "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+            "[System.Windows.Forms.Clipboard]::SetImage("
+            f"[System.Drawing.Image]::FromFile('{path}'))")
+        commands = [["powershell", "-NoProfile", "-Command", powershell]]
+    else:
+        commands = [["xclip", "-selection", "clipboard", "-t", "image/png",
+                     "-i", path],
+                    ["wl-copy", "--type", "image/png"],
+                    ["xsel", "--clipboard", "--input"]]
+    for command in commands:
+        if shutil.which(command[0]) is None:
+            continue
+        try:
+            if command[0] in ("wl-copy", "xsel"):
+                with open(path, "rb") as handle:
+                    subprocess.run(command, stdin=handle, check=True,
+                                   timeout=20)
+            else:
+                subprocess.run(command, check=True, timeout=20,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
 
 
 def json_default(value):
@@ -1027,6 +1095,123 @@ class ShapeToolButton(tk.Canvas):
         return "break"
 
 
+class PlotSplitButton(tk.Canvas):
+    """Split button for the toolbar: icon of active plot style + 'Plot' label + dropdown arrow.
+
+    Clicking the left side triggers plotting with the current plot style.
+    Clicking the right side opens a menu with all available plot styles.
+    """
+
+    ARROW_ZONE = 18
+
+    def __init__(self, master, style="line_symbol", width=84, height=26,
+                 background=None, on_plot=None, on_menu=None):
+        self._background = background or "#f0f0f0"
+        super().__init__(master, width=width, height=height,
+                         highlightthickness=1, highlightbackground="#b8b8b8",
+                         borderwidth=0, background=self._background, cursor="hand2")
+        self._width = width
+        self._height = height
+        self.style = style
+        self._on_plot = on_plot
+        self._on_menu = on_menu
+        self._hover_part = None
+        self.tooltip = Tooltip(self, "")
+        self.bind("<Button-1>", self._clicked)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
+        self.set_style(style)
+
+    def set_style(self, style):
+        self.style = style
+        style_desc = dict((code, label) for label, code, *_ in PLOT_STYLES).get(style, "Plot")
+        self.tooltip.set_text(f"Plot: {style_desc} (click to plot, click arrow to select style)")
+        self._redraw()
+
+    def _on_motion(self, event):
+        part = "right" if event.x >= self._width - self.ARROW_ZONE else "left"
+        if part != self._hover_part:
+            self._hover_part = part
+            self._redraw()
+
+    def _on_leave(self, _event=None):
+        if self._hover_part is not None:
+            self._hover_part = None
+            self._redraw()
+
+    def _clicked(self, event):
+        if event.x >= self._width - self.ARROW_ZONE:
+            if self._on_menu:
+                self._on_menu(event)
+        elif self._on_plot:
+            self._on_plot()
+        return "break"
+
+    def _redraw(self):
+        self.delete("all")
+        w, h = self._width, self._height
+        split_x = w - self.ARROW_ZONE
+
+        # Hover backgrounds
+        if self._hover_part == "left":
+            self.create_rectangle(1, 1, split_x - 1, h - 1, fill="#e5effa", outline="")
+        elif self._hover_part == "right":
+            self.create_rectangle(split_x + 1, 1, w - 1, h - 1, fill="#e5effa", outline="")
+
+        # Separator line
+        self.create_line(split_x, 3, split_x, h - 3, fill="#c0c0c0", width=1)
+
+        # Plot Icon box: x in [4, 24], y in [3, 23]
+        ix0, iy0, ix1, iy1 = 4, 3, 24, 23
+        self.create_rectangle(ix0, iy0, ix1, iy1, fill="#ffffff", outline="#b0b0b0", width=1)
+        mx = (ix0 + ix1) / 2
+        my = (iy0 + iy1) / 2
+        self.create_line(ix0, my, ix1, my, fill="#ebebeb")
+        self.create_line(mx, iy0, mx, iy1, fill="#ebebeb")
+
+        style = self.style
+        blue = "#1a5fb4"
+        if style == "line":
+            pts = [ix0 + 2, my + 4, ix0 + 7, iy0 + 3, ix0 + 13, iy1 - 3, ix1 - 2, my - 3]
+            self.create_line(pts, fill=blue, width=2, smooth=True)
+        elif style == "scatter":
+            pts = [(ix0 + 3, iy1 - 5), (ix0 + 7, iy0 + 5), (ix0 + 11, my),
+                   (ix0 + 15, iy0 + 6), (ix1 - 3, iy1 - 4)]
+            for px, py in pts:
+                self.create_line(px - 2, py - 2, px + 2, py + 2, fill=blue, width=1.5)
+                self.create_line(px - 2, py + 2, px + 2, py - 2, fill=blue, width=1.5)
+        elif style == "bar":
+            bars = [(ix0 + 2, 5), (ix0 + 6, 12), (ix0 + 11, 16), (ix0 + 15, 8)]
+            for bx, bh in bars:
+                self.create_rectangle(bx, iy1 - bh, bx + 3.5, iy1, fill="#1f77b4", outline=blue, width=1)
+        elif style == "errorbar":
+            pts = [(ix0 + 5, iy1 - 6, 4), (ix0 + 10, iy0 + 7, 5), (ix1 - 5, my, 4)]
+            for px, py, err in pts:
+                self.create_line(px, py - err, px, py + err, fill=blue, width=1.5)
+                self.create_line(px - 2.5, py - err, px + 2.5, py - err, fill=blue, width=1.5)
+                self.create_line(px - 2.5, py + err, px + 2.5, py + err, fill=blue, width=1.5)
+                self.create_oval(px - 1.8, py - 1.8, px + 1.8, py + 1.8, fill=blue, outline=blue)
+        elif style == "histogram":
+            heights = [3, 8, 15, 9, 4]
+            bw = 3.2
+            for i, bh in enumerate(heights):
+                self.create_rectangle(ix0 + 1.5 + i * bw, iy1 - bh, ix0 + 1.5 + (i + 1) * bw, iy1,
+                                      fill="#1f77b4", outline="#ffffff", width=0.8)
+        else:  # line_symbol (default)
+            pts = [ix0 + 2, my + 4, ix0 + 7, iy0 + 3, ix0 + 13, iy1 - 3, ix1 - 2, my - 3]
+            self.create_line(pts, fill=blue, width=1.5, smooth=True)
+            for px, py in [(ix0 + 3, my + 3), (ix0 + 10, my - 1), (ix1 - 3, my - 3)]:
+                self.create_oval(px - 2, py - 2, px + 2, py + 2, fill=blue, outline=blue)
+
+        # "Plot" text
+        self.create_text(ix1 + 18, h / 2, text="Plot", font=("TkDefaultFont", 10, "bold"), fill="#000000")
+
+        # Menu arrow ▼
+        ax = split_x + self.ARROW_ZONE / 2
+        ay = h / 2
+        self.create_polygon([ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3], fill="#000000", outline="#000000")
+
+
 class ToolDialog(tk.Toplevel):
     """Base class of the small property windows.
 
@@ -1446,17 +1631,29 @@ class TextStyleDialog(ToolDialog):
 # --------------------------------------------------------------------------
 
 class SeriesStyleDialog(PairedFields, ToolDialog):
-    """Line and marker properties of one curve; changes are applied live."""
+    """Line, marker, bar, and error properties of one curve; changes are applied live."""
 
     def __init__(self, master, line: Line2D, on_change, on_close=None,
                  legend_size=None, legend_color="#000000", on_legend_style=None,
-                 fill=None, on_fill=None):
+                 fill=None, on_fill=None,
+                 plot_style="line_symbol", on_plot_style=None,
+                 bar_cfg=None, on_bar_cfg=None,
+                 error_cfg=None, on_error_cfg=None,
+                 available_columns=None):
         super().__init__(master, "Curve properties", on_close=on_close)
         self.line = line
         self.on_change = on_change
         self.on_legend_style = on_legend_style
         self.on_fill = on_fill
         self._fill = dict(fill or {})
+        self.plot_style_var = tk.StringVar(
+            value=name_of(PLOT_STYLES, plot_style, "Line + Symbol"))
+        self.on_plot_style = on_plot_style
+        self.bar_cfg = dict(bar_cfg or {})
+        self.on_bar_cfg = on_bar_cfg
+        self.error_cfg = dict(error_cfg or {})
+        self.on_error_cfg = on_error_cfg
+        self.available_columns = list(available_columns or [])
         self.legend_size_var = tk.StringVar(
             value=str(int(legend_size if legend_size is not None else 10)))
         self._legend_color = safe_hex(legend_color, "#000000")
@@ -1497,12 +1694,17 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             value=str(self._fill.get("base", "bottom")) == "zero")
 
         line_color = safe_hex(line.get_color())
+        self._build_style_box()
         self._build_legend_box()
         self._build_line_box(line_color)
         self._build_marker_box(line_color, face)
+        self._build_bar_box(line_color)
+        self._build_error_box(line_color)
         self._build_fill_box(line_color)
         self._align_columns((self.legend_box, self.line_box,
-                             self.marker_box, self.fill_box))
+                             self.marker_box, self.bar_box,
+                             self.error_box, self.fill_box))
+        self._update_section_visibility()
         self._build_buttons()
         self._loading = False
 
@@ -1540,6 +1742,15 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         return box
 
     # -- construction ------------------------------------------------------
+    def _build_style_box(self):
+        box = ttk.LabelFrame(self.body, text="Plot Style", padding=8)
+        self.style_box = box
+        box.pack(fill="x", pady=(0, 10))
+        combo = ttk.Combobox(box, textvariable=self.plot_style_var, state="readonly",
+                             values=[label for label, *_ in PLOT_STYLES], width=24)
+        combo.pack(fill="x")
+        combo.bind("<<ComboboxSelected>>", self._on_style_changed)
+
     def _build_legend_box(self):
         box = self._section("Legend", self.legend_on_var)
         self.legend_box = box
@@ -1617,6 +1828,141 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                    "Edge colour:", self.edge_color)
         self.mwidth_var.trace_add("write", self._apply)
 
+    def _build_bar_box(self, line_color):
+        box = ttk.LabelFrame(self.body, text="Bar properties", padding=8)
+        self.bar_box = box
+        self.bar_width_var = tk.StringVar(value=str(self.bar_cfg.get("width", 0.8)))
+        self.bar_alpha_var = tk.StringVar(value=str(self.bar_cfg.get("alpha", 0.85)))
+        self.bar_edge_width_var = tk.StringVar(value=str(self.bar_cfg.get("edgewidth", 1.0)))
+        self.bar_color = ColorSwatch(box, self.bar_cfg.get("color", line_color),
+                                     command=lambda _c: self._apply())
+        self.bar_edge_color = ColorSwatch(box, self.bar_cfg.get("edgecolor", line_color),
+                                          command=lambda _c: self._apply())
+
+        self._pair(box, 0,
+                   "Width:",
+                   ttk.Spinbox(box, from_=0.05, to=10, increment=0.05,
+                               width=SPIN_WIDTH, textvariable=self.bar_width_var,
+                               command=self._apply),
+                   "Bar colour:", self.bar_color)
+        self.bar_width_var.trace_add("write", self._apply)
+
+        self._pair(box, 1,
+                   "Opacity (0-1):",
+                   ttk.Spinbox(box, from_=0, to=1, increment=0.05,
+                               width=SPIN_WIDTH, textvariable=self.bar_alpha_var,
+                               command=self._apply),
+                   "Edge colour:", self.bar_edge_color)
+        self.bar_alpha_var.trace_add("write", self._apply)
+
+        self._pair(box, 2,
+                   "Edge width:",
+                   ttk.Spinbox(box, from_=0, to=10, increment=0.5,
+                               width=SPIN_WIDTH, textvariable=self.bar_edge_width_var,
+                               command=self._apply),
+                   "", ttk.Label(box, text=""))
+        self.bar_edge_width_var.trace_add("write", self._apply)
+
+    def _build_error_box(self, line_color):
+        box = ttk.LabelFrame(self.body, text="Error bar properties", padding=8)
+        self.error_box = box
+        err_type = self.error_cfg.get("type", "percent")
+        self.err_type_var = tk.StringVar(
+            value=name_of(ERROR_SOURCES, err_type, "Percentage (%)"))
+        self.err_val_var = tk.StringVar(value=str(self.error_cfg.get("value", 5.0)))
+        self.err_col_var = tk.StringVar(value=str(self.error_cfg.get("column", "")))
+        self.err_capsize_var = tk.StringVar(value=str(self.error_cfg.get("capsize", 4.0)))
+        self.err_capthick_var = tk.StringVar(value=str(self.error_cfg.get("capthick", 1.5)))
+        self.err_elinewidth_var = tk.StringVar(value=str(self.error_cfg.get("elinewidth", 1.5)))
+        self.err_color = ColorSwatch(box, self.error_cfg.get("color", line_color),
+                                     command=lambda _c: self._apply())
+
+        combo = ttk.Combobox(box, textvariable=self.err_type_var, state="readonly",
+                             values=names(ERROR_SOURCES), width=COMBO_WIDTH)
+        self.field(box, 0, "Source:", combo)
+        combo.bind("<<ComboboxSelected>>", self._on_err_type_changed)
+
+        self._err_val_spin = ttk.Spinbox(box, from_=0.01, to=1000, increment=0.5,
+                                         width=SPIN_WIDTH, textvariable=self.err_val_var,
+                                         command=self._apply)
+        self._pair(box, 1, "Value / %:", self._err_val_spin,
+                   "Colour:", self.err_color)
+        self.err_val_var.trace_add("write", self._apply)
+
+        cols = [c for c in self.available_columns if str(c) != str(self.column)]
+        if not cols:
+            cols = list(self.available_columns)
+        self._err_col_combo = ttk.Combobox(box, textvariable=self.err_col_var, state="readonly",
+                                           values=cols, width=COMBO_WIDTH)
+        self.field(box, 2, "Column:", self._err_col_combo)
+        self._err_col_combo.bind("<<ComboboxSelected>>", self._apply)
+
+        self._pair(box, 3,
+                   "Cap width:",
+                   ttk.Spinbox(box, from_=0, to=20, increment=1,
+                               width=SPIN_WIDTH, textvariable=self.err_capsize_var,
+                               command=self._apply),
+                   "Line width:",
+                   ttk.Spinbox(box, from_=0.5, to=10, increment=0.5,
+                               width=SPIN_WIDTH, textvariable=self.err_elinewidth_var,
+                               command=self._apply))
+        self.err_capsize_var.trace_add("write", self._apply)
+        self.err_elinewidth_var.trace_add("write", self._apply)
+
+    def _on_err_type_changed(self, _event=None):
+        src = code_of(ERROR_SOURCES, self.err_type_var.get(), "percent")
+        if src == "column":
+            self._err_col_combo.configure(state="readonly")
+            self._err_val_spin.configure(state="disabled")
+        elif src == "std":
+            self._err_col_combo.configure(state="disabled")
+            self._err_val_spin.configure(state="disabled")
+        else:
+            self._err_col_combo.configure(state="disabled")
+            self._err_val_spin.configure(state="normal")
+        self._apply()
+
+    def _update_section_visibility(self):
+        st = code_of(PLOT_STYLES, self.plot_style_var.get(), "line_symbol")
+        for box in (self.line_box, self.marker_box, self.bar_box, self.error_box, self.fill_box):
+            box.pack_forget()
+
+        if st in ("bar", "histogram"):
+            self.bar_box.pack(fill="x", pady=(10, 0))
+        elif st == "errorbar":
+            self.marker_box.pack(fill="x", pady=(10, 0))
+            self.line_box.pack(fill="x", pady=(10, 0))
+            self.error_box.pack(fill="x", pady=(10, 0))
+        elif st == "scatter":
+            self.marker_box.pack(fill="x", pady=(10, 0))
+            self.fill_box.pack(fill="x", pady=(10, 0))
+        elif st == "line":
+            self.line_box.pack(fill="x", pady=(10, 0))
+            self.fill_box.pack(fill="x", pady=(10, 0))
+        else:  # line_symbol
+            self.line_box.pack(fill="x", pady=(10, 0))
+            self.marker_box.pack(fill="x", pady=(10, 0))
+            self.fill_box.pack(fill="x", pady=(10, 0))
+
+    def _on_style_changed(self, _event=None):
+        st = code_of(PLOT_STYLES, self.plot_style_var.get(), "line_symbol")
+        if st == "line":
+            self.line_on_var.set(True)
+            self.marker_on_var.set(False)
+        elif st == "scatter":
+            self.line_on_var.set(False)
+            self.marker_on_var.set(True)
+        elif st == "line_symbol":
+            self.line_on_var.set(True)
+            self.marker_on_var.set(True)
+        elif st in ("bar", "histogram"):
+            self.line_on_var.set(False)
+            self.marker_on_var.set(False)
+        elif st == "errorbar":
+            self.marker_on_var.set(True)
+        self._update_section_visibility()
+        self._apply()
+
     def _build_fill_box(self, line_color):
         box = self._section("Fill under the curve", self.fill_on_var,
                             pady=(10, 0))
@@ -1665,6 +2011,9 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         color = self.line_color.color
         self.face_color.set_color(color)
         self.edge_color.set_color(color)
+        self.bar_color.set_color(color)
+        self.bar_edge_color.set_color(color)
+        self.err_color.set_color(color)
         self._apply()
 
     def _apply(self, *_args):
@@ -1707,6 +2056,27 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                 "alpha": to_float(self.fill_alpha_var.get(), 0.35),
                 "hatch": code_of(HATCH_PATTERNS, self.fill_hatch_var.get(), ""),
                 "base": "zero" if self.fill_zero_var.get() else "bottom",
+            })
+        st_code = code_of(PLOT_STYLES, self.plot_style_var.get(), "line_symbol")
+        if self.on_plot_style:
+            self.on_plot_style(st_code)
+        if self.on_bar_cfg:
+            self.on_bar_cfg({
+                "width": to_float(self.bar_width_var.get(), 0.8),
+                "alpha": to_float(self.bar_alpha_var.get(), 0.85),
+                "edgewidth": to_float(self.bar_edge_width_var.get(), 1.0),
+                "color": self.bar_color.color,
+                "edgecolor": self.bar_edge_color.color,
+            })
+        if self.on_error_cfg:
+            self.on_error_cfg({
+                "type": code_of(ERROR_SOURCES, self.err_type_var.get(), "percent"),
+                "value": to_float(self.err_val_var.get(), 5.0),
+                "column": self.err_col_var.get(),
+                "capsize": to_float(self.err_capsize_var.get(), 4.0),
+                "capthick": to_float(self.err_capthick_var.get(), 1.5),
+                "elinewidth": to_float(self.err_elinewidth_var.get(), 1.5),
+                "color": self.err_color.color,
             })
         self.on_change()
 
@@ -2289,6 +2659,650 @@ class TitleFontDialog(ToolDialog):
 
 
 # --------------------------------------------------------------------------
+# excel formula engine & column operations
+# --------------------------------------------------------------------------
+
+def col_to_letter(col_idx: int) -> str:
+    """Convert 0-based column index to Excel column letter (0->A, 25->Z, 26->AA)."""
+    result = []
+    col_idx += 1
+    while col_idx > 0:
+        col_idx, remainder = divmod(col_idx - 1, 26)
+        result.append(chr(65 + remainder))
+    return "".join(reversed(result))
+
+
+def letter_to_col(letters: str) -> int:
+    """Convert Excel column letter to 0-based index (A->0, Z->25, AA->26)."""
+    result = 0
+    for ch in str(letters).upper().strip():
+        if 'A' <= ch <= 'Z':
+            result = result * 26 + (ord(ch) - ord('A') + 1)
+    return max(0, result - 1)
+
+
+REF_PATTERN = re.compile(r'(\$?)([A-Za-z]+)(\$?)(\d+)')
+
+
+def adjust_formula_references(formula: str, delta_row: int, delta_col: int = 0) -> str:
+    """Adjust unanchored cell references in an Excel formula when filling or copying."""
+    def repl(match):
+        col_fixed = bool(match.group(1))
+        col_letters = match.group(2).upper()
+        row_fixed = bool(match.group(3))
+        row_num = int(match.group(4))
+
+        new_col = col_letters
+        if not col_fixed and delta_col != 0:
+            c_idx = max(0, letter_to_col(col_letters) + delta_col)
+            new_col = col_to_letter(c_idx)
+
+        new_row = row_num
+        if not row_fixed and delta_row != 0:
+            new_row = max(1, row_num + delta_row)
+
+        c_prefix = "$" if col_fixed else ""
+        r_prefix = "$" if row_fixed else ""
+        return f"{c_prefix}{new_col}{r_prefix}{new_row}"
+
+    return REF_PATTERN.sub(repl, formula)
+
+
+class FormulaEvaluator:
+    """Safe AST-based Excel formula evaluator with full mathematical and range support."""
+
+    SAFE_FUNCS = {
+        'sin': math.sin, 'cos': math.cos, 'tan': math.tan,
+        'asin': math.asin, 'acos': math.acos, 'atan': math.atan,
+        'sinh': math.sinh, 'cosh': math.cosh, 'tanh': math.tanh,
+        'sqrt': math.sqrt, 'exp': math.exp,
+        'log': math.log, 'ln': math.log, 'log10': math.log10, 'log2': math.log2,
+        'abs': abs, 'round': round, 'floor': math.floor, 'ceil': math.ceil,
+        'mod': lambda a, b: a % b, 'power': pow,
+        'pi': lambda: math.pi, 'e': lambda: math.e,
+        'radians': math.radians, 'degrees': math.degrees,
+        'if': lambda cond, a, b: a if cond else b,
+        'sum': lambda vals: float(sum(v for v in vals if not math.isnan(v))) if len(vals) else 0.0,
+        'average': lambda vals: (float(sum(v for v in vals if not math.isnan(v))) / len([v for v in vals if not math.isnan(v)])) if any(not math.isnan(v) for v in vals) else 0.0,
+        'mean': lambda vals: (float(sum(v for v in vals if not math.isnan(v))) / len([v for v in vals if not math.isnan(v)])) if any(not math.isnan(v) for v in vals) else 0.0,
+        'min': lambda vals: float(min(v for v in vals if not math.isnan(v))) if any(not math.isnan(v) for v in vals) else 0.0,
+        'max': lambda vals: float(max(v for v in vals if not math.isnan(v))) if any(not math.isnan(v) for v in vals) else 0.0,
+        'count': lambda vals: float(len([v for v in vals if not math.isnan(v)])),
+        'std': lambda vals: float(math.sqrt(sum((x - sum(vals)/len(vals))**2 for x in vals)/(len(vals)-1))) if len(vals) > 1 else 0.0,
+        'stdev': lambda vals: float(math.sqrt(sum((x - sum(vals)/len(vals))**2 for x in vals)/(len(vals)-1))) if len(vals) > 1 else 0.0,
+        'median': lambda vals: float(sorted(vals)[len(vals)//2]) if len(vals) else 0.0,
+    }
+
+    def __init__(self, df: pd.DataFrame, cell_formulas: dict):
+        self.df = df
+        self.cell_formulas = cell_formulas
+        self._eval_stack = set()
+
+    def get_cell_value(self, row: int, col: int):
+        if (row, col) in self._eval_stack:
+            raise ValueError("#CYCLE!")
+        if not (0 <= row < len(self.df) and 0 <= col < len(self.df.columns)):
+            raise ValueError("#REF!")
+
+        if (row, col) in self.cell_formulas:
+            formula = self.cell_formulas[(row, col)]
+            self._eval_stack.add((row, col))
+            try:
+                val = self.evaluate(formula, row, col)
+            finally:
+                self._eval_stack.discard((row, col))
+            return val
+        else:
+            raw = self.df.iat[row, col]
+            if raw == "" or raw is None or pd.isna(raw):
+                return 0.0
+            try:
+                return float(raw)
+            except (ValueError, TypeError):
+                return str(raw)
+
+    def get_range_values(self, start_ref: str, end_ref: str):
+        m1 = REF_PATTERN.match(start_ref)
+        m2 = REF_PATTERN.match(end_ref)
+        if not m1 or not m2:
+            raise ValueError("#REF!")
+        c0 = letter_to_col(m1.group(2))
+        r0 = int(m1.group(4)) - 1
+        c1 = letter_to_col(m2.group(2))
+        r1 = int(m2.group(4)) - 1
+
+        c_start, c_end = sorted((c0, c1))
+        r_start, r_end = sorted((r0, r1))
+
+        values = []
+        for r in range(r_start, r_end + 1):
+            for c in range(c_start, c_end + 1):
+                try:
+                    val = self.get_cell_value(r, c)
+                    if isinstance(val, (int, float)):
+                        v = float(val)
+                        if not math.isnan(v) and not math.isinf(v):
+                            values.append(v)
+                except Exception:
+                    pass
+        return values
+
+    def evaluate(self, expr_str: str, current_row: int = 0, current_col: int = 0):
+        s = str(expr_str).strip()
+        if s.startswith("="):
+            s = s[1:].strip()
+        if not s:
+            return ""
+
+        # Replace ^ with ** for power, and <> with !=
+        s = s.replace("^", "**")
+        s = s.replace("<>", "!=")
+
+        # Replace range arguments: e.g. SUM(A1:A5) -> SUM(__range__("A1", "A5"))
+        range_re = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*(\$?[A-Za-z]+\$?\d+)\s*:\s*(\$?[A-Za-z]+\$?\d+)\s*\)', re.IGNORECASE)
+        s = range_re.sub(r'\1(__range__("\2", "\3"))', s)
+
+        # Replace column name references in brackets e.g. [X], [Y1] with cell in current row
+        cols = [str(c) for c in self.df.columns]
+        for c_idx, c_name in enumerate(cols):
+            c_letter = col_to_letter(c_idx)
+            s = s.replace(f"[{c_name}]", f"{c_letter}{current_row + 1}")
+
+        # Replace single cell references with __cell__("A1")
+        token_cell_re = re.compile(r'(?<![A-Za-z0-9_"\'])(\$?[A-Za-z]+\$?\d+)(?![A-Za-z0-9_"\'])')
+        s = token_cell_re.sub(r'__cell__("\1")', s)
+
+        # Parse AST
+        try:
+            tree = ast.parse(s, mode='eval')
+        except SyntaxError:
+            return "#ERROR!"
+
+        was_in_stack = (current_row, current_col) in self._eval_stack
+        if not was_in_stack:
+            self._eval_stack.add((current_row, current_col))
+        try:
+            res = self._eval_ast(tree.body, current_row, current_col)
+            if isinstance(res, str) and res.startswith("#"):
+                return res
+            if isinstance(res, (int, float)):
+                res = float(res)
+                if math.isnan(res):
+                    return "#NUM!"
+                if math.isinf(res):
+                    return "#DIV/0!"
+                if res.is_integer():
+                    return int(res)
+                return round(res, 8)
+            return res
+        except ZeroDivisionError:
+            return "#DIV/0!"
+        except ValueError as err:
+            err_msg = str(err)
+            return err_msg if err_msg.startswith("#") else "#VALUE!"
+        except Exception:
+            return "#VALUE!"
+        finally:
+            if not was_in_stack:
+                self._eval_stack.discard((current_row, current_col))
+
+    def _eval_ast(self, node, current_row, current_col):
+        if isinstance(node, ast.Constant):
+            return node.value
+        elif isinstance(node, ast.Name):
+            name = node.id.lower()
+            if name in self.SAFE_FUNCS:
+                return self.SAFE_FUNCS[name]
+            elif name == 'pi':
+                return math.pi
+            elif name == 'e':
+                return math.e
+            elif name in ('true', 'false'):
+                return name == 'true'
+            # If name is a column name or column letter, resolve for current row
+            cols_lower = [str(c).lower() for c in self.df.columns]
+            if name in cols_lower:
+                c_idx = cols_lower.index(name)
+                return self.get_cell_value(current_row, c_idx)
+            # Check single letter column (A, B, C...)
+            if len(name) <= 2 and name.isalpha():
+                c_idx = letter_to_col(name)
+                if 0 <= c_idx < len(self.df.columns):
+                    return self.get_cell_value(current_row, c_idx)
+            raise ValueError(f"#NAME? ({node.id})")
+        elif isinstance(node, ast.UnaryOp):
+            val = self._eval_ast(node.operand, current_row, current_col)
+            if isinstance(val, str) and val.startswith("#"):
+                return val
+            if isinstance(node.op, ast.UAdd):
+                return +val
+            elif isinstance(node.op, ast.USub):
+                return -val
+            elif isinstance(node.op, ast.Not):
+                return not val
+        elif isinstance(node, ast.BinOp):
+            left = self._eval_ast(node.left, current_row, current_col)
+            if isinstance(left, str) and left.startswith("#"):
+                return left
+            right = self._eval_ast(node.right, current_row, current_col)
+            if isinstance(right, str) and right.startswith("#"):
+                return right
+            if isinstance(node.op, ast.Add):
+                return left + right
+            elif isinstance(node.op, ast.Sub):
+                return left - right
+            elif isinstance(node.op, ast.Mult):
+                return left * right
+            elif isinstance(node.op, ast.Div):
+                if right == 0:
+                    raise ZeroDivisionError("#DIV/0!")
+                return left / right
+            elif isinstance(node.op, ast.FloorDiv):
+                if right == 0:
+                    raise ZeroDivisionError("#DIV/0!")
+                return left // right
+            elif isinstance(node.op, ast.Mod):
+                if right == 0:
+                    raise ZeroDivisionError("#DIV/0!")
+                return left % right
+            elif isinstance(node.op, ast.Pow):
+                return left ** right
+        elif isinstance(node, ast.Compare):
+            left = self._eval_ast(node.left, current_row, current_col)
+            if isinstance(left, str) and left.startswith("#"):
+                return left
+            for op, comparator in zip(node.ops, node.comparators):
+                right = self._eval_ast(comparator, current_row, current_col)
+                if isinstance(right, str) and right.startswith("#"):
+                    return right
+                if isinstance(op, ast.Eq):
+                    if not (left == right): return False
+                elif isinstance(op, ast.NotEq):
+                    if not (left != right): return False
+                elif isinstance(op, ast.Lt):
+                    if not (left < right): return False
+                elif isinstance(op, ast.LtE):
+                    if not (left <= right): return False
+                elif isinstance(op, ast.Gt):
+                    if not (left > right): return False
+                elif isinstance(op, ast.GtE):
+                    if not (left >= right): return False
+                left = right
+            return True
+        elif isinstance(node, ast.Call):
+            func = None
+            if isinstance(node.func, ast.Name):
+                fname = node.func.id.lower()
+                if fname == '__cell__':
+                    ref = self._eval_ast(node.args[0], current_row, current_col)
+                    m = REF_PATTERN.match(ref)
+                    if not m: raise ValueError("#REF!")
+                    col = letter_to_col(m.group(2))
+                    row = int(m.group(4)) - 1
+                    return self.get_cell_value(row, col)
+                elif fname == '__range__':
+                    r1 = self._eval_ast(node.args[0], current_row, current_col)
+                    r2 = self._eval_ast(node.args[1], current_row, current_col)
+                    return self.get_range_values(r1, r2)
+                elif fname in self.SAFE_FUNCS:
+                    func = self.SAFE_FUNCS[fname]
+                else:
+                    raise ValueError(f"#NAME? ({fname})")
+            else:
+                func = self._eval_ast(node.func, current_row, current_col)
+
+            args = [self._eval_ast(a, current_row, current_col) for a in node.args]
+            for a in args:
+                if isinstance(a, str) and a.startswith("#"):
+                    return a
+            return func(*args)
+        elif isinstance(node, ast.IfExp):
+            cond = self._eval_ast(node.test, current_row, current_col)
+            if isinstance(cond, str) and cond.startswith("#"):
+                return cond
+            return self._eval_ast(node.body, current_row, current_col) if cond else self._eval_ast(node.orelse, current_row, current_col)
+
+        raise ValueError("#EXPR!")
+
+
+def eval_column_math(df: pd.DataFrame, expr_str: str):
+    """Evaluate a mathematical expression across columns, supporting numpy/vector functions."""
+    s = str(expr_str).strip()
+    if s.startswith("="):
+        s = s[1:].strip()
+    if not s:
+        return np.zeros(len(df))
+
+    s = s.replace("^", "**")
+    s = s.replace("<>", "!=")
+
+    context = {
+        'np': np, 'math': math,
+        'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
+        'asin': np.arcsin, 'acos': np.arccos, 'atan': np.arctan,
+        'sinh': np.sinh, 'cosh': np.cosh, 'tanh': np.tanh,
+        'sqrt': np.sqrt, 'exp': np.exp,
+        'log': np.log, 'ln': np.log, 'log10': np.log10, 'log2': np.log2,
+        'abs': np.abs, 'round': np.round, 'floor': np.floor, 'ceil': np.ceil,
+        'pi': np.pi, 'e': np.e,
+        'mean': lambda x: np.nanmean(x),
+        'std': lambda x: np.nanstd(x),
+        'sum': lambda x: np.nansum(x),
+        'min': lambda x: np.nanmin(x),
+        'max': lambda x: np.nanmax(x),
+        'normalize': lambda x: (x - np.nanmin(x)) / (np.nanmax(x) - np.nanmin(x)) if (np.nanmax(x) != np.nanmin(x)) else np.zeros_like(x),
+        'standardize': lambda x: (x - np.nanmean(x)) / np.nanstd(x) if np.nanstd(x) != 0 else np.zeros_like(x),
+        'cumsum': lambda x: np.nancumsum(x),
+        'diff': lambda x: np.gradient(x) if len(x) > 1 else np.zeros_like(x),
+        'smooth': lambda x, w=5: pd.Series(x).rolling(max(1, int(w)), center=True, min_periods=1).mean().to_numpy(),
+        'linspace': lambda a, b: np.linspace(a, b, len(df)),
+    }
+
+    # Bind column names and letters as numpy arrays
+    for col_idx, col_name in enumerate(df.columns):
+        arr = pd.to_numeric(df[col_name], errors='coerce').to_numpy(float)
+        # replace NaN with 0 for computation
+        arr = np.nan_to_num(arr, nan=0.0)
+        context[str(col_name)] = arr
+        c_letter = col_to_letter(col_idx)
+        context[c_letter] = arr
+        context[c_letter.lower()] = arr
+
+    # Evaluate safely
+    result = eval(s, {"__builtins__": {}}, context)
+    if isinstance(result, (int, float)):
+        result = np.full(len(df), float(result))
+    return np.asarray(result, dtype=float)
+
+
+class FormulaBar(ttk.Frame):
+    """Excel-style formula bar with Cell Address Box, fx indicator, and formula entry."""
+
+    def __init__(self, master, on_commit=None, on_cancel=None, on_fill_down=None, on_math=None):
+        super().__init__(master, padding=(4, 2))
+        self.master_table = master
+        self.on_commit = on_commit
+        self.on_cancel = on_cancel
+        self.on_fill_down = on_fill_down
+        self.on_math = on_math
+
+        # Cell name / address box
+        self.name_var = tk.StringVar(value="A1")
+        self.name_box = ttk.Entry(self, textvariable=self.name_var, width=13, justify="center")
+        self.name_box.pack(side="left", padx=(0, 4))
+        self.name_box.bind("<Return>", self._jump_to_cell)
+        Tooltip(self.name_box, "Active cell (type address like B5 and press Enter to jump)")
+
+        # fx indicator
+        fx_label = tk.Label(self, text="fx", font=("TkDefaultFont", 11, "bold", "italic"),
+                            foreground="#1a5fb4")
+        fx_label.pack(side="left", padx=(2, 6))
+
+        # Formula / value entry
+        self.formula_var = tk.StringVar()
+        self.entry = ttk.Entry(self, textvariable=self.formula_var)
+        self.entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.entry.bind("<Return>", self._commit)
+        self.entry.bind("<KP_Enter>", self._commit)
+        self.entry.bind("<Escape>", self._cancel)
+
+        # Buttons: Commit (✓), Cancel (✕), Fill Down, Column Math
+        btn_commit = ttk.Button(self, text="✓", width=3, command=self._commit)
+        btn_commit.pack(side="left", padx=(0, 2))
+        Tooltip(btn_commit, "Accept formula (Enter)")
+
+        btn_cancel = ttk.Button(self, text="✕", width=3, command=self._cancel)
+        btn_cancel.pack(side="left", padx=(0, 4))
+        Tooltip(btn_cancel, "Cancel formula (Esc)")
+
+        btn_fill = ttk.Button(self, text="Fill Down", command=self._fill_down)
+        btn_fill.pack(side="left", padx=(0, 4))
+        Tooltip(btn_fill, "Fill formula/value down the selected block (Ctrl+D)")
+
+        btn_math = ttk.Button(self, text="Column Math...", command=self._math)
+        btn_math.pack(side="left")
+        Tooltip(btn_math, "Perform operations on columns (Column Math / Formulas)")
+
+    def set_cell(self, address_str, formula_or_val):
+        self.name_var.set(address_str)
+        self.formula_var.set(formula_or_val)
+
+    def get_text(self):
+        return self.formula_var.get()
+
+    def _commit(self, _event=None):
+        if self.on_commit:
+            self.on_commit(self.formula_var.get())
+        return "break"
+
+    def _cancel(self, _event=None):
+        if self.on_cancel:
+            self.on_cancel()
+        return "break"
+
+    def _fill_down(self):
+        if self.on_fill_down:
+            self.on_fill_down()
+
+    def _math(self):
+        if self.on_math:
+            self.on_math()
+
+    def _jump_to_cell(self, _event=None):
+        addr = self.name_var.get().strip().upper()
+        m = REF_PATTERN.match(addr)
+        if m and hasattr(self.master_table, "select_cell_by_address"):
+            self.master_table.select_cell_by_address(m.group(2), int(m.group(4)))
+        return "break"
+
+
+class ColumnMathDialog(ToolDialog):
+    """Excel-style column operations / formula calculator."""
+
+    def __init__(self, master, table, on_applied=None, on_close=None):
+        super().__init__(master, "Column Operations (Math & Formulas)", on_close=on_close)
+        self.table = table
+        self.on_applied = on_applied
+        self.df = table.df
+
+        columns = [str(c) for c in self.df.columns]
+        current_col = table.current_column or (columns[1] if len(columns) > 1 else (columns[0] if columns else "Y1"))
+        if current_col not in columns and columns:
+            current_col = columns[0]
+
+        self.target_var = tk.StringVar(value=str(current_col))
+        self.expr_var = tk.StringVar(value="")
+        self.dynamic_var = tk.BooleanVar(value=True)
+
+        # Top frame: Target Column
+        top_frame = ttk.LabelFrame(self.body, text="Target Column", padding=8)
+        top_frame.pack(fill="x")
+
+        ttk.Label(top_frame, text="Calculate column:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.target_combo = ttk.Combobox(top_frame, textvariable=self.target_var, state="readonly",
+                                         values=columns, width=16)
+        self.target_combo.grid(row=0, column=1, sticky="w")
+        ttk.Button(top_frame, text="+ New Column", command=self._add_new_column).grid(row=0, column=2, padx=(8, 0))
+
+        # Formula input frame
+        formula_frame = ttk.LabelFrame(self.body, text="Formula / Expression", padding=8)
+        formula_frame.pack(fill="x", pady=(8, 0))
+
+        ttk.Label(formula_frame, text="Formula (Excel or Python):").pack(anchor="w")
+        self.expr_entry = ttk.Entry(formula_frame, textvariable=self.expr_var, width=46)
+        self.expr_entry.pack(fill="x", pady=(3, 6))
+        self.expr_entry.focus_set()
+
+        # Preset Operations Combobox
+        preset_frame = ttk.Frame(formula_frame)
+        preset_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(preset_frame, text="Presets:").pack(side="left", padx=(0, 6))
+        self.preset_combo = ttk.Combobox(preset_frame, state="readonly", width=36, values=[
+            "Choose a preset operation...",
+            "Scale by factor: Col * k",
+            "Offset by constant: Col + k",
+            "Add two columns: Col1 + Col2",
+            "Subtract two columns: Col1 - Col2",
+            "Multiply two columns: Col1 * Col2",
+            "Divide two columns: Col1 / Col2",
+            "Normalize to [0, 1]: (Col - min)/(max - min)",
+            "Standardize (Z-score): (Col - mean)/std",
+            "Subtract mean / baseline: Col - mean",
+            "Cumulative sum: cumsum(Col)",
+            "Derivative / Difference: diff(Col)",
+            "Moving average smooth: smooth(Col, 5)",
+            "Linear sequence: linspace(start, stop)",
+        ])
+        self.preset_combo.current(0)
+        self.preset_combo.pack(side="left", fill="x", expand=True)
+        self.preset_combo.bind("<<ComboboxSelected>>", self._apply_preset)
+
+        # Quick Insert Column buttons
+        col_btn_frame = ttk.Frame(formula_frame)
+        col_btn_frame.pack(fill="x", pady=(2, 4))
+        ttk.Label(col_btn_frame, text="Columns:").pack(side="left", padx=(0, 6))
+        for col_name in columns[:6]:
+            letter = col_to_letter(columns.index(col_name))
+            btn = ttk.Button(col_btn_frame, text=f"{col_name} ({letter})", width=len(col_name) + 5,
+                             command=lambda c=col_name: self._insert_text(f"{c} "))
+            btn.pack(side="left", padx=2)
+
+        # Quick Math buttons
+        math_btn_frame = ttk.Frame(formula_frame)
+        math_btn_frame.pack(fill="x", pady=(2, 4))
+        ttk.Label(math_btn_frame, text="Math:").pack(side="left", padx=(0, 6))
+        for op in ["+", "-", "*", "/", "^", "(", ")", "sin", "cos", "exp", "log10", "sqrt", "abs", "mean", "std"]:
+            ttk.Button(math_btn_frame, text=op, width=max(2, len(op) + 1),
+                       command=lambda o=op: self._insert_text(f"{o}(" if len(o) > 1 and o not in ("+", "-", "*", "/", "^", "(", ")") else f" {o} ")).pack(side="left", padx=1)
+
+        # Dynamic formula checkbox
+        ttk.Checkbutton(formula_frame, text="Apply as dynamic Excel formulas (recalculated when data changes)",
+                        variable=self.dynamic_var).pack(anchor="w", pady=(6, 0))
+
+        # Preview frame
+        self.preview_frame = ttk.LabelFrame(self.body, text="Preview (first rows)", padding=6)
+        self.preview_frame.pack(fill="x", pady=(8, 0))
+        self.preview_label = ttk.Label(self.preview_frame, text="Enter a formula to see preview...", justify="left", foreground="#444")
+        self.preview_label.pack(anchor="w")
+        self.expr_var.trace_add("write", lambda *_: self._update_preview())
+        self.target_var.trace_add("write", lambda *_: self._update_preview())
+
+        # Buttons: Calculate, Close
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(10, 0))
+        ttk.Button(bar, text="Calculate & Apply", command=self.apply).pack(side="left")
+        ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+        self.bind("<Return>", lambda _e: self.apply())
+
+    def _insert_text(self, text):
+        self.expr_entry.insert("insert", text)
+        self.expr_entry.focus_set()
+
+    def _add_new_column(self):
+        new_name = f"Y{len(self.df.columns)}"
+        name = simpledialog.askstring("New Column", "Column name:", initialvalue=new_name, parent=self)
+        if name and self.table.add_column(name):
+            cols = [str(c) for c in self.table.df.columns]
+            self.target_combo.configure(values=cols)
+            self.target_var.set(name)
+
+    def _apply_preset(self, _event=None):
+        idx = self.preset_combo.current()
+        target = self.target_var.get()
+        cols = [str(c) for c in self.df.columns]
+        other_col = cols[1] if len(cols) > 1 and cols[0] == target else (cols[0] if cols else "X")
+
+        presets = {
+            1: f"{target} * 2",
+            2: f"{target} + 10",
+            3: f"{target} + {other_col}",
+            4: f"{target} - {other_col}",
+            5: f"{target} * {other_col}",
+            6: f"{target} / {other_col}",
+            7: f"normalize({target})",
+            8: f"standardize({target})",
+            9: f"{target} - mean({target})",
+            10: f"cumsum({target})",
+            11: f"diff({target})",
+            12: f"smooth({target}, 5)",
+            13: "linspace(0, 10)",
+        }
+        if idx in presets:
+            self.expr_var.set(presets[idx])
+
+    def _update_preview(self):
+        expr = self.expr_var.get().strip()
+        if not expr:
+            self.preview_label.configure(text="Enter a formula to see preview...")
+            return
+        try:
+            arr = eval_column_math(self.table.df, expr)
+            preview_vals = [f"{arr[i]:.4g}" if np.isfinite(arr[i]) else "NaN" for i in range(min(5, len(arr)))]
+            self.preview_label.configure(text=f"First rows: [ {', '.join(preview_vals)} ... ]")
+        except Exception as err:
+            self.preview_label.configure(text=f"Error: {err}")
+
+    def apply(self):
+        expr = self.expr_var.get().strip()
+        if not expr:
+            return
+        target = self.target_var.get()
+        if target not in self.table.df.columns:
+            if not self.table.add_column(target):
+                messagebox.showerror("Error", f"Could not create column '{target}'", parent=self)
+                return
+
+        target_idx = list(self.table.df.columns).index(target)
+        target_letter = col_to_letter(target_idx)
+        is_array_func = any(fn in expr.lower() for fn in ("smooth", "cumsum", "diff", "linspace", "normalize", "standardize"))
+
+        if self.dynamic_var.get() and not is_array_func:
+            # Build row-specific Excel formulas
+            expr_clean = expr[1:].strip() if expr.startswith("=") else expr
+            # Convert column names and letters into row placeholders
+            # E.g. [Y1] -> Col letter
+            cols = [str(c) for c in self.table.df.columns]
+            for c_idx, c_name in enumerate(cols):
+                c_letter = col_to_letter(c_idx)
+                # replace column name surrounded by word boundary
+                expr_clean = re.sub(rf'\b{re.escape(c_name)}\b', f"__{c_letter}__", expr_clean)
+
+            # Apply row by row
+            for r in range(len(self.table.df)):
+                row_expr = expr_clean
+                for c_idx in range(len(cols)):
+                    c_letter = col_to_letter(c_idx)
+                    row_expr = row_expr.replace(f"__{c_letter}__", f"{c_letter}{r + 1}")
+                    # Also replace standalone column letters
+                    row_expr = re.sub(rf'\b{c_letter}\b', f"{c_letter}{r + 1}", row_expr)
+                    row_expr = re.sub(rf'\b{c_letter.lower()}\b', f"{c_letter}{r + 1}", row_expr)
+
+                formula_str = f"={row_expr}"
+                self.table.cell_formulas[(r, target_idx)] = formula_str
+
+            self.table.recalculate_all()
+        else:
+            # Apply as static values
+            try:
+                arr = eval_column_math(self.table.df, expr)
+                for r in range(min(len(self.table.df), len(arr))):
+                    self.table.cell_formulas.pop((r, target_idx), None)
+                    v = arr[r]
+                    val = int(v) if (isinstance(v, float) and v.is_integer()) else round(float(v), 8)
+                    self.table.df.iat[r, target_idx] = val
+                    if self.table.tree.exists(str(r)):
+                        self.table.tree.set(str(r), target, str(val))
+            except Exception as err:
+                messagebox.showerror("Math Error", f"Could not calculate expression:\n{err}", parent=self)
+                return
+
+        self.table._changed()
+        if self.on_applied:
+            self.on_applied()
+        self.close()
+
+
+# --------------------------------------------------------------------------
 # data table
 # --------------------------------------------------------------------------
 
@@ -2304,6 +3318,7 @@ class DataTable(ttk.Frame):
         self.current_column = None      # column of the last clicked cell/heading
         self._editor = None
         self._heading_editor = None
+        self.cell_formulas: dict = {}   # (row, col) -> formula string (e.g. "=A1+B1")
         # the highlighted block of cells: (row0, col0, row1, col1)
         self.block = None
         self.anchor = (0, 0)            # where Shift+arrows measure from
@@ -2325,24 +3340,41 @@ class DataTable(ttk.Frame):
                             xscrollcommand=self._x_scrolled)
         self._v_scroll, self._h_scroll = v_scroll, h_scroll
 
+        # Formula bar above the check bar and headings
+        self.formula_bar = FormulaBar(self, on_commit=self._formula_bar_commit,
+                                      on_cancel=self._formula_bar_cancel,
+                                      on_fill_down=self.fill_down,
+                                      on_math=self.open_column_math)
+        self.formula_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
+
         # one check button per column, above the headings
         self.check_bar = tk.Frame(self, height=CHECK_BAR_HEIGHT)
-        self.check_bar.grid(row=0, column=0, sticky="ew")
+        self.check_bar.grid(row=1, column=0, sticky="ew")
         self.check_bar.grid_propagate(False)
         # column name -> {"B"/"T" or "L"/"R": BooleanVar} and the two widgets
         self.axis_vars: dict = {}
         self._checks: dict = {}
 
-        self.tree.grid(row=1, column=0, sticky="nsew")
-        v_scroll.grid(row=1, column=1, sticky="ns")
-        h_scroll.grid(row=2, column=0, sticky="ew")
-        self.rowconfigure(1, weight=1)
+        self.tree.grid(row=2, column=0, sticky="nsew")
+        v_scroll.grid(row=2, column=1, sticky="ns")
+        h_scroll.grid(row=3, column=0, sticky="ew")
+
+        # Summary status bar at the bottom (Sum, Average, Count, Min, Max)
+        self.status_bar = ttk.Frame(self)
+        self.status_bar.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        self.status_label = ttk.Label(self.status_bar, text="", foreground="#444",
+                                      font=("TkDefaultFont", 9))
+        self.status_label.pack(side="left", padx=4)
+
+        self.rowconfigure(2, weight=1)
         self.columnconfigure(0, weight=1)
 
         self.tree.bind("<Button-1>", self._on_click)
         self.tree.bind("<Shift-Button-1>", self._on_shift_click)
         self.tree.bind("<B1-Motion>", self._on_drag)
         self.tree.bind("<ButtonRelease-1>", self._on_drag_end)
+        for seq in ("<Button-2>", "<Button-3>", "<Control-Button-1>"):
+            self.tree.bind(seq, self._show_context_menu)
         self.tree.bind("<Configure>", lambda _e: self._layout_changed())
         self.tree.bind("<MouseWheel>", lambda _e: self.after(1, self._refresh_outline),
                        add="+")
@@ -2568,6 +3600,8 @@ class DataTable(ttk.Frame):
             tree.bind(f"<{modifier}-V>", wrap(self.paste_block))
             tree.bind(f"<{modifier}-x>", wrap(self.cut_block))
             tree.bind(f"<{modifier}-X>", wrap(self.cut_block))
+            tree.bind(f"<{modifier}-d>", wrap(self.fill_down))
+            tree.bind(f"<{modifier}-D>", wrap(self.fill_down))
             tree.bind(f"<{modifier}-space>", wrap(self.select_columns_of_block))
         tree.bind("<Shift-space>", wrap(self.select_rows_of_block))
         for sequence in ("<Delete>", "<BackSpace>"):
@@ -2609,6 +3643,8 @@ class DataTable(ttk.Frame):
         self.anchor = anchor if anchor is not None else (bounds[0], bounds[1])
         self.cursor = cursor if cursor is not None else (bounds[2], bounds[3])
         self._refresh_block()
+        self._update_formula_bar()
+        self._update_status_bar()
         return bounds
 
     def select_cell(self, row, col):
@@ -2802,13 +3838,19 @@ class DataTable(ttk.Frame):
         self.style.configure("APlot.Treeview", font=("TkDefaultFont", size),
                              rowheight=int(size * 2.2))
         self.style.configure("APlot.Treeview.Heading", font=("TkDefaultFont", size))
-        # the little x_B / x_T / y_L / y_R switches above the columns
+        # the little x_B / x_T / y_L / y_R switches above the columns keep
+        # their own, readable size whatever the table font is
         self.style.configure("APlot.Axis.TCheckbutton",
-                             font=("TkDefaultFont", max(7, size - 2)), padding=0)
-        width = max(40, int(self.config_obj.get("table", "column_width")))
+                             font=("TkDefaultFont", AXIS_CHECK_FONT), padding=0)
+        width = self.column_width()
         for column in self.tree["columns"]:
-            self.tree.column(column, width=width)
+            self.tree.column(column, width=width, minwidth=MIN_COLUMN_WIDTH)
         self.after(1, self._place_checks)
+
+    def column_width(self):
+        """The width of one column: never narrower than its check buttons."""
+        wanted = int(self.config_obj.get("table", "column_width"))
+        return max(MIN_COLUMN_WIDTH, wanted)
 
     # -- data --------------------------------------------------------------
     def set_dataframe(self, df, check_all=False):
@@ -2835,11 +3877,15 @@ class DataTable(ttk.Frame):
         self._cancel_heading_edit()
         self.tree.delete(*self.tree.get_children())
         columns = list(self.df.columns)
-        width = max(40, int(self.config_obj.get("table", "column_width")))
+        width = self.column_width()
         self.tree["columns"] = columns
         for col in columns:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=width, anchor="center", stretch=True)
+            # minwidth keeps the two check buttons - and the numbers under
+            # them - readable however narrow the window is made; the
+            # horizontal scroll bar takes over from there
+            self.tree.column(col, width=width, minwidth=MIN_COLUMN_WIDTH,
+                             anchor="center", stretch=True)
         self.update_idletasks()
         for index, row in enumerate(self.df.itertuples(index=False, name=None)):
             self.tree.insert("", "end", iid=str(index),
@@ -3358,7 +4404,9 @@ class DataTable(ttk.Frame):
         x, y, width, height = bbox
         column = self.df.columns[col_index]
         self.current_column = column
-        var = tk.StringVar(value=self.tree.set(row_id, column))
+        cell_formula = self.cell_formulas.get((int(row_id), col_index))
+        init_val = cell_formula if cell_formula is not None else self.tree.set(row_id, column)
+        var = tk.StringVar(value=init_val)
         # exportselection=False keeps the highlighted text visible even when
         # another widget (e.g. the Treeview) takes over the X selection.
         entry = tk.Entry(self.tree, textvariable=var, exportselection=False,
@@ -3506,15 +4554,255 @@ class DataTable(ttk.Frame):
         if row >= len(self.df) or col_index >= len(self.df.columns):
             return
         column = self.df.columns[col_index]
-        value = coerce(text)
+        text_val = str(text).strip()
+        if text_val.startswith("="):
+            self.cell_formulas[(row, col_index)] = text_val
+            value = self.eval_formula(text_val, row, col_index)
+        else:
+            self.cell_formulas.pop((row, col_index), None)
+            value = coerce(text_val)
+
         try:
             self.df.iat[row, col_index] = value
         except (ValueError, TypeError):
             self.df[column] = self.df[column].astype(object)
             self.df.iat[row, col_index] = value
+
+        self.recalculate_all()
         if self.tree.exists(row_id):
             self.tree.set(row_id, column, "" if value == "" else str(value))
         self._changed()
+        self._update_formula_bar()
+        self._update_status_bar()
+
+    def eval_formula(self, formula_str, row, col):
+        evaluator = FormulaEvaluator(self.df, self.cell_formulas)
+        return evaluator.evaluate(formula_str, row, col)
+
+    def recalculate_all(self):
+        """Recalculate all formula cells across the table."""
+        if not self.cell_formulas:
+            return
+        evaluator = FormulaEvaluator(self.df, self.cell_formulas)
+        for (r, c), formula in list(self.cell_formulas.items()):
+            if r < len(self.df) and c < len(self.df.columns):
+                val = evaluator.evaluate(formula, r, c)
+                col_name = self.df.columns[c]
+                try:
+                    self.df.iat[r, c] = val
+                except (ValueError, TypeError):
+                    self.df[col_name] = self.df[col_name].astype(object)
+                    self.df.iat[r, c] = val
+                if self.tree.exists(str(r)):
+                    self.tree.set(str(r), col_name, "" if val == "" else str(val))
+
+    def fill_down(self):
+        """Excel-style Fill Down (Ctrl+D): replicate top cell formula/value down the selection."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return False
+        r0, c0, r1, c1 = bounds
+        if r0 == r1:
+            if r0 > 0:
+                fill_r0 = r0 - 1
+                fill_r1 = r0
+            else:
+                return False
+        else:
+            fill_r0 = r0
+            fill_r1 = r1
+
+        for c in range(c0, c1 + 1):
+            top_formula = self.cell_formulas.get((fill_r0, c))
+            top_val = self.df.iat[fill_r0, c]
+            col_name = self.df.columns[c]
+            for r in range(fill_r0 + 1, fill_r1 + 1):
+                if top_formula is not None:
+                    adjusted = adjust_formula_references(top_formula, delta_row=(r - fill_r0), delta_col=0)
+                    self.cell_formulas[(r, c)] = adjusted
+                else:
+                    self.cell_formulas.pop((r, c), None)
+                    try:
+                        self.df.iat[r, c] = copy.deepcopy(top_val)
+                    except (ValueError, TypeError):
+                        self.df[col_name] = self.df[col_name].astype(object)
+                        self.df.iat[r, c] = copy.deepcopy(top_val)
+
+        self.recalculate_all()
+        self._changed()
+        self._update_formula_bar()
+        self._update_status_bar()
+        return True
+
+    def select_cell_by_address(self, col_letter, row_1_based):
+        col_idx = letter_to_col(col_letter)
+        row_idx = row_1_based - 1
+        if 0 <= row_idx < len(self.df) and 0 <= col_idx < len(self.df.columns):
+            self.select_cell(row_idx, col_idx)
+            self.tree.see(str(row_idx))
+
+    def _update_formula_bar(self):
+        if not hasattr(self, "formula_bar") or not len(self.df.columns) or not len(self.df):
+            return
+        r, c = self.cursor
+        r = max(0, min(len(self.df) - 1, r))
+        c = max(0, min(len(self.df.columns) - 1, c))
+        c_letter = col_to_letter(c)
+        c_name = str(self.df.columns[c])
+        addr = f"{c_letter}{r + 1}"
+        display_name = f"{addr} ({c_name})"
+
+        if (r, c) in self.cell_formulas:
+            formula_text = self.cell_formulas[(r, c)]
+        else:
+            val = self.df.iat[r, c]
+            formula_text = "" if pd.isna(val) else str(val)
+        self.formula_bar.set_cell(display_name, formula_text)
+
+    def _update_status_bar(self):
+        if not hasattr(self, "status_label"):
+            return
+        bounds = self.block_bounds()
+        if bounds is None:
+            self.status_label.configure(text="")
+            return
+        r0, c0, r1, c1 = bounds
+        total_cells = (r1 - r0 + 1) * (c1 - c0 + 1)
+        if total_cells <= 1:
+            self.status_label.configure(text="")
+            return
+
+        nums = []
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                val = self.df.iat[r, c]
+                if isinstance(val, (int, float)) and np.isfinite(val):
+                    nums.append(float(val))
+                else:
+                    try:
+                        n = float(str(val).strip().replace(",", "."))
+                        if np.isfinite(n):
+                            nums.append(n)
+                    except (ValueError, TypeError):
+                        pass
+
+        if nums:
+            count = len(nums)
+            total = sum(nums)
+            avg = total / count
+            min_v = min(nums)
+            max_v = max(nums)
+            text = f"Selected: {total_cells} cells (Numeric: {count})  |  Sum: {total:.4g}  |  Average: {avg:.4g}  |  Min: {min_v:.4g}  |  Max: {max_v:.4g}"
+        else:
+            text = f"Selected: {total_cells} cells"
+        self.status_label.configure(text=text)
+
+    def _formula_bar_commit(self, text):
+        r, c = self.cursor
+        if not (0 <= r < len(self.df) and 0 <= c < len(self.df.columns)):
+            return
+        text_val = str(text).strip()
+        column = self.df.columns[c]
+        if text_val.startswith("="):
+            self.cell_formulas[(r, c)] = text_val
+            val = self.eval_formula(text_val, r, c)
+        else:
+            self.cell_formulas.pop((r, c), None)
+            val = coerce(text_val)
+
+        try:
+            self.df.iat[r, c] = val
+        except (ValueError, TypeError):
+            self.df[column] = self.df[column].astype(object)
+            self.df.iat[r, c] = val
+
+        self.recalculate_all()
+        if self.tree.exists(str(r)):
+            self.tree.set(str(r), column, "" if val == "" else str(val))
+        self._changed()
+        self._update_formula_bar()
+        self._update_status_bar()
+
+    def _formula_bar_cancel(self):
+        self._update_formula_bar()
+
+    def open_column_math(self):
+        ColumnMathDialog(self.winfo_toplevel(), self)
+
+    def sort_column(self, col_idx, ascending=True):
+        if not len(self.df) or not (0 <= col_idx < len(self.df.columns)):
+            return
+        col_name = self.df.columns[col_idx]
+        try:
+            num_series = pd.to_numeric(self.df[col_name], errors='coerce')
+            if num_series.notna().sum() > len(self.df) * 0.5:
+                sorted_df = self.df.iloc[num_series.argsort(kind='stable') if ascending else (-num_series).argsort(kind='stable')]
+            else:
+                sorted_df = self.df.sort_values(by=col_name, ascending=ascending, kind='stable')
+        except Exception:
+            sorted_df = self.df.sort_values(by=col_name, ascending=ascending, kind='stable')
+
+        old_indices = list(sorted_df.index)
+        new_formulas = {}
+        for (r, c), f in self.cell_formulas.items():
+            if r in old_indices:
+                new_r = old_indices.index(r)
+                new_formulas[(new_r, c)] = f
+        self.cell_formulas = new_formulas
+
+        self.set_dataframe(sorted_df.reset_index(drop=True), check_all=False)
+        self.recalculate_all()
+        self._changed()
+
+    def _show_context_menu(self, event):
+        region = self.tree.identify_region(event.x, event.y)
+        column_id = self.tree.identify_column(event.x)
+        if region == "heading" and column_id:
+            col_idx = int(column_id[1:]) - 1
+            if 0 <= col_idx < len(self.df.columns):
+                self._show_header_context_menu(col_idx, event)
+            return
+
+        cell = self._cell_at(event.x, event.y)
+        if cell is not None:
+            bounds = self.block_bounds()
+            if bounds is None or not (bounds[0] <= cell[0] <= bounds[2] and bounds[1] <= cell[1] <= bounds[3]):
+                self.select_cell(*cell)
+
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label=f"Cut ({MODIFIER}+X)", command=self.cut_block)
+        menu.add_command(label=f"Copy ({MODIFIER}+C)", command=self.copy_block)
+        menu.add_command(label=f"Paste ({MODIFIER}+V)", command=self.paste_block)
+        menu.add_separator()
+        menu.add_command(label=f"Fill Down ({MODIFIER}+D)", command=self.fill_down)
+        menu.add_command(label="Column Math...", command=self.open_column_math)
+        menu.add_separator()
+        menu.add_command(label="Clear Cells (Delete)", command=self.clear_block)
+        menu.add_command(label="Delete Row(s)", command=self.delete_selected_rows)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _show_header_context_menu(self, col_idx, event):
+        col_name = str(self.df.columns[col_idx])
+        self.current_column = col_name
+
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label=f"Calculate Column '{col_name}'...", command=self.open_column_math)
+        menu.add_separator()
+        menu.add_command(label="Sort Ascending (A → Z)", command=lambda: self.sort_column(col_idx, ascending=True))
+        menu.add_command(label="Sort Descending (Z → A)", command=lambda: self.sort_column(col_idx, ascending=False))
+        menu.add_separator()
+        menu.add_command(label="Fill Down (Ctrl+D)", command=self.fill_down)
+        menu.add_separator()
+        menu.add_command(label="Insert Column...", command=lambda: getattr(self.winfo_toplevel(), "add_column", lambda: None)())
+        menu.add_command(label=f"Rename '{col_name}'...", command=lambda: self._begin_heading_edit(f"#{col_idx + 1}"))
+        menu.add_command(label=f"Delete Column '{col_name}'", command=lambda: getattr(self.winfo_toplevel(), "delete_column", lambda: None)())
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
 
 # --------------------------------------------------------------------------
@@ -3533,11 +4821,13 @@ class PlotWindow(tk.Toplevel):
             "Drag a control point: resize\n"
             "\"T\", the shape and the arrow button: add text, drawings and "
             "arrows   |   Shift: arrows at 45 deg steps   |   "
-            f"{ACCEL_NAME}+C / {ACCEL_NAME}+V: copy and paste   |   "
+            f"{ACCEL_NAME}+C: copy the object, or the whole figure   |   "
+            f"{ACCEL_NAME}+V: paste   |   "
+            f"{ACCEL_NAME}+S: save   |   {ACCEL_NAME}+E: export   |   "
             "Arrow keys: move   |   Delete: remove")
 
     def __init__(self, master, df: pd.DataFrame, config: Config, app=None,
-                 layout=None):
+                 layout=None, plot_style="line_symbol"):
         super().__init__(master)
         self.title("Interactive Graph")
         self.settings = config
@@ -3548,6 +4838,13 @@ class PlotWindow(tk.Toplevel):
                       f"{config.get('window', 'plot_height')}")
 
         self.df = df
+        self.plot_style = plot_style
+        self.series_style: dict = {}          # Y column name -> plot style code
+        self.bar_containers: dict = {}        # Y column name -> BarContainer
+        self.bar_cfg: dict = {}               # Y column name -> {width, color, alpha, edgecolor, edgewidth}
+        self.errorbar_containers: dict = {}   # Y column name -> ErrorbarContainer
+        self.error_cfg: dict = {}             # Y column name -> {type, value, column, capsize, capthick, elinewidth, color}
+        self.histogram_cfg: dict = {}         # Y column name -> {bins, color, alpha, edgecolor, edgewidth}
         self.lines: list[Line2D] = []
         self.series: dict = {}          # Y column name -> curve
         self.x_col = str(df.columns[0]) if len(df.columns) else ""
@@ -3658,6 +4955,7 @@ class PlotWindow(tk.Toplevel):
         self._init_axes(plot_cfg)
         self.refresh_legend()
         self._connect_events()
+        self.protocol("WM_DELETE_WINDOW", self.close_window)
         self.draw()
 
     # -- construction ------------------------------------------------------
@@ -3812,7 +5110,7 @@ class PlotWindow(tk.Toplevel):
 
         for modifier in ("Control", "Command"):
             for letter in ("c", "C"):
-                bind_both(f"<{modifier}-{letter}>", wrap(self.copy_selection))
+                bind_both(f"<{modifier}-{letter}>", wrap(self.copy_shortcut))
             for letter in ("v", "V"):
                 bind_both(f"<{modifier}-{letter}>", wrap(self.paste_clipboard))
         for sequence in ("<Delete>", "<BackSpace>"):
@@ -4061,7 +5359,7 @@ class PlotWindow(tk.Toplevel):
             return PALETTE_FALLBACK
         return colors[int(index) % len(colors)]
 
-    def _create_line(self, x, y, y_col, x_col, side="left"):
+    def _create_line(self, x, y, y_col, x_col, side="left", style=None):
         """New curve drawn with the defaults of the configuration file.
 
         The colour is taken from the sequence by hand, so that a curve on the
@@ -4072,11 +5370,40 @@ class PlotWindow(tk.Toplevel):
         target = self.axes_for_side(side)
         color = self._cycle_color(self._color_index)
         self._color_index += 1
+        series_st = style or self.plot_style
+        self.series_style[y_col] = series_st
+
+        if series_st == "line":
+            l_style = code_of(LINE_STYLES, plot_cfg["line_style"], "-")
+            if l_style.lower() == "none":
+                l_style = "-"
+            m_style = "None"
+        elif series_st == "scatter":
+            l_style = "none"
+            m_style = code_of(MARKERS, plot_cfg["marker"], "o")
+            if m_style.lower() == "none":
+                m_style = "o"
+        elif series_st in ("bar", "histogram"):
+            l_style = "none"
+            m_style = "None"
+        elif series_st == "errorbar":
+            l_style = "none"
+            m_style = code_of(MARKERS, plot_cfg["marker"], "o")
+            if m_style.lower() == "none":
+                m_style = "o"
+        else:  # line_symbol
+            l_style = code_of(LINE_STYLES, plot_cfg["line_style"], "-")
+            if l_style.lower() == "none":
+                l_style = "-"
+            m_style = code_of(MARKERS, plot_cfg["marker"], "o")
+            if m_style.lower() == "none":
+                m_style = "o"
+
         line, = target.plot(
             x, y, color=color,
-            linestyle=code_of(LINE_STYLES, plot_cfg["line_style"], "-"),
+            linestyle=l_style,
             linewidth=float(plot_cfg["line_width"]),
-            marker=code_of(MARKERS, plot_cfg["marker"], "o"),
+            marker=m_style,
             markersize=float(plot_cfg["marker_size"]),
             markeredgewidth=float(plot_cfg["marker_edge_width"]),
             label=str(y_col))          # the column name is the legend text
@@ -4090,8 +5417,225 @@ class PlotWindow(tk.Toplevel):
         self.series[y_col] = line
         self.series_axis[y_col] = "right" if target is self.ax2 else "left"
         self.fill_state.setdefault(y_col, self.default_fill_state(plot_cfg))
-        self.refresh_fill(y_col)
+        self.refresh_series_visuals(y_col)
         return line
+
+    def _clear_bar(self, column):
+        old = self.bar_containers.pop(column, None)
+        if old is not None:
+            try:
+                old.remove()
+            except Exception:
+                for patch in getattr(old, "patches", []):
+                    try:
+                        patch.remove()
+                    except Exception:
+                        pass
+
+    def refresh_bar(self, column):
+        self._clear_bar(column)
+        st = self.series_style.get(column, self.plot_style)
+        if st != "bar":
+            return None
+        line = self.series.get(column)
+        if line is None:
+            return None
+        x_data, y_data = line.get_data()
+        if len(x_data) == 0:
+            return None
+        target = line.axes if line.axes is not None else self.ax
+        cfg = self.bar_cfg.setdefault(column, {
+            "width": 0.8, "color": line.get_color(), "alpha": 0.85,
+            "edgecolor": safe_hex(line.get_color()), "edgewidth": 1.0
+        })
+        w = float(cfg.get("width", 0.8))
+        try:
+            x_arr = np.asarray(x_data, dtype=float)
+            if len(x_arr) > 1:
+                diffs = np.diff(np.sort(x_arr))
+                pos_diffs = diffs[diffs > 0]
+                if len(pos_diffs) > 0 and w <= 1.0:
+                    w = float(cfg.get("width", 0.8)) * float(np.min(pos_diffs))
+        except (ValueError, TypeError):
+            pass
+
+        container = target.bar(
+            x_data, y_data, width=w,
+            color=cfg.get("color", line.get_color()),
+            edgecolor=cfg.get("edgecolor", safe_hex(line.get_color())),
+            linewidth=float(cfg.get("edgewidth", 1.0)),
+            alpha=float(cfg.get("alpha", 0.85)),
+            label="_nolegend_",
+            zorder=line.get_zorder() - 0.2
+        )
+        for patch in container.patches:
+            patch.aplot_series = str(column)
+            patch.set_picker(True)
+        self.bar_containers[column] = container
+        return container
+
+    def _clear_errorbar(self, column):
+        old = self.errorbar_containers.pop(column, None)
+        if old is not None:
+            try:
+                old.remove()
+            except Exception:
+                for coll in getattr(old, "lines", []):
+                    try:
+                        coll.remove()
+                    except Exception:
+                        pass
+
+    def refresh_errorbar(self, column):
+        self._clear_errorbar(column)
+        st = self.series_style.get(column, self.plot_style)
+        if st != "errorbar":
+            return None
+        line = self.series.get(column)
+        if line is None:
+            return None
+        x_data, y_data = line.get_data()
+        if len(x_data) == 0:
+            return None
+        target = line.axes if line.axes is not None else self.ax
+        cfg = self.error_cfg.setdefault(column, {
+            "type": "percent", "value": 5.0, "column": "",
+            "capsize": 4.0, "capthick": 1.5, "elinewidth": 1.5,
+            "color": line.get_color()
+        })
+
+        err_type = cfg.get("type", "percent")
+        err_val = float(cfg.get("value", 5.0))
+        y_arr = np.asarray(y_data, dtype=float)
+
+        if err_type == "percent":
+            yerr = np.abs(y_arr * (err_val / 100.0))
+        elif err_type == "fixed":
+            yerr = np.full_like(y_arr, err_val)
+        elif err_type == "std":
+            finite_y = y_arr[np.isfinite(y_arr)]
+            std = float(np.std(finite_y)) if len(finite_y) > 1 else 1.0
+            yerr = np.full_like(y_arr, std)
+        elif err_type == "column":
+            col_name = cfg.get("column", "")
+            if col_name and col_name in self.df.columns:
+                err_series = pd.to_numeric(self.df[col_name], errors="coerce").values
+                if len(err_series) >= len(y_arr):
+                    yerr = err_series[:len(y_arr)]
+                else:
+                    yerr = np.pad(err_series, (0, len(y_arr) - len(err_series)), constant_values=np.nan)
+            else:
+                yerr = np.abs(y_arr * 0.05)
+        else:
+            yerr = np.abs(y_arr * 0.05)
+
+        color = cfg.get("color", line.get_color())
+        capsize = float(cfg.get("capsize", 4.0))
+        capthick = float(cfg.get("capthick", 1.5))
+        elinewidth = float(cfg.get("elinewidth", 1.5))
+
+        container = target.errorbar(
+            x_data, y_data, yerr=yerr, fmt='none',
+            ecolor=color, elinewidth=elinewidth,
+            capsize=capsize, capthick=capthick,
+            label="_nolegend_", zorder=line.get_zorder() + 0.1
+        )
+        for artist in container.get_children():
+            artist.aplot_series = str(column)
+            artist.set_picker(True)
+        self.errorbar_containers[column] = container
+        return container
+
+    def _clear_histogram(self, column):
+        self._clear_bar(f"hist_{column}")
+
+    def refresh_histogram(self, column):
+        self._clear_histogram(column)
+        st = self.series_style.get(column, self.plot_style)
+        if st != "histogram":
+            return None
+        line = self.series.get(column)
+        if line is None:
+            return None
+        x_data, y_data = line.get_data()
+        if len(y_data) == 0:
+            return None
+        target = line.axes if line.axes is not None else self.ax
+        cfg = self.histogram_cfg.setdefault(column, {
+            "bins": 10, "color": line.get_color(), "alpha": 0.85,
+            "edgecolor": "#ffffff", "edgewidth": 1.0
+        })
+
+        y_finite = np.asarray(y_data, dtype=float)
+        y_finite = y_finite[np.isfinite(y_finite)]
+        if len(y_finite) == 0:
+            return None
+
+        bins_count = max(2, int(cfg.get("bins", 10)))
+        counts, bin_edges = np.histogram(y_finite, bins=bins_count)
+        widths = np.diff(bin_edges)
+        centers = bin_edges[:-1] + widths / 2.0
+
+        container = target.bar(
+            centers, counts, width=widths * 0.95,
+            color=cfg.get("color", line.get_color()),
+            edgecolor=cfg.get("edgecolor", "#ffffff"),
+            linewidth=float(cfg.get("edgewidth", 1.0)),
+            alpha=float(cfg.get("alpha", 0.85)),
+            label="_nolegend_",
+            zorder=line.get_zorder() - 0.2
+        )
+        for patch in container.patches:
+            patch.aplot_series = str(column)
+            patch.set_picker(True)
+        self.bar_containers[f"hist_{column}"] = container
+        return container
+
+    def refresh_series_visuals(self, column):
+        st = self.series_style.get(column, self.plot_style)
+        line = self.series.get(column)
+        if line is not None:
+            if st == "bar":
+                line.set_linestyle("none")
+                line.set_marker("None")
+                self.refresh_bar(column)
+                self._clear_errorbar(column)
+                self._clear_histogram(column)
+            elif st == "errorbar":
+                if line.get_marker() in ("None", "none", "", " "):
+                    line.set_marker("o")
+                self.refresh_errorbar(column)
+                self._clear_bar(column)
+                self._clear_histogram(column)
+            elif st == "histogram":
+                line.set_linestyle("none")
+                line.set_marker("None")
+                self.refresh_histogram(column)
+                self._clear_bar(column)
+                self._clear_errorbar(column)
+            elif st == "line":
+                line.set_marker("None")
+                if line.get_linestyle() in ("none", "None", ""):
+                    line.set_linestyle("-")
+                self._clear_bar(column)
+                self._clear_errorbar(column)
+                self._clear_histogram(column)
+            elif st == "scatter":
+                line.set_linestyle("none")
+                if line.get_marker() in ("None", "none", "", " "):
+                    line.set_marker("o")
+                self._clear_bar(column)
+                self._clear_errorbar(column)
+                self._clear_histogram(column)
+            else:  # line_symbol
+                if line.get_linestyle() in ("none", "None", ""):
+                    line.set_linestyle("-")
+                if line.get_marker() in ("None", "none", "", " "):
+                    line.set_marker("o")
+                self._clear_bar(column)
+                self._clear_errorbar(column)
+                self._clear_histogram(column)
+        self.refresh_fill(column)
 
     # -- filled area under a curve -----------------------------------------
     @staticmethod
@@ -4165,7 +5709,7 @@ class PlotWindow(tk.Toplevel):
         line = self.series.get(old)
         if line is None:
             return
-        # rebuild both dictionaries so that the column order is kept
+        # rebuild dictionaries so that the column order is kept
         self.series = {(new if key == old else key): value
                        for key, value in self.series.items()}
         self.series_axis = {(new if key == old else key): value
@@ -4176,6 +5720,18 @@ class PlotWindow(tk.Toplevel):
                            for key, value in self.fill_state.items()}
         self.fills = {(new if key == old else key): value
                       for key, value in self.fills.items()}
+        if old in self.series_style:
+            self.series_style[new] = self.series_style.pop(old)
+        if old in self.bar_cfg:
+            self.bar_cfg[new] = self.bar_cfg.pop(old)
+        if old in self.error_cfg:
+            self.error_cfg[new] = self.error_cfg.pop(old)
+        if old in self.histogram_cfg:
+            self.histogram_cfg[new] = self.histogram_cfg.pop(old)
+        if old in self.bar_containers:
+            self.bar_containers[new] = self.bar_containers.pop(old)
+        if old in self.errorbar_containers:
+            self.errorbar_containers[new] = self.errorbar_containers.pop(old)
         if line.get_label() == getattr(line, "aplot_series", None):
             line.set_label(str(new))
         line.aplot_series = str(new)
@@ -4190,7 +5746,8 @@ class PlotWindow(tk.Toplevel):
             x, y = self._series_data(self.df, x_col, y_col)
             if len(x) and bool(np.isfinite(y).any()):
                 self._create_line(x, y, y_col, x_col,
-                                  sides.get(str(y_col), "left"))
+                                  sides.get(str(y_col), "left"),
+                                  style=self.plot_style)
         return len(self.lines)
 
     def remove_series(self, column):
@@ -4203,6 +5760,13 @@ class PlotWindow(tk.Toplevel):
         dialog = self._dialogs.pop(id(line), None)
         if dialog is not None and dialog.winfo_exists():
             dialog.destroy()
+        self._clear_bar(column)
+        self._clear_errorbar(column)
+        self._clear_histogram(column)
+        self.series_style.pop(column, None)
+        self.bar_cfg.pop(column, None)
+        self.error_cfg.pop(column, None)
+        self.histogram_cfg.pop(column, None)
         fill = self.fills.pop(column, None)
         if fill is not None:
             fill.remove()
@@ -4244,6 +5808,7 @@ class PlotWindow(tk.Toplevel):
             else:
                 line.set_data(x, y)
                 self.move_series(y_col, side)
+                self.refresh_series_visuals(y_col)
 
         for y_col in [name for name in self.series if name not in columns[1:]]:
             self.remove_series(y_col)
@@ -4261,6 +5826,443 @@ class PlotWindow(tk.Toplevel):
         self.refresh_legend()
         self.draw()
         return True
+
+    # -- the diagram as a matplotlib program -------------------------------
+    @staticmethod
+    def _literal(value):
+        """One value as Python source."""
+        if isinstance(value, (np.floating, float)):
+            value = float(value)
+            return repr(round(value, 6))
+        if isinstance(value, (np.integer, int)) and not isinstance(value, bool):
+            return repr(int(value))
+        if isinstance(value, (list, tuple)):
+            return "[" + ", ".join(PlotWindow._literal(one) for one in value) + "]"
+        if isinstance(value, np.ndarray):
+            return PlotWindow._literal([float(one) for one in value])
+        return repr(value)
+
+    def _script_data(self):
+        """The plotted columns as plain Python lists."""
+        lines = ["DATA = {"]
+        columns = [self.x_col] + list(self.series)
+        for name in columns:
+            if name not in self.df.columns:
+                continue
+            values = pd.to_numeric(self.df[name], errors="coerce").to_numpy(float)
+            numbers = ", ".join("float('nan')" if not np.isfinite(one)
+                                else repr(round(float(one), 10))
+                                for one in values)
+            lines.append(f"    {name!r}: [{numbers}],")
+        lines.append("}")
+        return lines
+
+    def to_script(self):
+        """A stand-alone matplotlib program that draws this very diagram."""
+        lit = self._literal
+        cfg = self.frame_cfg
+        dpi = float(self.fig.get_dpi())
+        out = [
+            '"""Diagram exported from ' + APP_NAME + '.',
+            "",
+            "Run it with:   python3 this_file.py",
+            "It needs numpy and matplotlib and nothing else - the data is",
+            "written into the file, so it runs anywhere.",
+            '"""',
+            "import numpy as np",
+            "import matplotlib.pyplot as plt",
+            "from matplotlib.legend import Legend",
+            "from matplotlib.patches import Ellipse, Polygon, Rectangle",
+            "from matplotlib.ticker import (AutoMinorLocator, MultipleLocator,",
+            "                               NullLocator)",
+            "from matplotlib.transforms import Affine2D",
+            "",
+        ]
+        out += self._script_data()
+        out += [
+            "",
+            f"DPI = {lit(dpi)}",
+            "PT = 72.0 / DPI          # the distances are given in pixels",
+            "",
+            "",
+            "def turned(ax, centre, angle):",
+            '    """The plot area, turned by `angle` degrees around a point."""',
+            "    if not angle:",
+            "        return ax.transAxes",
+            "    px, py = ax.transAxes.transform(centre)",
+            "    return ax.transAxes + Affine2D().rotate_deg_around(",
+            "        float(px), float(py), float(angle))",
+            "",
+            "",
+            "fig = plt.figure(figsize=("
+            f"{lit(float(self.fig.get_figwidth()))}, "
+            f"{lit(float(self.fig.get_figheight()))}), dpi=DPI)",
+        ]
+        figure_bg = cfg.get("figure_background", "#ffffff")
+        out.append("fig.set_facecolor(%s)" % lit("none" if figure_bg == "none"
+                                                 else figure_bg))
+        out += [
+            "ax = fig.add_subplot(111)",
+            "ax.set_position([%s, %s, %s, %s])" % (
+                lit(cfg["left"]), lit(cfg["bottom"]),
+                lit(cfg["x_length"]), lit(cfg["y_length"])),
+            "ax.set_facecolor(%s)" % lit(cfg.get("background", "#ffffff")),
+        ]
+        out += self._script_axes()
+        out += self._script_curves()
+        out += self._script_texts()
+        out += self._script_objects()
+        out += [
+            "",
+            "# fig.savefig(\"diagram.png\", dpi=300, bbox_inches=\"tight\")",
+            "plt.show()",
+            "",
+        ]
+        return "\n".join(out)
+
+    def _script_axes(self):
+        """Frame, ticks, ranges, grid - for every axis that is in use."""
+        lit = self._literal
+        cfg = self.frame_cfg
+        style = cfg.get("style", "none")
+        both = style in ("box_in", "box_out")
+        top = self.x_side == "top"
+        right = self.right_axis_active()
+        left = self.left_axis_shown()
+        used = self.used_sides()
+        out = ["", "# ---------------------------------------------- the frame"]
+        for name in ("left", "right", "top", "bottom"):
+            visible = style != "none" or name in used
+            out.append("ax.spines[%s].set_visible(%s)" % (lit(name), visible))
+            if visible:
+                out.append("ax.spines[%s].set_linewidth(%s)"
+                           % (lit(name), lit(cfg["width"])))
+                out.append("ax.spines[%s].set_color(%s)"
+                           % (lit(name), lit(self.axis_color(
+                               self.spine_owner(name)))))
+        out.append("ax.tick_params(which='both', width=%s, direction=%s)"
+                   % (lit(cfg["width"]),
+                      lit("in" if style == "box_in" else "out")))
+        out.append("ax.tick_params(which='major', length=%s)"
+                   % lit(cfg["major_tick_length"]))
+        out.append("ax.tick_params(which='minor', length=%s)"
+                   % lit(cfg["minor_tick_length"]))
+
+        for which in ("x", "y", "y2"):
+            if which == "y2" and not right:
+                continue
+            axis_cfg = self.axis_cfg[which]
+            name = {"x": "ax", "y": "ax", "y2": "ax2"}[which]
+            if which == "y2":
+                out += ["", "ax2 = ax.twinx()", "ax2.patch.set_visible(False)",
+                        "for spine in ax2.spines.values():",
+                        "    spine.set_visible(False)",
+                        "ax2.tick_params(which='both', width=%s, direction=%s)"
+                        % (lit(cfg["width"]),
+                           lit("in" if style == "box_in" else "out")),
+                        "ax2.tick_params(which='major', length=%s)"
+                        % lit(cfg["major_tick_length"]),
+                        "ax2.tick_params(which='minor', length=%s)"
+                        % lit(cfg["minor_tick_length"])]
+            out.append("")
+            out.append(f"# ---------------------------------- the "
+                       f"{AXIS_NAMES.get(which, which)}")
+            setter = {"x": "set_xlabel", "y": "set_ylabel",
+                      "y2": "set_ylabel"}[which]
+            out.append("%s.%s(%s, fontsize=%s, color=%s, labelpad=%s * PT)"
+                       % (name, setter, lit(self.axis_label(which)),
+                          lit(axis_cfg["label_size"]),
+                          lit(axis_cfg["label_color"]),
+                          lit(axis_cfg["label_pad"])))
+            if not axis_cfg.get("label_on", True):
+                out.append("%s.%saxis.label.set_visible(False)"
+                           % (name, "x" if which == "x" else "y"))
+            axis_name = "x" if which == "x" else "y"
+            ticks_on = bool(axis_cfg.get("ticks_on", True))
+            out.append("%s.tick_params(axis=%s, which='both', labelsize=%s, "
+                       "labelcolor=%s, pad=%s * PT, color=%s)"
+                       % (name, lit(axis_name), lit(axis_cfg["tick_size"]),
+                          lit(axis_cfg["tick_color"]), lit(axis_cfg["tick_pad"]),
+                          lit(self.axis_color(which))))
+            if which == "x":
+                out.append("ax.xaxis.set_ticks_position(%s)"
+                           % lit("top" if top else "bottom"))
+                out.append("ax.xaxis.set_label_position(%s)"
+                           % lit("top" if top else "bottom"))
+                out.append("ax.tick_params(axis='x', which='both', top=%s, "
+                           "bottom=%s, labeltop=%s, labelbottom=%s)"
+                           % ((both or top) and ticks_on,
+                              (both or not top) and ticks_on,
+                              top and ticks_on, (not top) and ticks_on))
+            elif which == "y":
+                out.append("ax.yaxis.set_visible(%s)" % left)
+                out.append("ax.tick_params(axis='y', which='both', left=%s, "
+                           "right=%s, labelleft=%s, labelright=False)"
+                           % ((left or both) and ticks_on,
+                              (both and not right) and ticks_on,
+                              left and ticks_on))
+            else:
+                out.append("ax2.yaxis.set_ticks_position('right')")
+                out.append("ax2.yaxis.set_label_position('right')")
+                out.append("ax2.tick_params(axis='y', which='both', left=False, "
+                           "right=%s, labelleft=False, labelright=%s)"
+                           % (ticks_on, ticks_on))
+            low, high = self.current_limits(which)
+            out.append("%s.set_%slim(%s, %s)"
+                       % (name, axis_name, lit(float(low)), lit(float(high))))
+            step = axis_cfg.get("step")
+            if not axis_cfg.get("auto", True) and step:
+                out.append("%s.%saxis.set_major_locator(MultipleLocator(%s))"
+                           % (name, axis_name, lit(float(step))))
+            minor = int(axis_cfg.get("minor", 0) or 0)
+            out.append("%s.%saxis.set_minor_locator(%s)"
+                       % (name, axis_name,
+                          f"AutoMinorLocator({minor + 1})" if minor
+                          else "NullLocator()"))
+            grid = axis_cfg["grid"]
+            owner = (which == "x") or (which == ("y" if left else "y2"))
+            for kind, on, factor in (("major", grid["major"], 1.0),
+                                     ("minor", grid["minor"] and minor, 0.6)):
+                if owner and on:
+                    out.append("%s.grid(True, which=%s, axis=%s, color=%s, "
+                               "linestyle=%s, linewidth=%s)"
+                               % (name, lit(kind), lit(axis_name),
+                                  lit(grid["color"]), lit(grid["style"]),
+                                  lit(max(0.3, grid["width"] * factor))))
+                else:
+                    out.append("%s.grid(False, which=%s, axis=%s)"
+                               % (name, lit(kind), lit(axis_name)))
+        return out
+
+    def _script_curves(self):
+        """The curves, their filled areas and their legend boxes."""
+        lit = self._literal
+        out = ["", "# ---------------------------------------------- the curves",
+               "curves = {}"]
+        for column, line in self.series.items():
+            target = "ax2" if self.series_side(column) == "right" else "ax"
+            st = self.series_style.get(column, self.plot_style)
+            if st == "bar":
+                b_cfg = self.bar_cfg.get(column, {})
+                bw = float(b_cfg.get("width", 0.8))
+                ba = float(b_cfg.get("alpha", 0.85))
+                bc = store_color(b_cfg.get("color", line.get_color()))
+                bec = store_color(b_cfg.get("edgecolor", line.get_color()))
+                bew = float(b_cfg.get("edgewidth", 1.0))
+                out.append(
+                    f"bars_{column} = {target}.bar(DATA[{lit(str(self.x_col))}], DATA[{lit(str(column))}], "
+                    f"width={bw}, color={lit(bc)}, edgecolor={lit(bec)}, linewidth={bew}, "
+                    f"alpha={ba}, label={lit(str(line.get_label()))})"
+                )
+            elif st == "errorbar":
+                e_cfg = self.error_cfg.get(column, {})
+                err_type = e_cfg.get("type", "percent")
+                err_val = float(e_cfg.get("value", 5.0))
+                capsize = float(e_cfg.get("capsize", 4.0))
+                capthick = float(e_cfg.get("capthick", 1.5))
+                elinewidth = float(e_cfg.get("elinewidth", 1.5))
+                ec = store_color(e_cfg.get("color", line.get_color()))
+                if err_type == "percent":
+                    out.append(f"yerr_{column} = np.abs(np.asarray(DATA[{lit(str(column))}], float) * {err_val / 100.0})")
+                elif err_type == "fixed":
+                    out.append(f"yerr_{column} = np.full_like(DATA[{lit(str(column))}], {err_val}, dtype=float)")
+                elif err_type == "std":
+                    out.append(f"yerr_{column} = np.full_like(DATA[{lit(str(column))}], np.nanstd(DATA[{lit(str(column))}]), dtype=float)")
+                elif err_type == "column" and e_cfg.get("column") in self.df.columns:
+                    out.append(f"yerr_{column} = DATA[{lit(str(e_cfg['column']))}]")
+                else:
+                    out.append(f"yerr_{column} = np.abs(np.asarray(DATA[{lit(str(column))}], float) * 0.05)")
+                out.append(
+                    f"curves[{lit(str(column))}], _caps, _bars = {target}.errorbar("
+                    f"DATA[{lit(str(self.x_col))}], DATA[{lit(str(column))}], yerr=yerr_{column}, "
+                    f"color={lit(ec)}, fmt={lit(str(line.get_marker()))}, "
+                    f"markersize={float(line.get_markersize())}, capsize={capsize}, capthick={capthick}, "
+                    f"elinewidth={elinewidth}, label={lit(str(line.get_label()))})"
+                )
+            elif st == "histogram":
+                h_cfg = self.histogram_cfg.get(column, {})
+                h_bins = int(h_cfg.get("bins", 10))
+                h_alpha = float(h_cfg.get("alpha", 0.85))
+                h_color = store_color(h_cfg.get("color", line.get_color()))
+                out.append(
+                    f"y_clean = [v for v in DATA[{lit(str(column))}]]\n"
+                    f"y_clean = [v for v in y_clean if np.isfinite(v)]\n"
+                    f"{target}.hist(y_clean, bins={h_bins}, color={lit(h_color)}, "
+                    f"edgecolor='white', alpha={h_alpha}, label={lit(str(line.get_label()))})"
+                )
+            else:
+                out.append(
+                    "curves[%s], = %s.plot(DATA[%s], DATA[%s], linestyle=%s, "
+                    "linewidth=%s, color=%s, marker=%s, markersize=%s,"
+                    % (lit(str(column)), target, lit(str(self.x_col)),
+                       lit(str(column)), lit(str(line.get_linestyle())),
+                       lit(float(line.get_linewidth())),
+                       lit(store_color(line.get_color())),
+                       lit(str(line.get_marker())),
+                       lit(float(line.get_markersize()))))
+                out.append(
+                    "    markerfacecolor=%s, markeredgecolor=%s, "
+                    "markeredgewidth=%s, label=%s)"
+                    % (lit(store_color(line.get_markerfacecolor())),
+                       lit(store_color(line.get_markeredgecolor())),
+                       lit(float(line.get_markeredgewidth())),
+                       lit(str(line.get_label()))))
+            if not line.get_visible():
+                out.append("curves[%s].set_visible(False)" % lit(str(column)))
+            fill = self.fill_state.get(column) or {}
+            if fill.get("on"):
+                color = (store_color(line.get_color()) if fill.get("follow")
+                         else fill.get("color", "#1f77b4"))
+                base = ("0.0" if fill.get("base", "zero") == "zero"
+                        else f"{target}.get_ylim()[0]")
+                out.append(
+                    "%s.fill_between(DATA[%s], DATA[%s], %s, facecolor=%s, "
+                    "alpha=%s, hatch=%s, edgecolor=%s, linewidth=0.0, "
+                    "label='_nolegend_', zorder=%s)"
+                    % (target, lit(str(self.x_col)), lit(str(column)), base,
+                       lit(color), lit(float(fill.get("alpha", 0.35))),
+                       lit(fill.get("hatch") or None),
+                       lit(color if fill.get("hatch") else "none"),
+                       lit(float(line.get_zorder()) - 0.5)))
+        if self.legend_visible and self.legends:
+            out.append("")
+            out.append("# every curve has a legend box of its own")
+            for column in self.legends:
+                state = self.legend_state.get(column) or {}
+                line = self.series.get(column)
+                if line is None:
+                    continue
+                edge = state.get("edge", "none")
+                face = state.get("face", "none")
+                out.append(
+                    "legend = Legend(ax, [curves[%s]], [%s], loc=%s, "
+                    "bbox_to_anchor=%s, bbox_transform=ax.transAxes, "
+                    "prop={'size': %s}, framealpha=1.0)"
+                    % (lit(str(column)), lit(str(line.get_label())),
+                       lit(state.get("loc", "upper right")),
+                       lit([float(one) for one in state.get("pos", (0.5, 0.5))]),
+                       lit(int(state.get("size", 10)))))
+                out.append("for text in legend.get_texts():")
+                out.append("    text.set_color(%s)"
+                           % lit(state.get("color", "#000000")))
+                out.append("legend.get_frame().set_edgecolor(%s)" % lit(edge))
+                out.append("legend.get_frame().set_linewidth(%s)"
+                           % lit(0.0 if edge == "none" else 0.8))
+                out.append("legend.get_frame().set_facecolor(%s)" % lit(face))
+                out.append("ax.add_artist(legend)")
+        return out
+
+    def _script_texts(self):
+        """The title and the dragged places of the three axis texts."""
+        lit = self._literal
+        out = ["", "# ----------------------------------- the title and the texts",
+               "ax.set_title(%s, fontsize=%s, color=%s, pad=%s * PT)"
+               % (lit(self.ax.get_title()),
+                  lit(float(self.ax.title.get_fontsize())),
+                  lit(store_color(self.ax.title.get_color())),
+                  lit(float(self.fonts["title_pad"])))]
+        artists = {"title": "ax.title", "x": "ax.xaxis.label",
+                   "y": "ax.yaxis.label", "y2": "ax2.yaxis.label"}
+        for name, artist in artists.items():
+            if name == "y2" and self.ax2 is None:
+                continue
+            dx, dy = self.text_offset.get(name, (0.0, 0.0))
+            if not dx and not dy:
+                continue
+            if name == "title":
+                out.append("ax._autotitlepos = False")
+            out.append("%s.set_transform(%s.get_transform() + "
+                       "Affine2D().translate(%s, %s))"
+                       % (artist, artist, lit(float(dx)), lit(float(dy))))
+        return out
+
+    def _script_objects(self):
+        """The text boxes, the drawings and the arrows, as they are drawn."""
+        lit = self._literal
+        out = []
+        if self.note_state:
+            out += ["", "# ------------------------------------- the text boxes"]
+        for state in self.note_state.values():
+            edge, face = state.get("edge", "none"), state.get("face", "none")
+            out.append(
+                "ax.text(%s, %s, %s, transform=ax.transAxes, fontsize=%s, "
+                "color=%s, ha='left', va='center', rotation=%s,"
+                % (lit(float(state["pos"][0])), lit(float(state["pos"][1])),
+                   lit(str(state["text"])), lit(int(state["size"])),
+                   lit(state["color"]), lit(float(state.get("angle", 0.0) or 0.0))))
+            out.append(
+                "        rotation_mode='anchor', clip_on=False, zorder=6,")
+            out.append(
+                "        bbox={'boxstyle': 'round,pad=0.35', 'facecolor': %s, "
+                "'edgecolor': %s, 'linewidth': %s})"
+                % (lit(face), lit(edge), lit(0.0 if edge == "none" else 0.8)))
+
+        if self.shape_state:
+            out += ["", "# --------------------------------------- the drawings"]
+        for key, state in self.shape_state.items():
+            kind = state["kind"]
+            x, y = float(state["x"]), float(state["y"])
+            w, h = float(state["w"]), float(state["h"])
+            angle = self.angle_of(state)
+            centre = self.shape_centre(state)
+            face = state.get("face", "none")
+            common = ("transform=turned(ax, (%s, %s), %s), clip_on=False, "
+                      "zorder=5, edgecolor=%s, linestyle=%s, linewidth=%s, "
+                      "facecolor=%s"
+                      % (lit(centre[0]), lit(centre[1]), lit(angle),
+                         lit(state["edge"]), lit(state["style"]),
+                         lit(float(state["width"])),
+                         lit("none" if face == "none"
+                             else to_hex(to_rgba(face, state.get("alpha", 0.6)),
+                                         keep_alpha=True))))
+            if kind == "line":
+                ends = ([[x, y + h], [x + w, y]] if state.get("flip")
+                        else [[x, y], [x + w, y + h]])
+                out.append("ax.add_patch(Polygon(%s, closed=False, fill=False, %s))"
+                           % (lit(ends), common))
+            elif kind == "triangle":
+                points = [[x + w / 2, y + h], [x, y], [x + w, y]]
+                out.append("ax.add_patch(Polygon(%s, closed=True, %s))"
+                           % (lit(points), common))
+            elif kind in ("circle", "ellipse"):
+                out.append("ax.add_patch(Ellipse((%s, %s), %s, %s, %s))"
+                           % (lit(x + w / 2), lit(y + h / 2), lit(w), lit(h),
+                              common))
+            else:
+                out.append("ax.add_patch(Rectangle((%s, %s), %s, %s, %s))"
+                           % (lit(x), lit(y), lit(w), lit(h), common))
+
+        if self.arrow_state:
+            out += ["", "# ----------------------------------------- the arrows"]
+        for key, state in self.arrow_state.items():
+            points, shaft_end = self._head_polygon(state)
+            out.append(
+                "ax.plot([%s, %s], [%s, %s], transform=ax.transAxes, color=%s, "
+                "linestyle=%s, linewidth=%s, solid_capstyle='butt', "
+                "clip_on=False, zorder=5, label='_nolegend_')"
+                % (lit(float(state["tail"][0])), lit(float(shaft_end[0])),
+                   lit(float(state["tail"][1])), lit(float(shaft_end[1])),
+                   lit(state["color"]), lit(state["style"]),
+                   lit(float(state["width"]))))
+            if points is None:
+                continue
+            corners = [[float(one[0]), float(one[1])] for one in points]
+            if state["head"] == "chevron":
+                out.append(
+                    "ax.plot(%s, %s, transform=ax.transAxes, color=%s, "
+                    "linestyle='-', linewidth=%s, solid_joinstyle='miter', "
+                    "clip_on=False, zorder=5, label='_nolegend_')"
+                    % (lit([one[0] for one in corners]),
+                       lit([one[1] for one in corners]),
+                       lit(state["color"]), lit(float(state["width"]))))
+            else:
+                out.append(
+                    "ax.add_patch(Polygon(%s, closed=True, "
+                    "transform=ax.transAxes, facecolor=%s, edgecolor=%s, "
+                    "linewidth=%s, clip_on=False, zorder=5))"
+                    % (lit(corners), lit(state["color"]), lit(state["color"]),
+                       lit(max(0.2, float(state["width"]) * 0.5))))
+        return out
 
     # -- saving / restoring the whole diagram ------------------------------
     def to_state(self):
@@ -4289,6 +6291,10 @@ class PlotWindow(tk.Toplevel):
             series.append({
                 "column": str(y_col), "label": line.get_label(),
                 "axis": self.series_side(y_col),
+                "plot_style": self.series_style.get(y_col, self.plot_style),
+                "bar_cfg": dict(self.bar_cfg.get(y_col, {})),
+                "error_cfg": dict(self.error_cfg.get(y_col, {})),
+                "histogram_cfg": dict(self.histogram_cfg.get(y_col, {})),
                 "legend_pos": [float(state["pos"][0]), float(state["pos"][1])],
                 "legend_loc": state["loc"], "legend_size": int(state["size"]),
                 "legend_color": safe_hex(state.get("color", "#000000"), "#000000"),
@@ -4309,6 +6315,7 @@ class PlotWindow(tk.Toplevel):
             })
         return {
             "geometry": self.geometry(),
+            "plot_style": self.plot_style,
             "figure": {"width": float(self.fig.get_figwidth()),
                        "height": float(self.fig.get_figheight()),
                        "dpi": float(self.fig.get_dpi())},
@@ -4323,7 +6330,7 @@ class PlotWindow(tk.Toplevel):
                              for name, value in self.text_offset.items()},
             "shapes": [{key_: (float(value) if key_ in ("x", "y", "w", "h", "angle",
                                                         "width", "alpha")
-                               else value)
+                                else value)
                         for key_, value in state.items()}
                        for state in self.shape_state.values()],
             "arrows": [{"head": state["head"],
@@ -4350,6 +6357,9 @@ class PlotWindow(tk.Toplevel):
             self.fig.set_size_inches(figure.get("width", self.fig.get_figwidth()),
                                      figure.get("height", self.fig.get_figheight()))
             self.fig.set_dpi(figure.get("dpi", self.fig.get_dpi()))
+
+        if "plot_style" in state:
+            self.plot_style = state["plot_style"]
 
         legend = state.get("legend") or {}
         self.legend_visible = bool(legend.get("visible", self.legend_visible))
@@ -4391,6 +6401,14 @@ class PlotWindow(tk.Toplevel):
             if fill:
                 self.fill_state[column] = {
                     **self.default_fill_state(self.settings.section("plot")), **fill}
+            if "plot_style" in entry:
+                self.series_style[column] = entry["plot_style"]
+            if "bar_cfg" in entry:
+                self.bar_cfg[column] = dict(entry["bar_cfg"])
+            if "error_cfg" in entry:
+                self.error_cfg[column] = dict(entry["error_cfg"])
+            if "histogram_cfg" in entry:
+                self.histogram_cfg[column] = dict(entry["histogram_cfg"])
             line.set_label(entry.get("label", line.get_label()))
             line.set_color(entry.get("color", line.get_color()))
             line.set_linestyle(entry.get("linestyle", line.get_linestyle()))
@@ -4404,6 +6422,7 @@ class PlotWindow(tk.Toplevel):
             line.set_markeredgewidth(entry.get("markeredgewidth",
                                                line.get_markeredgewidth()))
             line.set_visible(entry.get("visible", True))
+            self.refresh_series_visuals(column)
 
         # a file written before the axis colours existed carried one colour
         # for the whole frame: give it to all three axes, so it looks the same
@@ -5533,6 +7552,64 @@ class PlotWindow(tk.Toplevel):
         self.flash(f"{OBJECT_NAMES.get(kind, kind)} selected - "
                    "click it again for its properties")
 
+    def close_window(self, *_args):
+        """The window button: an edited graph is not thrown away silently."""
+        app = self.app
+        if app is not None and hasattr(app, "plot_closing"):
+            if not app.plot_closing(self):
+                return False
+        self.destroy()
+        if app is not None and hasattr(app, "plot_closed"):
+            app.plot_closed(self)
+        return True
+
+    def figure_image(self, path=None, dpi=None, transparent=None):
+        """Write a picture of the diagram, without the selection marks."""
+        if path is None:
+            path = os.path.join(tempfile.gettempdir(),
+                                f"aplot_figure_{os.getpid()}.png")
+        selection = self.selection
+        self.select_object(None, None)
+        try:
+            self.canvas.draw()
+            if transparent is None:
+                transparent = self.frame_cfg.get("figure_background") == "none"
+            self.fig.savefig(path, dpi=dpi or self.fig.get_dpi(),
+                             bbox_inches="tight", transparent=bool(transparent),
+                             facecolor=self.fig.get_facecolor())
+        finally:
+            if selection is not None:
+                self.select_object(*selection)
+            self.canvas.draw_idle()
+        return path
+
+    def copy_figure_to_clipboard(self, *_args):
+        """Cmd/Ctrl+C with nothing selected: the whole diagram as a picture."""
+        try:
+            path = self.figure_image(dpi=CLIPBOARD_DPI)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Error", f"Could not draw the picture: {error}",
+                                 parent=self)
+            return False
+        if copy_png_to_clipboard(path):
+            self.flash("The diagram is on the clipboard as a picture")
+            return True
+        messagebox.showinfo(
+            "Clipboard",
+            "This system has no tool to put a picture on the clipboard.\n"
+            f"The picture was written to:\n{path}", parent=self)
+        return False
+
+    def copy_shortcut(self, *_args):
+        """Cmd/Ctrl+C: the selected object, or the whole diagram as a picture."""
+        if self.selection is not None:
+            return self.copy_selection()
+        return self.copy_figure_to_clipboard()
+
+    def export_figure(self, *_args):
+        """Save the diagram as an image file, without the selection marks."""
+        return self.save_figure_clean()
+
     def save_figure_clean(self, *_args):
         """The saved image must not contain the selection marks."""
         selection = self.selection
@@ -5583,6 +7660,9 @@ class PlotWindow(tk.Toplevel):
                 markerfacecolor="#ffffff", markeredgecolor="#1a5fb4",
                 markeredgewidth=1.2, transform=self.ax.transAxes,
                 clip_on=False, zorder=8, label="_nolegend_")
+            # a control point is a tool, not a part of the picture: it must
+            # not make a saved image any bigger
+            self._handles.set_in_layout(False)
         if self._handles is not None:
             if points is None:
                 self._handles.set_data([], [])
@@ -5603,6 +7683,7 @@ class PlotWindow(tk.Toplevel):
                 markeredgecolor="#1a5fb4", markeredgewidth=1.2,
                 markevery=[1], transform=self.ax.transAxes,
                 clip_on=False, zorder=8, label="_nolegend_")
+            self._rotator.set_in_layout(False)
         if point is None:
             self._rotator.set_data([], [])
             return
@@ -6479,9 +8560,14 @@ class PlotWindow(tk.Toplevel):
 
         if artist in self.ax.spines.values() or self.frame_hit(mouse.x, mouse.y):
             return          # the frame is opened by a double click
-        # a curve is never "selected": one click opens its properties
+        # a curve or bar or errorbar is never "selected": one click opens its properties
+        series_name = getattr(artist, "aplot_series", None)
+        if series_name is not None and series_name in self.series:
+            self.open_series_dialog(self.series[series_name])
+            return
         if isinstance(artist, Line2D) and artist in self.lines:
             self.open_series_dialog(artist)
+            return
 
     def object_at(self, x, y):
         """(kind, key) of the object under the pointer, the topmost first."""
@@ -6812,15 +8898,38 @@ class PlotWindow(tk.Toplevel):
                 self.fill_state[column] = values
                 self.refresh_fill(column)
 
+        def set_plot_style(st):
+            if column is not None:
+                self.series_style[column] = st
+                self.refresh_series_visuals(column)
+
+        def set_bar_cfg(cfg):
+            if column is not None:
+                self.bar_cfg[column] = cfg
+                self.refresh_series_visuals(column)
+
+        def set_error_cfg(cfg):
+            if column is not None:
+                self.error_cfg[column] = cfg
+                self.refresh_series_visuals(column)
+
+        cols = list(self.df.columns)
         return self._show_dialog(id(line), lambda: SeriesStyleDialog(
             self, line,
-            on_change=lambda: (self.refresh_legend(), self.draw()),
+            on_change=lambda: (self.refresh_series_visuals(column), self.refresh_legend(), self.draw()),
             on_close=lambda _d: self._dialogs.pop(id(line), None),
             legend_size=state.get("size", self.fonts["legend"]),
             legend_color=state.get("color", self.fonts["legend_color"]),
             on_legend_style=set_legend_style,
             fill=self.fill_state.get(column),
-            on_fill=set_fill))
+            on_fill=set_fill,
+            plot_style=self.series_style.get(column, self.plot_style),
+            on_plot_style=set_plot_style,
+            bar_cfg=self.bar_cfg.get(column),
+            on_bar_cfg=set_bar_cfg,
+            error_cfg=self.error_cfg.get(column),
+            on_error_cfg=set_error_cfg,
+            available_columns=cols))
 
     def open_axes_dialog(self, which="x"):
         existing = self._dialogs.get("axes")
@@ -6953,7 +9062,11 @@ every column**, side by side:
 
 Resting the pointer on any of them pops up its full name - `Bottom x-axis`,
 `Top x-axis`, `Left y-axis`, `Right y-axis` - so the short labels never have
-to be guessed.
+to be guessed.  A column is never made **narrower than its two check
+buttons**: pulling the window in stops there and the horizontal scroll bar
+takes over, so neither the switches nor the numbers under them can be
+squeezed out of sight.  `Settings > Table > Column width` sets the starting
+width; anything smaller than that minimum is raised to it.
 
 The rules are simple:
 
@@ -7346,7 +9459,7 @@ worked on from the keyboard:
 
 | Keys | What happens |
 | --- | --- |
-| `Ctrl+C` / `Cmd+C` | The selected object goes to the clipboard with every one of its properties. |
+| `Ctrl+C` / `Cmd+C` | The selected object goes to the clipboard with every one of its properties - and with **nothing** selected, a picture of the whole diagram. |
 | `Ctrl+V` / `Cmd+V` | Another copy appears a little to the lower right of the original and is selected; each further paste steps further, so a series of copies does not pile up. |
 | Left / Right / Up / Down | Moves the selected object by one pixel. |
 | `Shift` + an arrow key | Moves it by ten pixels. |
@@ -7696,12 +9809,56 @@ come from the `Fonts` tab of the settings.
 
 ## 3. Files
 
-| Menu item | Format |
-| --- | --- |
-| Open data file (CSV, TXT, DAT) | Reads a text data file into the table; the separator is recognised automatically. |
-| Save data file | Writes the table into a text data file. |
-| Open graph (.aplt) | Loads a complete APlot document: the data and the diagrams. |
-| Save graph (.aplt) | Saves the data together with every diagram that is open. |
+| Menu item | Key | What it does |
+| --- | --- | --- |
+| Open data file (CSV, TXT, DAT) | `Cmd/Ctrl+Alt+O` | Reads a text data file into the table; the separator is recognised automatically. |
+| Save data file | `Cmd/Ctrl+Alt+S` | Writes the table into a text data file (`.csv`, `.txt`, `.dat`). |
+| Open graph (.aplt) | `Cmd/Ctrl+O` | Loads a complete APlot document: the data and the diagrams. |
+| Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open. |
+| Save graph as... | | The same, always asking for a new name. |
+| Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
+| Export as matplotlib script... | `Cmd/Ctrl+Alt+E` | Writes the diagram as a Python program. |
+| Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
+
+**Saving with one key.**  `Cmd/Ctrl+S` asks for a name only the **first**
+time.  From then on the graph belongs to that file: every further
+`Cmd/Ctrl+S` simply brings it up to date, with no dialog and no message,
+and the name of the file is shown in the title bar of the table window.
+`Save graph as...` asks for a new name whenever it is needed.
+
+**Nothing is lost by accident.**  The program knows whether anything has
+been changed since the last save (moving or resizing a window does not
+count).  If it has, then closing the diagram, opening another graph or
+leaving the program asks first:
+
+> This graph has been edited and not saved.  Save it now?
+
+`Yes` saves it (asking for a name if the graph is new), `No` throws the
+changes away, `Cancel` leaves everything as it is.  With several diagrams
+open, closing one of them does not ask - only the **last** one carries the
+whole graph.
+
+### Exporting the diagram
+
+* **Export figure (image)...** (`Cmd/Ctrl+E`) is the same as the save
+  button of the toolbar: a picture in any format matplotlib can write, and
+  the control points of a selected object are never on it.
+* **Copy figure to the clipboard** (`Cmd/Ctrl+C` in the diagram window,
+  with nothing selected) puts a 200 dpi picture on the clipboard, ready to
+  be pasted into a text editor, a presentation or an e-mail.  With an
+  object **selected**, the same key copies that object instead, as before -
+  so both uses of `Cmd/Ctrl+C` live side by side.  If the system has no
+  tool for pictures on the clipboard, the program says where it wrote the
+  file instead.
+* **Export as matplotlib script...** (`Cmd/Ctrl+Alt+E`) writes a
+  **stand-alone Python program** that draws the very same diagram.  It
+  needs nothing but numpy and matplotlib: the data is written into the file
+  as plain lists, and so is everything else - the two or three axes with
+  their ranges, ticks, colours and grids, the frame, every curve with its
+  style and its filled area, the legend boxes at their places, the title
+  with its dragged position, the text boxes, the drawings and the arrows.
+  Run it with `python3 diagram.py`, change a number, and it is a diagram of
+  your own; the last line is a commented-out `savefig` for a batch run.
 
 An `.aplt` file is a readable JSON document.  Besides the table it stores,
 for each open diagram:
@@ -7881,6 +10038,11 @@ class App:
         self.root.wm_iconname(APP_NAME)
         self.plot_windows: list[PlotWindow] = []
         self._help_window = None
+        # the .aplt file this graph belongs to, and how it looked when it was
+        # last written: everything else is "edited but not saved"
+        self.project_path = None
+        self._saved_signature = None
+        self._just_saved = False        # the last question ended in a save
 
         self._build_toolbar()
         self.table = DataTable(self.root, self.settings,
@@ -7889,6 +10051,8 @@ class App:
         self.table.set_dataframe(self._empty_frame(), check_all=True)
 
         self._build_menu()
+        self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
+        self._saved_signature = self.project_signature()
         self.root.after_idle(self._focus)
 
     # -- helpers -----------------------------------------------------------
@@ -7913,7 +10077,13 @@ class App:
     def _build_toolbar(self):
         bar = ttk.Frame(self.root, padding=(10, 8))
         bar.pack(fill="x")
-        ttk.Button(bar, text="Plot", command=self.open_plot).pack(side="left")
+        self.current_plot_style = "line_symbol"
+        self.plot_split_btn = PlotSplitButton(
+            bar, style=self.current_plot_style,
+            on_plot=lambda: self.open_plot(self.current_plot_style),
+            on_menu=self._show_plot_style_menu
+        )
+        self.plot_split_btn.pack(side="left")
         ttk.Button(bar, text="Update plot", command=self.update_plot).pack(
             side="left", padx=(6, 0))
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
@@ -7922,6 +10092,25 @@ class App:
         ttk.Button(bar, text="Add column", command=self.add_column).pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="Delete column", command=self.delete_column).pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="Settings...", command=self.open_settings).pack(side="right")
+
+    def _show_plot_style_menu(self, _event=None):
+        menu = tk.Menu(self.root, tearoff=0)
+        for label, code, _desc in PLOT_STYLES:
+            def _choose(style=code):
+                self.set_plot_style(style)
+                self.open_plot(style)
+            menu.add_command(label=label, command=_choose)
+        try:
+            x = self.plot_split_btn.winfo_rootx()
+            y = self.plot_split_btn.winfo_rooty() + self.plot_split_btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def set_plot_style(self, style):
+        self.current_plot_style = style
+        if hasattr(self, "plot_split_btn"):
+            self.plot_split_btn.set_style(style)
 
     def _build_menu(self):
         self.build_menubar(self.root)
@@ -7954,19 +10143,36 @@ class App:
             app_menu.add_command(label="Quit", command=self.root.quit)
             menubar.add_cascade(label=APP_NAME, menu=app_menu)
 
+        alt = "Opt" if sys.platform == "darwin" else "Alt"
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Open data file (CSV, TXT, DAT)",
+                              accelerator=f"{ACCEL_NAME}+{alt}+O",
                               command=self.load_csv)
-        file_menu.add_command(label="Save data file", command=self.save_csv)
+        file_menu.add_command(label="Save data file",
+                              accelerator=f"{ACCEL_NAME}+{alt}+S",
+                              command=self.save_csv)
         file_menu.add_separator()
         file_menu.add_command(label=f"Open graph ({PROJECT_SUFFIX})",
-                              command=self.load_project)
+                              accelerator=f"{ACCEL_NAME}+O",
+                              command=self.open_graph)
         file_menu.add_command(label=f"Save graph ({PROJECT_SUFFIX})",
-                              command=self.save_project)
+                              accelerator=f"{ACCEL_NAME}+S",
+                              command=self.save_graph)
+        file_menu.add_command(label="Save graph as...",
+                              command=self.save_graph_as)
+        file_menu.add_separator()
+        file_menu.add_command(label="Export figure (image)...",
+                              accelerator=f"{ACCEL_NAME}+E",
+                              command=lambda: self.export_figure(plot))
+        file_menu.add_command(label="Export as matplotlib script...",
+                              accelerator=f"{ACCEL_NAME}+{alt}+E",
+                              command=lambda: self.export_script(plot))
+        file_menu.add_command(label="Copy figure to the clipboard",
+                              command=lambda: self.copy_figure(plot))
         file_menu.add_separator()
         file_menu.add_command(label="Random data", command=self.random_csv)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
+        file_menu.add_command(label="Exit", command=self.quit_app)
         menubar.add_cascade(label="File", menu=file_menu)
 
         plot_menu = tk.Menu(menubar, tearoff=0)
@@ -7982,22 +10188,24 @@ class App:
             plot_menu.add_command(label="Title and fonts...",
                                   command=plot.open_title_dialog)
             plot_menu.add_separator()
-            plot_menu.add_command(label="Copy object",
+            plot_menu.add_command(label="Copy object (or the whole figure)",
                                   accelerator=f"{ACCEL_NAME}+C",
-                                  command=plot.copy_selection)
+                                  command=plot.copy_shortcut)
             plot_menu.add_command(label="Paste object",
                                   accelerator=f"{ACCEL_NAME}+V",
                                   command=plot.paste_clipboard)
             plot_menu.add_command(label="Delete object", accelerator="Del",
                                   command=plot.delete_selection)
             plot_menu.add_separator()
-            plot_menu.add_command(label="Close this diagram", command=plot.destroy)
+            plot_menu.add_command(label="Close this diagram",
+                                  command=plot.close_window)
         menubar.add_cascade(label="Plot", menu=plot_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0, name="help")
         help_menu.add_command(label="Documentation", command=self.show_documentation)
         help_menu.add_command(label=f"About {APP_NAME}", command=self.show_about)
         menubar.add_cascade(label="Help", menu=help_menu)
+        self.bind_shortcuts(window, plot)
 
         window.configure(menu=menubar)
         return menubar
@@ -8101,18 +10309,205 @@ class App:
             messagebox.showerror("Error", f"Could not save the file: {error}")
 
     # -- APlot documents (.aplt) -------------------------------------------
+    def project_signature(self):
+        """A fingerprint of the whole graph, the window places left out."""
+        try:
+            document = self.project_document()
+        except Exception:
+            return None
+        for state in document.get("plots") or []:
+            # moving or resizing a window is not an edit of the graph
+            state.pop("geometry", None)
+            state.pop("figure", None)
+        try:
+            return json.dumps(document, sort_keys=True, default=json_default)
+        except (TypeError, ValueError):
+            return None
+
+    def is_modified(self):
+        """True while something was changed since the last save or load."""
+        signature = self.project_signature()
+        return signature is not None and signature != self._saved_signature
+
+    def _remember_saved(self, path=None):
+        if path is not None:
+            self.project_path = str(path)
+        self._saved_signature = self.project_signature()
+        self._show_project_title()
+
+    def _show_project_title(self):
+        """The name of the graph file in the title bar of the main window."""
+        if not self.project_path:
+            return
+        name = Path(self.project_path).name
+        try:
+            self.root.title(f"{APP_NAME} - {name}")
+        except tk.TclError:
+            pass
+
+    # -- opening and saving with the keyboard ------------------------------
+    def open_graph(self, *_args):
+        """Cmd/Ctrl+O: open a graph saved before."""
+        if not self._may_discard("Open another graph"):
+            return False
+        return self.load_project()
+
+    def save_graph(self, *_args):
+        """Cmd/Ctrl+S: save the graph, asking for a name only the first time."""
+        if self.project_path:
+            return self.save_project(self.project_path, quiet=True)
+        return self.save_graph_as()
+
+    def save_graph_as(self, *_args):
+        """Always ask where the graph should be written."""
+        return self.save_project()
+
+    def _may_discard(self, what="Close"):
+        """Ask about unsaved work; False means "do not go on"."""
+        self._just_saved = False
+        if not self.is_modified():
+            return True
+        answer = messagebox.askyesnocancel(
+            what,
+            "This graph has been edited and not saved.\n\n"
+            "Save it now?", parent=self.root)
+        if answer is None:              # Cancel: stay where we are
+            return False
+        if answer:                      # Save (asks for a name if it is new)
+            self._just_saved = bool(self.save_graph())
+            return self._just_saved
+        return True                     # close it without saving
+
+    def quit_app(self, *_args):
+        """Leaving the program: never lose an edited graph by accident."""
+        if not self._may_discard("Quit"):
+            return False
+        self.root.destroy()
+        return True
+
+    def plot_closing(self, window):
+        """A diagram window is being closed: the last one takes the graph."""
+        others = [one for one in self.open_windows() if one is not window]
+        if others:
+            return True
+        return bool(self._may_discard("Close the diagram"))
+
+    def plot_closed(self, window):
+        """The diagram is gone; a graph just saved stays "saved"."""
+        self.plot_windows = [one for one in self.plot_windows
+                             if one is not window and one.winfo_exists()]
+        if self._just_saved:
+            self._just_saved = False
+            self._saved_signature = self.project_signature()
+        return None
+
+    # -- exporting ---------------------------------------------------------
+    def active_plot(self, plot=None):
+        """The diagram the export commands work on."""
+        if plot is not None and plot.winfo_exists():
+            return plot
+        windows = self.open_windows()
+        return windows[-1] if windows else None
+
+    def export_figure(self, plot=None, *_args):
+        """Cmd/Ctrl+E: write the diagram as an image file."""
+        window = self.active_plot(plot)
+        if window is None:
+            messagebox.showinfo("Information",
+                                "There is no diagram to export yet.")
+            return None
+        window.lift()
+        return window.export_figure()
+
+    def export_script(self, plot=None, *_args):
+        """Cmd/Ctrl+Alt+E: the diagram as a matplotlib program."""
+        window = self.active_plot(plot)
+        if window is None:
+            messagebox.showinfo("Information",
+                                "There is no diagram to export yet.")
+            return None
+        start = "diagram"
+        if self.project_path:
+            start = Path(self.project_path).stem
+        path = filedialog.asksaveasfilename(
+            defaultextension=SCRIPT_SUFFIX, initialfile=start + SCRIPT_SUFFIX,
+            filetypes=[("Python program", f"*{SCRIPT_SUFFIX}"),
+                       ("All files", "*.*")])
+        if not path:
+            return None
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(window.to_script())
+        except OSError as error:
+            messagebox.showerror("Error", f"Could not save the file: {error}")
+            return None
+        messagebox.showinfo(
+            "Successful",
+            "The diagram was written as a matplotlib program.\n"
+            "Run it with:  python3 " + Path(path).name)
+        return path
+
+    def copy_figure(self, plot=None, *_args):
+        """The diagram as a picture on the clipboard."""
+        window = self.active_plot(plot)
+        if window is None:
+            messagebox.showinfo("Information", "There is no diagram yet.")
+            return False
+        return window.copy_figure_to_clipboard()
+
+    def bind_shortcuts(self, window, plot=None):
+        """The keyboard commands of the File menu, on every window."""
+        def wrap(function, *args):
+            def handler(_event=None):
+                function(*args)
+                return "break"
+            return handler
+
+        commands = {
+            "o": wrap(self.open_graph),
+            "s": wrap(self.save_graph),
+            "e": wrap(self.export_figure, plot),
+        }
+        with_alt = {
+            "o": wrap(self.load_csv),
+            "s": wrap(self.save_csv),
+            "e": wrap(self.export_script, plot),
+        }
+        for modifier in ("Control", "Command"):
+            for letter, handler in commands.items():
+                for name in (letter, letter.upper()):
+                    try:
+                        window.bind(f"<{modifier}-{name}>", handler)
+                    except tk.TclError:
+                        pass
+            for letter, handler in with_alt.items():
+                for extra in ("Alt", "Option", "Mod2"):
+                    for name in (letter, letter.upper()):
+                        try:
+                            window.bind(f"<{modifier}-{extra}-{name}>", handler)
+                        except tk.TclError:
+                            pass
+
     def project_document(self):
         """Data plus the full state of every open diagram."""
         rows = [[value for value in row]
                 for row in self.df.itertuples(index=False, name=None)]
+        formulas = {f"{r},{c}": formula
+                    for (r, c), formula in getattr(self.table, "cell_formulas", {}).items()}
         return {
             "format": "aplot", "version": 1, "application": APP_NAME,
             "data": {"columns": [str(name) for name in self.df.columns],
-                     "rows": rows},
+                     "rows": rows,
+                     "formulas": formulas},
             "plots": [window.to_state() for window in self.open_windows()],
         }
 
-    def save_project(self, path=None):
+    def save_project(self, path=None, quiet=False):
+        """Write the data and every diagram into one `.aplt` file.
+
+        `quiet` is the Cmd/Ctrl+S of a graph that already has a file: it is
+        simply brought up to date, without a dialog of any kind.
+        """
         self.table._commit_edit()
         if path is None:
             path = filedialog.asksaveasfilename(
@@ -8128,10 +10523,12 @@ class App:
         except OSError as error:
             messagebox.showerror("Error", f"Could not save the file: {error}")
             return None
-        plots = len(self.open_windows())
-        messagebox.showinfo(
-            "Successful",
-            f"The data and {plots} diagram(s) have been saved.")
+        self._remember_saved(path)
+        if not quiet:
+            plots = len(self.open_windows())
+            messagebox.showinfo(
+                "Successful",
+                f"The data and {plots} diagram(s) have been saved.")
         return path
 
     def load_project(self, path=None):
@@ -8162,6 +10559,16 @@ class App:
         frame = frame.where(frame.notna(), "")   # JSON null -> empty cell
         self.table.set_dataframe(frame, check_all=True)
 
+        raw_formulas = data.get("formulas") or {}
+        loaded_formulas = {}
+        for k, v in raw_formulas.items():
+            try:
+                parts = k.split(",")
+                loaded_formulas[(int(parts[0]), int(parts[1]))] = str(v)
+            except (ValueError, IndexError):
+                pass
+        self.table.cell_formulas = loaded_formulas
+
         for window in self.open_windows():   # replace the current diagrams
             window.destroy()
         self.plot_windows = []
@@ -8172,6 +10579,7 @@ class App:
                 continue
             window.apply_state(state)
             self.plot_windows.append(window)
+        self._remember_saved(path)
         return True
 
     def random_csv(self, low=0, high=100, rows=None, columns=None):
@@ -8295,12 +10703,13 @@ class App:
                              if window.winfo_exists()]
         return self.plot_windows
 
-    def open_plot(self):
-        """Open a new diagram of the ticked columns, with the default style."""
+    def open_plot(self, plot_style=None):
+        """Open a new diagram of the ticked columns, with the specified or default style."""
         if not self._plottable():
             return None
+        style = plot_style or getattr(self, "current_plot_style", "line_symbol")
         window = PlotWindow(self.root, self.plot_data(), self.settings, app=self,
-                            layout=self.plot_layout())
+                            layout=self.plot_layout(), plot_style=style)
         if window.winfo_exists():
             self.plot_windows.append(window)
             return window
