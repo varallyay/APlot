@@ -46,6 +46,8 @@ Files
 
 Plot window
 -----------
+* nine plot styles, each with its own settings: line + symbol, line,
+  scatter, bar chart, error bar, histogram, stairs, 2D histogram and pie
 * drawings and text boxes can be turned to any angle: drag the round
   control point above them (Shift: 15 degree steps) or type the angle in
   their property window
@@ -144,6 +146,9 @@ PLOT_STYLES = [
     ("Bar Chart", "bar", "Vertical bar chart"),
     ("Error Bar", "errorbar", "Points with vertical error bars and caps"),
     ("Histogram", "histogram", "Counts the values of a column into bins"),
+    ("Stairs", "stairs", "A stepped outline of the values (ax.stairs)"),
+    ("2D Histogram", "hist2d", "Counts the X/Y pairs in a grid (ax.hist2d)"),
+    ("Pie Chart", "pie", "The values of one column as slices (ax.pie)"),
 ]
 
 ERROR_SOURCES = [
@@ -178,6 +183,31 @@ HATCH_PATTERNS = [
 ]
 
 FILL_BASES = [("Zero line", "zero"), ("Bottom of the axes", "bottom")]
+
+# where a stairs plot puts the step between two X values
+STAIRS_EDGES = [("Midway between the X values", "mid"),
+                ("At the X value (step after it)", "post"),
+                ("At the X value (step before it)", "pre")]
+
+# the colour scales of a 2D histogram and of the slices of a pie
+COLOR_MAPS = [
+    ("Viridis", "viridis"), ("Plasma", "plasma"), ("Inferno", "inferno"),
+    ("Magma", "magma"), ("Cividis", "cividis"), ("Turbo", "turbo"),
+    ("Blues", "Blues"), ("Reds", "Reds"), ("Greens", "Greens"),
+    ("Oranges", "Oranges"), ("Purples", "Purples"), ("Greys", "Greys"),
+    ("Hot", "hot"), ("Cool", "cool"), ("Jet", "jet"),
+    ("Coolwarm", "coolwarm"), ("Spectral", "Spectral"),
+    ("Rainbow", "rainbow"), ("Tab10 (distinct colours)", "tab10"),
+    ("Tab20 (distinct colours)", "tab20"), ("Pastel", "Pastel1"),
+]
+
+# what is written beside the slices of a pie
+PIE_LABELS = [("The text of the first column", "column"),
+              ("The row number", "row"), ("Nothing", "none")]
+
+HIST2D_BINS = 20           # the grid of a 2D histogram, per axis
+MAX_HIST2D_BINS = 500
+PIE_START_ANGLE = 90.0     # the first slice starts at the top
 
 FRAME_STYLES = [
     ("No frame (X and Y only) (default)", "none"),
@@ -1215,6 +1245,36 @@ class PlotSplitButton(tk.Canvas):
             for i, bh in enumerate(heights):
                 self.create_rectangle(ix0 + 1.5 + i * bw, iy1 - bh, ix0 + 1.5 + (i + 1) * bw, iy1,
                                       fill="#1f77b4", outline="#ffffff", width=0.8)
+        elif style == "stairs":
+            # a stepped outline: four treads going up
+            steps = [5, 9, 13, 17]
+            points = [ix0 + 2, iy1 - steps[0]]
+            for index, height in enumerate(steps):
+                x_left = ix0 + 2 + index * 4.5
+                points += [x_left, iy1 - height, x_left + 4.5, iy1 - height]
+            self.create_line(points, fill=blue, width=1.8)
+        elif style == "hist2d":
+            # a grid of squares, darker towards the middle
+            shades = [["#dce7f5", "#9ec3e8", "#dce7f5"],
+                      ["#9ec3e8", "#1f77b4", "#6aa8dc"],
+                      ["#eef4fb", "#6aa8dc", "#c3d9f1"]]
+            cell = (ix1 - ix0 - 4) / 3.0
+            for row in range(3):
+                for column in range(3):
+                    self.create_rectangle(
+                        ix0 + 2 + column * cell, iy0 + 2 + row * cell,
+                        ix0 + 2 + (column + 1) * cell, iy0 + 2 + (row + 1) * cell,
+                        fill=shades[row][column], outline="")
+        elif style == "pie":
+            # a circle with one slice taken out of it
+            pad = 2
+            self.create_arc(ix0 + pad, iy0 + pad, ix1 - pad, iy1 - pad,
+                            start=60, extent=300, fill="#1f77b4",
+                            outline=blue, width=1, style="pieslice")
+            self.create_arc(ix0 + pad + 1.5, iy0 + pad - 1.5,
+                            ix1 - pad + 1.5, iy1 - pad - 1.5,
+                            start=0, extent=60, fill="#f5a623",
+                            outline=blue, width=1, style="pieslice")
         else:  # line_symbol (default)
             pts = [ix0 + 2, my + 4, ix0 + 7, iy0 + 3, ix0 + 13, iy1 - 3, ix1 - 2, my - 3]
             self.create_line(pts, fill=blue, width=1.5, smooth=True)
@@ -1796,6 +1856,9 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                  bar_cfg=None, on_bar_cfg=None,
                  error_cfg=None, on_error_cfg=None,
                  histogram_cfg=None, on_histogram_cfg=None,
+                 stairs_cfg=None, on_stairs_cfg=None,
+                 hist2d_cfg=None, on_hist2d_cfg=None,
+                 pie_cfg=None, on_pie_cfg=None,
                  available_columns=None):
         super().__init__(master, "Curve properties", on_close=on_close)
         self.line = line
@@ -1810,6 +1873,12 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.on_bar_cfg = on_bar_cfg
         self.hist_cfg = dict(histogram_cfg or {})
         self.on_histogram_cfg = on_histogram_cfg
+        self.stairs_cfg = dict(stairs_cfg or {})
+        self.on_stairs_cfg = on_stairs_cfg
+        self.hist2d_cfg = dict(hist2d_cfg or {})
+        self.on_hist2d_cfg = on_hist2d_cfg
+        self.pie_cfg = dict(pie_cfg or {})
+        self.on_pie_cfg = on_pie_cfg
         self.error_cfg = dict(error_cfg or {})
         self.on_error_cfg = on_error_cfg
         self.available_columns = list(available_columns or [])
@@ -1859,10 +1928,14 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self._build_marker_box(line_color, face)
         self._build_bar_box(line_color)
         self._build_error_box(line_color)
+        self._build_stairs_box(line_color)
+        self._build_hist2d_box()
+        self._build_pie_box(line_color)
         self._build_fill_box(line_color)
         self._align_columns((self.legend_box, self.line_box,
                              self.marker_box, self.bar_box,
-                             self.error_box, self.fill_box))
+                             self.error_box, self.stairs_box,
+                             self.hist2d_box, self.pie_box, self.fill_box))
         self._update_section_visibility()
         self._build_buttons()
         self._loading = False
@@ -2042,6 +2115,16 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                    "", ttk.Label(box, text=""))
         self.bar_edge_width_var.trace_add("write", self._apply)
 
+        # a pattern over the colour, the same choice a filled area has
+        self.bar_hatch_var = tk.StringVar(
+            value=name_of(HATCH_PATTERNS, source.get("hatch", ""),
+                          names(HATCH_PATTERNS)[0]))
+        pattern = ttk.Combobox(box, textvariable=self.bar_hatch_var,
+                               state="readonly", values=names(HATCH_PATTERNS),
+                               width=22)
+        self.field(box, 3, "Pattern:", pattern)
+        pattern.bind("<<ComboboxSelected>>", self._apply)
+
     def _build_error_box(self, line_color):
         box = ttk.LabelFrame(self.body, text="Error bar properties", padding=8)
         self.error_box = box
@@ -2088,6 +2171,211 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.err_capsize_var.trace_add("write", self._apply)
         self.err_elinewidth_var.trace_add("write", self._apply)
 
+        # the thickness of the caps themselves: it was in the settings all
+        # along, but there was no field for it
+        self._pair(box, 4,
+                   "Cap thickness:",
+                   ttk.Spinbox(box, from_=0, to=10, increment=0.5,
+                               width=SPIN_WIDTH,
+                               textvariable=self.err_capthick_var,
+                               command=self._apply),
+                   "", ttk.Label(box, text=""))
+        self.err_capthick_var.trace_add("write", self._apply)
+
+    def _build_stairs_box(self, line_color):
+        """Stairs: where the steps stand, and how the staircase is drawn."""
+        box = ttk.LabelFrame(self.body, text="Stairs properties", padding=8)
+        self.stairs_box = box
+        cfg = self.stairs_cfg
+        self.stairs_edges_var = tk.StringVar(
+            value=name_of(STAIRS_EDGES, cfg.get("edges", "mid"),
+                          names(STAIRS_EDGES)[0]))
+        self.stairs_width_var = tk.StringVar(value=str(cfg.get("width", 1.8)))
+        self.stairs_alpha_var = tk.StringVar(value=str(cfg.get("alpha", 0.35)))
+        self.stairs_fill_var = tk.BooleanVar(value=bool(cfg.get("fill", False)))
+        self.stairs_base_var = tk.BooleanVar(
+            value=bool(cfg.get("baseline", False)))
+        self.stairs_hatch_var = tk.StringVar(
+            value=name_of(HATCH_PATTERNS, cfg.get("hatch", ""),
+                          names(HATCH_PATTERNS)[0]))
+        self.stairs_color = ColorSwatch(box, cfg.get("color", line_color),
+                                        command=lambda _c: self._apply())
+
+        combo = ttk.Combobox(box, textvariable=self.stairs_edges_var,
+                             state="readonly", values=names(STAIRS_EDGES),
+                             width=28)
+        self._wide(combo, 0, pady=(0, 4))
+        combo.bind("<<ComboboxSelected>>", self._apply)
+
+        self._pair(box, 1,
+                   "Line width:",
+                   ttk.Spinbox(box, from_=0, to=10, increment=0.2,
+                               width=SPIN_WIDTH,
+                               textvariable=self.stairs_width_var,
+                               command=self._apply),
+                   "Colour:", self.stairs_color)
+        self.stairs_width_var.trace_add("write", self._apply)
+
+        self._pair(box, 2,
+                   "Fill it:", ttk.Checkbutton(box, variable=self.stairs_fill_var,
+                                               command=self._apply),
+                   "Opacity (0-1):",
+                   ttk.Spinbox(box, from_=0, to=1, increment=0.05,
+                               width=SPIN_WIDTH,
+                               textvariable=self.stairs_alpha_var,
+                               command=self._apply))
+        self.stairs_alpha_var.trace_add("write", self._apply)
+
+        pattern = ttk.Combobox(box, textvariable=self.stairs_hatch_var,
+                               state="readonly", values=names(HATCH_PATTERNS),
+                               width=22)
+        self.field(box, 3, "Pattern:", pattern)
+        pattern.bind("<<ComboboxSelected>>", self._apply)
+
+        self._wide(ttk.Checkbutton(box, text="Close it down to the zero line",
+                                   variable=self.stairs_base_var,
+                                   command=self._apply), 4, pady=(4, 0))
+
+    def _build_hist2d_box(self):
+        """2D histogram: the grid, the colour scale and the colour bar."""
+        box = ttk.LabelFrame(self.body, text="2D histogram properties",
+                             padding=8)
+        self.hist2d_box = box
+        cfg = self.hist2d_cfg
+        self.h2_xbins_var = tk.StringVar(
+            value=str(int(cfg.get("xbins", HIST2D_BINS))))
+        self.h2_ybins_var = tk.StringVar(
+            value=str(int(cfg.get("ybins", HIST2D_BINS))))
+        self.h2_alpha_var = tk.StringVar(value=str(cfg.get("alpha", 1.0)))
+        self.h2_cmap_var = tk.StringVar(
+            value=name_of(COLOR_MAPS, cfg.get("cmap", "viridis"),
+                          names(COLOR_MAPS)[0]))
+        self.h2_bar_var = tk.BooleanVar(value=bool(cfg.get("colorbar", False)))
+        self.h2_empty_var = tk.BooleanVar(
+            value=bool(cfg.get("hide_empty", True)))
+
+        self._pair(box, 0,
+                   "Bins across X:",
+                   ttk.Spinbox(box, from_=1, to=MAX_HIST2D_BINS, increment=1,
+                               width=SPIN_WIDTH, textvariable=self.h2_xbins_var,
+                               command=self._apply),
+                   "Bins up Y:",
+                   ttk.Spinbox(box, from_=1, to=MAX_HIST2D_BINS, increment=1,
+                               width=SPIN_WIDTH, textvariable=self.h2_ybins_var,
+                               command=self._apply))
+        self.h2_xbins_var.trace_add("write", self._apply)
+        self.h2_ybins_var.trace_add("write", self._apply)
+
+        combo = ttk.Combobox(box, textvariable=self.h2_cmap_var,
+                             state="readonly", values=names(COLOR_MAPS),
+                             width=22)
+        self.field(box, 1, "Colour scale:", combo)
+        combo.bind("<<ComboboxSelected>>", self._apply)
+
+        self._pair(box, 2,
+                   "Opacity (0-1):",
+                   ttk.Spinbox(box, from_=0, to=1, increment=0.05,
+                               width=SPIN_WIDTH, textvariable=self.h2_alpha_var,
+                               command=self._apply),
+                   "Colour bar:",
+                   ttk.Checkbutton(box, variable=self.h2_bar_var,
+                                   command=self._apply))
+        self.h2_alpha_var.trace_add("write", self._apply)
+
+        self._wide(ttk.Checkbutton(box, text="Leave the empty cells white",
+                                   variable=self.h2_empty_var,
+                                   command=self._apply), 3, pady=(4, 0))
+
+    def _build_pie_box(self, line_color):
+        """Pie: the slices, their names and the numbers written on them."""
+        box = ttk.LabelFrame(self.body, text="Pie properties", padding=8)
+        self.pie_box = box
+        cfg = self.pie_cfg
+        self.pie_cmap_var = tk.StringVar(
+            value=name_of(COLOR_MAPS, cfg.get("cmap", "tab10"),
+                          names(COLOR_MAPS)[0]))
+        self.pie_labels_var = tk.StringVar(
+            value=name_of(PIE_LABELS, cfg.get("labels", "column"),
+                          names(PIE_LABELS)[0]))
+        self.pie_start_var = tk.StringVar(
+            value=f"{float(cfg.get('start', PIE_START_ANGLE)):g}")
+        self.pie_hole_var = tk.StringVar(value=str(cfg.get("hole", 0.0)))
+        self.pie_explode_var = tk.StringVar(value=str(cfg.get("explode", 0.0)))
+        self.pie_percent_var = tk.BooleanVar(
+            value=bool(cfg.get("percent", True)))
+        self.pie_decimals_var = tk.StringVar(
+            value=str(int(cfg.get("decimals", 1))))
+        self.pie_size_var = tk.StringVar(
+            value=str(int(cfg.get("label_size", 11))))
+        self.pie_clock_var = tk.BooleanVar(
+            value=bool(cfg.get("clockwise", True)))
+        self.pie_edge_width_var = tk.StringVar(
+            value=str(cfg.get("edgewidth", 1.0)))
+        self.pie_edge_color = ColorSwatch(
+            box, cfg.get("edgecolor", "#ffffff"),
+            command=lambda _c: self._apply())
+
+        combo = ttk.Combobox(box, textvariable=self.pie_cmap_var,
+                             state="readonly", values=names(COLOR_MAPS),
+                             width=22)
+        self.field(box, 0, "Slice colours:", combo)
+        combo.bind("<<ComboboxSelected>>", self._apply)
+
+        names_combo = ttk.Combobox(box, textvariable=self.pie_labels_var,
+                                   state="readonly", values=names(PIE_LABELS),
+                                   width=26)
+        self._wide(names_combo, 1, pady=(4, 4))
+        names_combo.bind("<<ComboboxSelected>>", self._apply)
+
+        self._pair(box, 2,
+                   "Start angle:",
+                   ttk.Spinbox(box, from_=-360, to=360, increment=15,
+                               width=SPIN_WIDTH, textvariable=self.pie_start_var,
+                               command=self._apply),
+                   "Edge colour:", self.pie_edge_color)
+        self.pie_start_var.trace_add("write", self._apply)
+
+        self._pair(box, 3,
+                   "Per cent:",
+                   ttk.Checkbutton(box, variable=self.pie_percent_var,
+                                   command=self._apply),
+                   "Decimals:",
+                   ttk.Spinbox(box, from_=0, to=4, increment=1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_decimals_var,
+                               command=self._apply))
+        self.pie_decimals_var.trace_add("write", self._apply)
+
+        self._pair(box, 4,
+                   "Hole (0-0.9):",
+                   ttk.Spinbox(box, from_=0, to=0.9, increment=0.05,
+                               width=SPIN_WIDTH, textvariable=self.pie_hole_var,
+                               command=self._apply),
+                   "Text size:",
+                   ttk.Spinbox(box, from_=4, to=48, increment=1,
+                               width=SPIN_WIDTH, textvariable=self.pie_size_var,
+                               command=self._apply))
+        self.pie_hole_var.trace_add("write", self._apply)
+        self.pie_size_var.trace_add("write", self._apply)
+
+        self._pair(box, 5,
+                   "Pull out the first:",
+                   ttk.Spinbox(box, from_=0, to=0.5, increment=0.05,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_explode_var,
+                               command=self._apply),
+                   "Edge width:",
+                   ttk.Spinbox(box, from_=0, to=10, increment=0.5,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_edge_width_var,
+                               command=self._apply))
+        self.pie_explode_var.trace_add("write", self._apply)
+        self.pie_edge_width_var.trace_add("write", self._apply)
+
+        self._wide(ttk.Checkbutton(box, text="Go round anticlockwise",
+                                   variable=self.pie_clock_var,
+                                   command=self._apply), 6, pady=(4, 0))
+
     def _on_err_type_changed(self, _event=None):
         src = code_of(ERROR_SOURCES, self.err_type_var.get(), "pair")
         if src == "column":
@@ -2121,28 +2409,29 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             self.bar_width_label.grid()
             self.bar_width_spin.grid()
 
-    def _update_section_visibility(self):
-        st = self.style_code()
-        for box in (self.line_box, self.marker_box, self.bar_box, self.error_box, self.fill_box):
-            box.pack_forget()
+    # which sections belong to which plot style, in the order they appear
+    SECTIONS = {
+        "line_symbol": ("line_box", "marker_box", "fill_box"),
+        "line": ("line_box", "fill_box"),
+        "scatter": ("marker_box", "fill_box"),
+        "bar": ("bar_box",),
+        "histogram": ("bar_box",),
+        "errorbar": ("marker_box", "line_box", "error_box"),
+        "stairs": ("stairs_box",),
+        "hist2d": ("hist2d_box",),
+        "pie": ("pie_box",),
+    }
 
+    def _update_section_visibility(self):
+        """Show exactly the sections the plot style of this curve can use."""
+        st = self.style_code()
+        for name in ("line_box", "marker_box", "bar_box", "error_box",
+                     "stairs_box", "hist2d_box", "pie_box", "fill_box"):
+            getattr(self, name).pack_forget()
         if st in ("bar", "histogram"):
             self._show_bar_fields(st == "histogram")
-            self.bar_box.pack(fill="x", pady=(10, 0))
-        elif st == "errorbar":
-            self.marker_box.pack(fill="x", pady=(10, 0))
-            self.line_box.pack(fill="x", pady=(10, 0))
-            self.error_box.pack(fill="x", pady=(10, 0))
-        elif st == "scatter":
-            self.marker_box.pack(fill="x", pady=(10, 0))
-            self.fill_box.pack(fill="x", pady=(10, 0))
-        elif st == "line":
-            self.line_box.pack(fill="x", pady=(10, 0))
-            self.fill_box.pack(fill="x", pady=(10, 0))
-        else:  # line_symbol
-            self.line_box.pack(fill="x", pady=(10, 0))
-            self.marker_box.pack(fill="x", pady=(10, 0))
-            self.fill_box.pack(fill="x", pady=(10, 0))
+        for name in self.SECTIONS.get(st, self.SECTIONS["line_symbol"]):
+            getattr(self, name).pack(fill="x", pady=(10, 0))
 
     def _on_style_changed(self, _event=None):
         st = self.style_code()
@@ -2155,7 +2444,8 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         elif st == "line_symbol":
             self.line_on_var.set(True)
             self.marker_on_var.set(True)
-        elif st in ("bar", "histogram"):
+        elif st in ("bar", "histogram", "stairs", "hist2d", "pie"):
+            # these draw an artist of their own instead of the curve
             self.line_on_var.set(False)
             self.marker_on_var.set(False)
         elif st == "errorbar":
@@ -2267,6 +2557,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                 "edgewidth": to_float(self.bar_edge_width_var.get(), 1.0),
                 "color": self.bar_color.color,
                 "edgecolor": self.bar_edge_color.color,
+                "hatch": code_of(HATCH_PATTERNS, self.bar_hatch_var.get(), ""),
             })
         if self.on_histogram_cfg:
             # the same fields serve the histogram; only the number of bins
@@ -2279,6 +2570,42 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                 "edgewidth": to_float(self.bar_edge_width_var.get(), 1.0),
                 "color": self.bar_color.color,
                 "edgecolor": self.bar_edge_color.color,
+                "hatch": code_of(HATCH_PATTERNS, self.bar_hatch_var.get(), ""),
+            })
+        if self.on_stairs_cfg:
+            self.on_stairs_cfg({
+                "edges": code_of(STAIRS_EDGES, self.stairs_edges_var.get(), "mid"),
+                "width": to_float(self.stairs_width_var.get(), 1.8),
+                "fill": bool(self.stairs_fill_var.get()),
+                "alpha": to_float(self.stairs_alpha_var.get(), 0.35),
+                "hatch": code_of(HATCH_PATTERNS, self.stairs_hatch_var.get(), ""),
+                "baseline": bool(self.stairs_base_var.get()),
+                "color": self.stairs_color.color,
+            })
+        if self.on_hist2d_cfg:
+            self.on_hist2d_cfg({
+                "xbins": max(1, min(to_int(self.h2_xbins_var.get(),
+                                           HIST2D_BINS), MAX_HIST2D_BINS)),
+                "ybins": max(1, min(to_int(self.h2_ybins_var.get(),
+                                           HIST2D_BINS), MAX_HIST2D_BINS)),
+                "cmap": code_of(COLOR_MAPS, self.h2_cmap_var.get(), "viridis"),
+                "alpha": to_float(self.h2_alpha_var.get(), 1.0),
+                "colorbar": bool(self.h2_bar_var.get()),
+                "hide_empty": bool(self.h2_empty_var.get()),
+            })
+        if self.on_pie_cfg:
+            self.on_pie_cfg({
+                "cmap": code_of(COLOR_MAPS, self.pie_cmap_var.get(), "tab10"),
+                "labels": code_of(PIE_LABELS, self.pie_labels_var.get(), "column"),
+                "start": to_float(self.pie_start_var.get(), PIE_START_ANGLE),
+                "percent": bool(self.pie_percent_var.get()),
+                "decimals": max(0, to_int(self.pie_decimals_var.get(), 1)),
+                "hole": to_float(self.pie_hole_var.get(), 0.0),
+                "explode": to_float(self.pie_explode_var.get(), 0.0),
+                "label_size": max(4, to_int(self.pie_size_var.get(), 11)),
+                "clockwise": bool(self.pie_clock_var.get()),
+                "edgecolor": self.pie_edge_color.color,
+                "edgewidth": to_float(self.pie_edge_width_var.get(), 1.0),
             })
         if self.on_error_cfg:
             self.on_error_cfg({
@@ -6018,6 +6345,14 @@ class PlotWindow(tk.Toplevel):
         self.histogram_cfg: dict = {}         # column name -> {bins, color, alpha, edgecolor, edgewidth}
         self.histogram_edges: dict = {}       # column name -> the bin edges it was counted with
         self.histogram_drawn: set = set()     # columns whose curve carries counts
+        self.stairs_cfg: dict = {}            # column -> {edges, color, width, fill, ...}
+        self.stairs_patches: dict = {}         # column -> the StepPatch of ax.stairs
+        self.hist2d_cfg: dict = {}            # column -> {xbins, ybins, cmap, alpha, bar}
+        self.hist2d_meshes: dict = {}         # column -> the QuadMesh of ax.hist2d
+        self.hist2d_bars: dict = {}           # column -> the colour bar beside it
+        self.pie_cfg: dict = {}               # column -> {start, percent, hole, labels, ...}
+        self.pie_wedges: dict = {}            # column -> the wedges of ax.pie
+        self.pie_texts: dict = {}             # column -> the texts drawn on it
         # in an error bar diagram: mean column -> the std column beside it
         self.error_partner: dict = {}
         self.lines: list[Line2D] = []
@@ -6389,6 +6724,8 @@ class PlotWindow(tk.Toplevel):
         Y axes - the curves are drawn against.  So a diagram of a top X axis
         and a right Y axis shows those two lines and nothing else.
         """
+        if self.plot_style == "pie":
+            return []                  # a pie stands on no axis
         sides = ["top" if self.x_side == "top" else "bottom"]
         right = self.right_axis_active()
         if self.left_axis_active() or not right:
@@ -6544,6 +6881,10 @@ class PlotWindow(tk.Toplevel):
 
     def _rescale(self):
         """Let the automatic ranges follow the data of both Y axes."""
+        if self.plot_style == "pie" and not [
+                name for name, style in self.series_style.items()
+                if style != "pie"]:
+            return                     # a pie has no range to follow
         auto_x = self.axis_cfg["x"]["auto"]
         auto_y = self.axis_cfg["y"]["auto"]
         if (auto_x or auto_y) and self.ax.lines:
@@ -6602,8 +6943,8 @@ class PlotWindow(tk.Toplevel):
             m_style = code_of(MARKERS, plot_cfg["marker"], "o")
             if m_style.lower() == "none":
                 m_style = "o"
-        elif series_st in ("bar", "histogram"):
-            l_style = "none"
+        elif series_st in ("bar", "histogram", "stairs", "hist2d", "pie"):
+            l_style = "none"        # the artist beside the curve is the plot
             m_style = "None"
         elif series_st == "errorbar":
             l_style = "none"
@@ -6664,9 +7005,11 @@ class PlotWindow(tk.Toplevel):
             return None
         target = line.axes if line.axes is not None else self.ax
         cfg = self.bar_cfg.setdefault(column, {
-            "width": 0.8, "color": line.get_color(), "alpha": 0.85,
-            "edgecolor": safe_hex(line.get_color()), "edgewidth": 1.0
+            "width": 0.8, "color": safe_hex(line.get_color()), "alpha": 0.85,
+            "edgecolor": safe_hex(line.get_color()), "edgewidth": 1.0,
+            "hatch": ""
         })
+        cfg.setdefault("hatch", "")
         w = float(cfg.get("width", 0.8))
         try:
             x_arr = np.asarray(x_data, dtype=float)
@@ -6684,6 +7027,7 @@ class PlotWindow(tk.Toplevel):
             edgecolor=cfg.get("edgecolor", safe_hex(line.get_color())),
             linewidth=float(cfg.get("edgewidth", 1.0)),
             alpha=float(cfg.get("alpha", 0.85)),
+            hatch=(cfg.get("hatch") or None),
             label="_nolegend_",
             zorder=line.get_zorder() - 0.2
         )
@@ -6814,9 +7158,10 @@ class PlotWindow(tk.Toplevel):
     @staticmethod
     def default_histogram_cfg(line=None):
         return {"bins": HISTOGRAM_BINS,
-                "color": (line.get_color() if line is not None
-                          else PALETTE_FALLBACK),
-                "alpha": 0.85, "edgecolor": "#ffffff", "edgewidth": 1.0}
+                "color": safe_hex(line.get_color() if line is not None
+                                  else PALETTE_FALLBACK, PALETTE_FALLBACK),
+                "alpha": 0.85, "edgecolor": "#ffffff", "edgewidth": 1.0,
+                "hatch": ""}
 
     def histogram_bins(self, column):
         """How many bins the sample of one column is counted into."""
@@ -6871,8 +7216,8 @@ class PlotWindow(tk.Toplevel):
         show them.  A histogram never needs this - it counts every column
         of its own accord.
         """
-        if self.plot_style == "histogram":
-            return False
+        if self.plot_style in ("histogram", "pie"):
+            return False               # neither of them reads an X axis
         frame = self.df if df is None else df
         if frame is None or not len(frame.columns):
             return False
@@ -6945,6 +7290,7 @@ class PlotWindow(tk.Toplevel):
             edgecolor=cfg.get("edgecolor", "#ffffff"),
             linewidth=float(cfg.get("edgewidth", 1.0)),
             alpha=float(cfg.get("alpha", 0.85)),
+            hatch=(cfg.get("hatch") or None),
             label="_nolegend_",
             zorder=line.get_zorder() - 0.2
         )
@@ -6971,47 +7317,306 @@ class PlotWindow(tk.Toplevel):
         line.set_data(*self._series_data(self.df, x_name, column))
         return True
 
+    # -- a stepped outline: ax.stairs ---------------------------------------
+    def _clear_stairs(self, column):
+        patch = self.stairs_patches.pop(column, None)
+        if patch is not None:
+            try:
+                patch.remove()
+            except (ValueError, AttributeError):
+                pass
+
+    @staticmethod
+    def default_stairs_cfg(line=None):
+        return {"edges": "mid", "width": 1.8, "fill": False, "alpha": 0.35,
+                "baseline": False,
+                "color": safe_hex(line.get_color() if line is not None
+                                  else PALETTE_FALLBACK, PALETTE_FALLBACK),
+                "hatch": ""}
+
+    @staticmethod
+    def stairs_edges(x_data, mode="mid"):
+        """The `N + 1` edges of `N` values: where the steps stand.
+
+        `mid` puts the step halfway between two X values (every value is
+        valid around its own X), `post` at the X value itself and `pre`
+        just before it.
+        """
+        x_arr = np.asarray(x_data, dtype=float)
+        count = len(x_arr)
+        if count == 0:
+            return np.array([0.0, 1.0])
+        if count == 1:
+            return np.array([x_arr[0] - 0.5, x_arr[0] + 0.5])
+        first_step = x_arr[1] - x_arr[0] or 1.0
+        last_step = x_arr[-1] - x_arr[-2] or 1.0
+        if str(mode) == "post":
+            return np.concatenate([x_arr, [x_arr[-1] + last_step]])
+        if str(mode) == "pre":
+            return np.concatenate([[x_arr[0] - first_step], x_arr])
+        middles = (x_arr[:-1] + x_arr[1:]) / 2.0
+        return np.concatenate([[x_arr[0] - first_step / 2.0], middles,
+                               [x_arr[-1] + last_step / 2.0]])
+
+    def refresh_stairs(self, column):
+        """Draw the values of one column as a staircase."""
+        self._clear_stairs(column)
+        st = self.series_style.get(column, self.plot_style)
+        line = self.series.get(column)
+        if st != "stairs" or line is None:
+            return None
+        cfg = self.stairs_cfg.setdefault(column,
+                                         self.default_stairs_cfg(line))
+        for key, value in self.default_stairs_cfg(line).items():
+            cfg.setdefault(key, value)
+        y_arr = np.asarray(line.get_ydata(), dtype=float)
+        if not len(y_arr) or not bool(np.isfinite(y_arr).any()):
+            return None
+        edges = self.stairs_edges(line.get_xdata(), cfg.get("edges", "mid"))
+        target = line.axes if line.axes is not None else self.ax
+        filled = bool(cfg.get("fill"))
+        # a filled staircase needs a floor to stand on; an open one is a
+        # line and may hang in the air
+        baseline = 0.0 if (filled or cfg.get("baseline")) else None
+        patch = target.stairs(
+            np.nan_to_num(y_arr, nan=0.0), edges, baseline=baseline,
+            fill=filled, color=cfg.get("color", line.get_color()),
+            linewidth=float(cfg.get("width", 1.8)),
+            alpha=(float(cfg.get("alpha", 0.35)) if filled else None),
+            hatch=(cfg.get("hatch") or None),
+            label="_nolegend_", zorder=line.get_zorder())
+        if filled:
+            # a crisp outline over a see-through face, as a filled area does
+            colour = cfg.get("color", line.get_color())
+            patch.set_alpha(None)
+            patch.set_facecolor(to_rgba(colour, float(cfg.get("alpha", 0.35))))
+            patch.set_edgecolor(colour)
+        patch.aplot_series = str(column)
+        patch.set_picker(True)
+        self.stairs_patches[column] = patch
+        return patch
+
+    # -- the X/Y pairs counted in a grid: ax.hist2d -------------------------
+    def _clear_hist2d(self, column):
+        bar = self.hist2d_bars.pop(column, None)
+        if bar is not None:
+            try:
+                bar.remove()               # the colour bar and its own axes
+            except (ValueError, AttributeError, KeyError):
+                pass
+        mesh = self.hist2d_meshes.pop(column, None)
+        if mesh is not None:
+            try:
+                mesh.remove()
+            except (ValueError, AttributeError):
+                pass
+
+    @staticmethod
+    def default_hist2d_cfg(_line=None):
+        return {"xbins": HIST2D_BINS, "ybins": HIST2D_BINS, "cmap": "viridis",
+                "alpha": 1.0, "colorbar": False, "hide_empty": True}
+
+    def hist2d_bins(self, column, which="xbins"):
+        cfg = self.hist2d_cfg.get(column) or {}
+        try:
+            count = int(float(cfg.get(which, HIST2D_BINS)))
+        except (TypeError, ValueError):
+            count = HIST2D_BINS
+        return max(1, min(count, MAX_HIST2D_BINS))
+
+    def hist2d_pairs(self, column):
+        """The X/Y pairs of one curve, without the gaps."""
+        line = self.series.get(column)
+        if line is None:
+            return np.array([], dtype=float), np.array([], dtype=float)
+        x_arr = np.asarray(line.get_xdata(), dtype=float)
+        y_arr = np.asarray(line.get_ydata(), dtype=float)
+        good = np.isfinite(x_arr) & np.isfinite(y_arr)
+        return x_arr[good], y_arr[good]
+
+    def refresh_hist2d(self, column):
+        """Count the X/Y pairs of one curve into a grid of cells."""
+        self._clear_hist2d(column)
+        st = self.series_style.get(column, self.plot_style)
+        line = self.series.get(column)
+        if st != "hist2d" or line is None:
+            return None
+        cfg = self.hist2d_cfg.setdefault(column, self.default_hist2d_cfg(line))
+        for key, value in self.default_hist2d_cfg(line).items():
+            cfg.setdefault(key, value)
+        x_arr, y_arr = self.hist2d_pairs(column)
+        if len(x_arr) < 2:
+            return None
+        target = line.axes if line.axes is not None else self.ax
+        bins = [self.hist2d_bins(column, "xbins"),
+                self.hist2d_bins(column, "ybins")]
+        try:
+            _counts, _xe, _ye, mesh = target.hist2d(
+                x_arr, y_arr, bins=bins, cmap=str(cfg.get("cmap", "viridis")),
+                alpha=float(cfg.get("alpha", 1.0)),
+                cmin=(1 if cfg.get("hide_empty", True) else None),
+                zorder=line.get_zorder() - 0.3)
+        except (ValueError, TypeError):
+            return None
+        mesh.aplot_series = str(column)
+        mesh.set_picker(True)
+        mesh.set_label("_nolegend_")
+        self.hist2d_meshes[column] = mesh
+        if cfg.get("colorbar"):
+            self._add_color_bar(column, mesh, target)
+        return mesh
+
+    def _add_color_bar(self, column, mesh, target):
+        """A colour scale beside the plot area, in axes of its own.
+
+        It is an inset of the plot area, so it follows it wherever the
+        frame is dragged and never takes room away from the diagram.
+        """
+        try:
+            cax = target.inset_axes([1.02, 0.0, 0.035, 1.0])
+            bar = self.fig.colorbar(mesh, cax=cax)
+            bar.outline.set_linewidth(float(self.frame_cfg.get("width", 1.0)))
+            size = int(self.axis_cfg["y"].get("tick_size", 12))
+            cax.tick_params(labelsize=size)
+            for artist in (cax, bar.outline):
+                artist.set_in_layout(True)
+            self.hist2d_bars[column] = bar
+            return bar
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    # -- the values of one column as slices: ax.pie -------------------------
+    def _clear_pie(self, column):
+        for artist in (list(self.pie_wedges.pop(column, ()) or ())
+                       + list(self.pie_texts.pop(column, ()) or ())):
+            try:
+                artist.remove()
+            except (ValueError, AttributeError):
+                pass
+
+    @staticmethod
+    def default_pie_cfg(_line=None):
+        return {"start": PIE_START_ANGLE, "percent": True, "decimals": 1,
+                "hole": 0.0, "labels": "column", "cmap": "tab10",
+                "edgecolor": "#ffffff", "edgewidth": 1.0, "explode": 0.0,
+                "clockwise": True, "label_size": 11}
+
+    def pie_values(self, column):
+        """The slices of a pie: the numbers of one column and their names."""
+        names = [str(one) for one in self.df.columns]
+        if str(column) not in names:
+            return np.array([], dtype=float), []
+        raw = pd.to_numeric(self.df[column], errors="coerce").to_numpy(float)
+        good = np.isfinite(raw) & (np.abs(raw) > 0)
+        values = np.abs(raw[good])              # a slice has no sign
+        cfg = self.pie_cfg.get(column) or {}
+        wanted = str(cfg.get("labels", "column"))
+        rows = np.nonzero(good)[0]
+        if wanted == "none":
+            return values, []
+        if wanted == "row" or names[0] == str(column):
+            return values, [str(int(one) + 1) for one in rows]
+        source = self.df[names[0]]
+        return values, [("" if pd.isna(source.iat[int(one)])
+                         else str(source.iat[int(one)])) for one in rows]
+
+    def refresh_pie(self, column):
+        """Draw one column as a pie: one slice per row."""
+        self._clear_pie(column)
+        st = self.series_style.get(column, self.plot_style)
+        line = self.series.get(column)
+        if st != "pie" or line is None:
+            return None
+        cfg = self.pie_cfg.setdefault(column, self.default_pie_cfg(line))
+        for key, value in self.default_pie_cfg(line).items():
+            cfg.setdefault(key, value)
+        values, labels = self.pie_values(column)
+        if not len(values):
+            return None
+        target = line.axes if line.axes is not None else self.ax
+        colors = self.slice_colors(cfg.get("cmap", "tab10"), len(values))
+        explode = float(cfg.get("explode", 0.0) or 0.0)
+        hole = max(0.0, min(float(cfg.get("hole", 0.0) or 0.0), 0.95))
+        percent = None
+        if cfg.get("percent"):
+            percent = f"%.{max(0, int(cfg.get('decimals', 1)))}f%%"
+        try:
+            wedges, texts, *rest = target.pie(
+                values, labels=(labels or None), colors=colors,
+                startangle=float(cfg.get("start", PIE_START_ANGLE)),
+                counterclock=bool(cfg.get("clockwise", True)),
+                autopct=percent,
+                explode=([explode] + [0.0] * (len(values) - 1)
+                         if explode else None),
+                textprops={"fontsize": int(cfg.get("label_size", 11))},
+                wedgeprops={"width": (1.0 - hole) if hole else None,
+                            "edgecolor": cfg.get("edgecolor", "#ffffff"),
+                            "linewidth": float(cfg.get("edgewidth", 1.0))})
+        except (ValueError, TypeError):
+            return None
+        written = list(texts) + list(rest[0] if rest else [])
+        for wedge in wedges:
+            wedge.aplot_series = str(column)
+            wedge.set_picker(True)
+        self.pie_wedges[column] = list(wedges)
+        self.pie_texts[column] = written
+        target.set_aspect("equal")
+        return wedges
+
+    @staticmethod
+    def slice_colors(name, count):
+        """`count` colours taken from a colour map, for the pie slices."""
+        try:
+            cmap = matplotlib.colormaps[str(name)]
+        except (KeyError, AttributeError, TypeError):
+            cmap = matplotlib.colormaps["tab10"]
+        if getattr(cmap, "N", 256) <= 32:        # a table of distinct colours
+            return [cmap(index % cmap.N) for index in range(max(1, count))]
+        if count <= 1:
+            return [cmap(0.5)]
+        return [cmap(index / (count - 1)) for index in range(count)]
+
+    # -- what every style draws beside (or instead of) its curve -----------
+    # the styles that draw an artist of their own next to the curve
+    EXTRA_ARTISTS = ("bar", "errorbar", "histogram", "stairs", "hist2d", "pie")
+    # ... and those whose curve is not drawn at all: that artist is the plot
+    CARRIER_ONLY = ("bar", "histogram", "stairs", "hist2d", "pie")
+
+    def clear_extras(self, column, keep=None):
+        """Remove what every other style drew beside this curve."""
+        for style in self.EXTRA_ARTISTS:
+            if style != keep:
+                getattr(self, f"_clear_{style}")(column)
+
     def refresh_series_visuals(self, column):
+        """Draw one curve the way its own plot style says.
+
+        Every style has exactly one place here: what the other styles drew
+        beside the curve is removed, the curve itself is given the line and
+        the marker its style allows, and the artist of the style (bars,
+        error bars, a staircase, a grid of counts, slices) is drawn.
+        """
         st = self.series_style.get(column, self.plot_style)
         line = self.series.get(column)
         if line is not None:
             if st != "histogram" and column in self.histogram_drawn:
                 self.restore_series_data(column)
-            if st == "bar":
+            self.clear_extras(column, keep=st)
+            if st in self.CARRIER_ONLY:
+                # the curve itself is not drawn: the artist beside it is
                 line.set_linestyle("none")
                 line.set_marker("None")
-                self.refresh_bar(column)
-                self._clear_errorbar(column)
-                self._clear_histogram(column)
-            elif st == "errorbar":
-                self.refresh_errorbar(column)
-                self._clear_bar(column)
-                self._clear_histogram(column)
-            elif st == "histogram":
-                line.set_linestyle("none")
-                line.set_marker("None")
-                self.refresh_histogram(column)
-                self._clear_bar(column)
-                self._clear_errorbar(column)
             elif st == "line":
                 line.set_marker("None")     # this style has no marker at all
-                self._clear_bar(column)
-                self._clear_errorbar(column)
-                self._clear_histogram(column)
             elif st == "scatter":
                 line.set_linestyle("none")  # ... and this one no line
-                self._clear_bar(column)
-                self._clear_errorbar(column)
-                self._clear_histogram(column)
-            else:  # line_symbol: the Line and the Marker check button of the
-                # curve dialog decide - a switched off line or marker must not
-                # be put back here, or those two switches (and a saved
-                # diagram) would lose what the user chose.  A new curve gets
-                # its line and marker from _create_line instead, and changing
-                # the plot style sets them in _on_style_changed.
-                self._clear_bar(column)
-                self._clear_errorbar(column)
-                self._clear_histogram(column)
+            # line_symbol and errorbar: the Line and the Marker check button
+            # of the curve dialog decide, so nothing is put back here - or
+            # those two switches (and a saved diagram) would lose what the
+            # user chose.  A new curve gets its line and marker from
+            # _create_line, and changing the style from _on_style_changed.
+            if st in self.EXTRA_ARTISTS:
+                getattr(self, f"refresh_{st}")(column)
         self.refresh_fill(column)
 
     # -- filled area under a curve -----------------------------------------
@@ -7117,8 +7722,12 @@ class PlotWindow(tk.Toplevel):
             self.bar_cfg[new] = self.bar_cfg.pop(old)
         if old in self.error_cfg:
             self.error_cfg[new] = self.error_cfg.pop(old)
-        if old in self.histogram_cfg:
-            self.histogram_cfg[new] = self.histogram_cfg.pop(old)
+        for store in (self.histogram_cfg, self.stairs_cfg,
+                      self.hist2d_cfg, self.pie_cfg, self.stairs_patches,
+                      self.hist2d_meshes, self.hist2d_bars,
+                      self.pie_wedges, self.pie_texts):
+            if old in store:
+                store[new] = store.pop(old)
         if old in self.bar_containers:
             self.bar_containers[new] = self.bar_containers.pop(old)
         if f"hist_{old}" in self.bar_containers:
@@ -7159,6 +7768,15 @@ class PlotWindow(tk.Toplevel):
         columns = [str(one) for one in columns]
         if self.plot_style == "histogram":
             return columns, {}
+        if self.plot_style == "pie":
+            # one pie fills the whole plot area, so exactly one column is
+            # drawn: the first one that holds numbers.  The first column of
+            # the table names the slices, unless it is the only one there is.
+            candidates = columns[1:] or columns[:1]
+            for name in candidates:
+                if self.has_numbers(self.df, name):
+                    return [name], {}
+            return candidates[:1], {}
         if self.row_numbers_mode():
             return columns[:1], {}
         if len(columns) < 2:
@@ -7201,13 +7819,16 @@ class PlotWindow(tk.Toplevel):
         dialog = self._dialogs.pop(id(line), None)
         if dialog is not None and dialog.winfo_exists():
             dialog.destroy()
-        self._clear_bar(column)
-        self._clear_errorbar(column)
-        self._clear_histogram(column)
+        self.clear_extras(column)
         self.series_style.pop(column, None)
         self.bar_cfg.pop(column, None)
         self.error_cfg.pop(column, None)
         self.histogram_cfg.pop(column, None)
+        self.stairs_cfg.pop(column, None)
+        self.hist2d_cfg.pop(column, None)
+        self.pie_cfg.pop(column, None)
+        self.histogram_edges.pop(column, None)
+        self.histogram_drawn.discard(column)
         fill = self.fills.pop(column, None)
         if fill is not None:
             fill.remove()
@@ -7584,6 +8205,77 @@ class PlotWindow(tk.Toplevel):
                     f"label={lit(str(line.get_label()))})"
                 )
                 out.append(f"curves[{lit(str(column))}] = bars_{tag}")
+            elif st == "stairs":
+                s_cfg = self.stairs_cfg.get(column, {})
+                s_filled = bool(s_cfg.get("fill"))
+                s_color = store_color(s_cfg.get("color", line.get_color()))
+                s_base = (0.0 if (s_filled or s_cfg.get("baseline")) else None)
+                edges = self.stairs_edges(line.get_xdata(),
+                                          s_cfg.get("edges", "mid"))
+                out.append(f"edges_{tag} = {lit(edges)}")
+                out.append(
+                    f"bars_{tag} = {target}.stairs(np.nan_to_num("
+                    f"np.asarray(DATA[{lit(str(column))}], float), nan=0.0), "
+                    f"edges_{tag}, baseline={lit(s_base)}, fill={s_filled}, "
+                    f"color={lit(s_color)}, "
+                    f"linewidth={float(s_cfg.get('width', 1.8))}, "
+                    f"hatch={lit(s_cfg.get('hatch') or None)}, "
+                    f"label={lit(str(line.get_label()))})"
+                )
+                if s_filled:
+                    face = list(to_rgba(s_color,
+                                        float(s_cfg.get("alpha", 0.35))))
+                    out.append(f"bars_{tag}.set_alpha(None)")
+                    out.append(f"bars_{tag}.set_facecolor({lit(face)})")
+                    out.append(f"bars_{tag}.set_edgecolor({lit(s_color)})")
+                out.append(f"curves[{lit(str(column))}] = bars_{tag}")
+            elif st == "hist2d":
+                g_cfg = self.hist2d_cfg.get(column, {})
+                out.append(f"gx_{tag} = np.asarray({x_data}, float)")
+                out.append(f"gy_{tag} = np.asarray("
+                           f"DATA[{lit(str(column))}], float)")
+                out.append(f"ok_{tag} = np.isfinite(gx_{tag}) "
+                           f"& np.isfinite(gy_{tag})")
+                out.append(
+                    f"_counts, _xe, _ye, mesh_{tag} = {target}.hist2d("
+                    f"gx_{tag}[ok_{tag}], gy_{tag}[ok_{tag}], "
+                    f"bins=[{self.hist2d_bins(column, 'xbins')}, "
+                    f"{self.hist2d_bins(column, 'ybins')}], "
+                    f"cmap={lit(str(g_cfg.get('cmap', 'viridis')))}, "
+                    f"alpha={float(g_cfg.get('alpha', 1.0))}, "
+                    f"cmin={lit(1 if g_cfg.get('hide_empty', True) else None)})"
+                )
+                out.append(f"curves[{lit(str(column))}] = mesh_{tag}")
+                if g_cfg.get("colorbar"):
+                    out.append(f"cax_{tag} = {target}.inset_axes("
+                               f"[1.02, 0.0, 0.035, 1.0])")
+                    out.append(f"fig.colorbar(mesh_{tag}, cax=cax_{tag})")
+            elif st == "pie":
+                p_cfg = self.pie_cfg.get(column, {})
+                values, labels = self.pie_values(column)
+                colors = [list(to_rgba(one)) for one in
+                          self.slice_colors(p_cfg.get("cmap", "tab10"),
+                                            len(values))]
+                hole = max(0.0, min(float(p_cfg.get("hole", 0.0) or 0.0), 0.95))
+                explode = float(p_cfg.get("explode", 0.0) or 0.0)
+                percent = (f"%.{max(0, int(p_cfg.get('decimals', 1)))}f%%"
+                           if p_cfg.get("percent") else None)
+                out.append(f"vals_{tag} = {lit(values)}")
+                out.append(
+                    f"bars_{tag} = {target}.pie(vals_{tag}, "
+                    f"labels={lit(labels or None)}, colors={lit(colors)}, "
+                    f"startangle={float(p_cfg.get('start', PIE_START_ANGLE))}, "
+                    f"counterclock={bool(p_cfg.get('clockwise', True))}, "
+                    f"autopct={lit(percent)}, "
+                    f"explode={lit(([explode] + [0.0] * (len(values) - 1)) if explode else None)}, "
+                    f"textprops={{'fontsize': "
+                    f"{int(p_cfg.get('label_size', 11))}}}, "
+                    f"wedgeprops={{'width': {lit((1.0 - hole) if hole else None)}, "
+                    f"'edgecolor': {lit(store_color(p_cfg.get('edgecolor', '#ffffff')))}, "
+                    f"'linewidth': {float(p_cfg.get('edgewidth', 1.0))}}})[0]"
+                )
+                out.append(f"{target}.set_aspect('equal')")
+                out.append(f"curves[{lit(str(column))}] = bars_{tag}[0]")
             elif st == "histogram":
                 h_cfg = self.histogram_cfg.get(column, {})
                 h_alpha = float(h_cfg.get("alpha", 0.85))
@@ -7809,6 +8501,9 @@ class PlotWindow(tk.Toplevel):
                 "bar_cfg": dict(self.bar_cfg.get(y_col, {})),
                 "error_cfg": dict(self.error_cfg.get(y_col, {})),
                 "histogram_cfg": dict(self.histogram_cfg.get(y_col, {})),
+                "stairs_cfg": dict(self.stairs_cfg.get(y_col, {})),
+                "hist2d_cfg": dict(self.hist2d_cfg.get(y_col, {})),
+                "pie_cfg": dict(self.pie_cfg.get(y_col, {})),
                 "legend_pos": [float(state["pos"][0]), float(state["pos"][1])],
                 "legend_loc": state["loc"], "legend_size": int(state["size"]),
                 "legend_color": safe_hex(state.get("color", "#000000"), "#000000"),
@@ -7930,6 +8625,12 @@ class PlotWindow(tk.Toplevel):
                 self.error_cfg[column] = dict(entry["error_cfg"])
             if "histogram_cfg" in entry:
                 self.histogram_cfg[column] = dict(entry["histogram_cfg"])
+            if "stairs_cfg" in entry:
+                self.stairs_cfg[column] = dict(entry["stairs_cfg"])
+            if "hist2d_cfg" in entry:
+                self.hist2d_cfg[column] = dict(entry["hist2d_cfg"])
+            if "pie_cfg" in entry:
+                self.pie_cfg[column] = dict(entry["pie_cfg"])
             line.set_label(entry.get("label", line.get_label()))
             line.set_color(entry.get("color", line.get_color()))
             line.set_linestyle(entry.get("linestyle", line.get_linestyle()))
@@ -8024,6 +8725,16 @@ class PlotWindow(tk.Toplevel):
         # column is the only filled one - the row number of the table
         x_col = self.x_axis_name()
         self._auto_x_label = x_col
+        if self.plot_style == "pie":
+            # a pie has no axes: no label, no numbers, no frame lines, and
+            # it must stay round whatever the shape of the window
+            x_col = ""
+            self._auto_x_label = ""
+            for which in ("x", "y"):
+                self.axis_cfg[which] = {**self.axis_cfg[which], "label": "",
+                                        "label_on": False, "ticks_on": False}
+            plot_cfg = {**plot_cfg, "y_label": ""}
+            self.ax.set_aspect("equal")
         try:
             title = str(plot_cfg["title_template"]).format(x=x_col)
         except (KeyError, IndexError, ValueError):
@@ -8127,6 +8838,19 @@ class PlotWindow(tk.Toplevel):
         little sample really looks like what is in the diagram.
         """
         style = self.series_style.get(column, self.plot_style)
+        if style == "stairs":
+            patch = self.stairs_patches.get(column)
+            return patch if patch is not None else line
+        if style == "pie":
+            wedges = self.pie_wedges.get(column) or []
+            return wedges[0] if wedges else line
+        if style == "hist2d":
+            # a QuadMesh cannot be drawn in a legend box: a little patch of
+            # the middle colour of its scale stands for it
+            cfg = self.hist2d_cfg.get(column) or {}
+            colors = self.slice_colors(cfg.get("cmap", "viridis"), 3)
+            return Rectangle((0, 0), 1, 1, facecolor=colors[len(colors) // 2],
+                             edgecolor="none")
         if style == "bar":
             container = self.bar_containers.get(column)
         elif style == "histogram":
@@ -10475,6 +11199,22 @@ class PlotWindow(tk.Toplevel):
             if before != self.histogram_bins(column):
                 self._rescale()      # other bins, other counts and range
 
+        def set_stairs_cfg(cfg):
+            if column is not None:
+                self.stairs_cfg[column] = cfg
+                self.refresh_series_visuals(column)
+                self._rescale()      # other edges, other range
+
+        def set_hist2d_cfg(cfg):
+            if column is not None:
+                self.hist2d_cfg[column] = cfg
+                self.refresh_series_visuals(column)
+
+        def set_pie_cfg(cfg):
+            if column is not None:
+                self.pie_cfg[column] = cfg
+                self.refresh_series_visuals(column)
+
         def set_error_cfg(cfg):
             if column is not None:
                 self.error_cfg[column] = cfg
@@ -10496,6 +11236,12 @@ class PlotWindow(tk.Toplevel):
             on_bar_cfg=set_bar_cfg,
             histogram_cfg=self.histogram_cfg.get(column),
             on_histogram_cfg=set_histogram_cfg,
+            stairs_cfg=self.stairs_cfg.get(column),
+            on_stairs_cfg=set_stairs_cfg,
+            hist2d_cfg=self.hist2d_cfg.get(column),
+            on_hist2d_cfg=set_hist2d_cfg,
+            pie_cfg=self.pie_cfg.get(column),
+            on_pie_cfg=set_pie_cfg,
             error_cfg=self.error_cfg.get(column),
             on_error_cfg=set_error_cfg,
             available_columns=cols))
@@ -10609,7 +11355,7 @@ the only filled one** draws that column against the **row numbers**.
 
 | Button | What it does |
 | --- | --- |
-| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 6 styles. |
+| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 9 styles. |
 | Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
 | Add row (icon, split button) | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
 | Delete row (icon) | Deletes every row the highlighted block touches. |
@@ -10693,6 +11439,19 @@ an immediate action with a style menu:
     the diagram itself into a given number of bins (20 by default, set per
     curve in `Curve properties`). Every column is a sample of its own, and
     one single column is enough.
+  * **Stairs**: A stepped outline of the values (`ax.stairs`) - one flat
+    tread per point instead of a straight line between two of them. The
+    step may stand midway between two X values, at the X value itself or
+    just before it, and the staircase can be left open or filled with a
+    colour and a pattern.
+  * **2D Histogram**: The X/Y **pairs** counted in a grid of cells
+    (`ax.hist2d`): where the points crowd together the cell is brighter.
+    The number of bins across X and up Y, the colour scale, the opacity and
+    an optional colour bar are all settings of the curve.
+  * **Pie Chart**: The values of **one** column as slices of a circle
+    (`ax.pie`). The first column of the table names the slices, the
+    percentages can be written on them, and the pie may be turned, pulled
+    apart or opened into a doughnut.
 
 Selecting a style updates the button icon and immediately opens a diagram
 rendered in that style. Any curve's style can also be switched individually at
@@ -11618,9 +12377,22 @@ If the old behaviour is preferred, `Property windows always on top` in the
 ### Curve properties
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 6 styles: **Line + Symbol**,
-**Line**, **Scatter**, **Bar Chart**, **Error Bar**, and **Histogram**.  The
-dialog dynamically adapts its sections and options to match the active style.
+representation of any individual curve between all 9 styles: **Line + Symbol**,
+**Line**, **Scatter**, **Bar Chart**, **Error Bar**, **Histogram**,
+**Stairs**, **2D Histogram** and **Pie Chart**.  The dialog shows exactly
+the sections that style can use, and nothing else:
+
+| Style | Sections |
+| --- | --- |
+| Line + Symbol | Legend, Line, Marker, Fill under the curve |
+| Line | Legend, Line, Fill under the curve |
+| Scatter | Legend, Marker, Fill under the curve |
+| Bar Chart | Legend, Bar properties |
+| Error Bar | Legend, Marker, Line, Error bar properties |
+| Histogram | Legend, Histogram properties |
+| Stairs | Legend, Stairs properties |
+| 2D Histogram | Legend, 2D histogram properties |
+| Pie Chart | Legend, Pie properties |
 
 The dialog sections each have **their own check button as the title**: switched
 off, that part of the curve is simply not drawn.  The settings that belong
@@ -11636,8 +12408,10 @@ lines up cleanly.
   `Fill colour` next to it, and `Edge width` with `Edge colour` next to it.
 The **legend** of every kind of diagram shows what that diagram really
 looks like in front of the text: a line with its marker for a curve, a
-**coloured bar** for a bar chart and a histogram, and a marker with an
-**error bar** through it for an error bar plot.
+**coloured bar** for a bar chart and a histogram, a marker with an
+**error bar** through it for an error bar plot, the **staircase** itself for
+a stairs plot, one **slice** for a pie and a patch of the **colour scale**
+for a 2D histogram.
 
 * **Bar properties** (visible for Bar Charts):
   * `Width`: the width of the bars in X-axis data units.
@@ -11645,6 +12419,9 @@ looks like in front of the text: a line with its marker for a curve, a
   * `Edge width`: thickness of the bar outline.
   * `Bar colour` and `Edge colour`: independently selectable colours for the
     bar body and border.
+  * `Pattern`: a hatching over the colour - the same choice a filled area
+    has, which is what makes bars tell each other apart in a black and
+    white print.
   * *Tip:* Clicking any bar directly inside the diagram window opens this dialog.
 * **Histogram properties** (the same section, for Histograms): the bars of a
   histogram touch, so there is no width to set - the **number of bins** takes
@@ -11654,9 +12431,9 @@ looks like in front of the text: a line with its marker for a curve, a
     column again at once and the range follows the new counts.  Every
     histogram carries its own number of bins, and it is written into the
     `.aplt` file with the rest of the curve.
-  * `Opacity (0-1)`, `Edge width`, `Bar colour` and `Edge colour` work
-    exactly as they do for a bar chart (the edges start out white, which is
-    what separates bars that touch).
+  * `Opacity (0-1)`, `Edge width`, `Bar colour`, `Edge colour` and
+    `Pattern` work exactly as they do for a bar chart (the edges start out
+    white, which is what separates bars that touch).
 * **Error Bar properties** (visible for Error Bars):
   * `Source`: determines how error bars are calculated:
     * `Next column (x, mean, std)` **(default)**: the column standing right
@@ -11668,9 +12445,47 @@ looks like in front of the text: a line with its marker for a curve, a
     * `From column`: select any other column from the table to specify individual error values for each row.
   * `Value / Column`: sets the percentage or fixed value, or selects the error column.
   * `Cap width`: width of the horizontal end caps.
-  * `Line width`: thickness of the error bar stems and caps.
+  * `Line width`: thickness of the error bar stems.
+  * `Cap thickness`: how thick the end caps themselves are drawn.
   * `Colour`: colour of the error bars.
   * *Tip:* Clicking on any error bar stem or horizontal cap directly opens this dialog.
+* **Stairs properties** (visible for Stairs):
+  * The **place of the step** (a list at the top): midway between two X
+    values - every value is valid around its own X - or at the X value
+    itself, with the step after it or before it.
+  * `Line width` with the `Colour` of the staircase next to it.
+  * `Fill it` with `Opacity (0-1)` next to it: a filled staircase keeps a
+    crisp outline over a see-through face.
+  * `Pattern`: the same choice of hatchings a filled area has.
+  * `Close it down to the zero line`: an open staircase is a line and may
+    hang in the air; closed, it stands on zero like a bar chart.
+* **2D histogram properties** (visible for 2D Histograms):
+  * `Bins across X` and `Bins up Y`: the grid the pairs are counted into
+    (20 x 20 to begin with, up to 500 either way).
+  * `Colour scale`: 21 colour maps, from `Viridis` to `Greys`.
+  * `Opacity (0-1)` with a `Colour bar` switch next to it.  The colour bar
+    is drawn **beside the plot area, in axes of its own**, so it follows the
+    frame wherever it is dragged and never takes room away from the diagram.
+  * `Leave the empty cells white`: on (the default) a cell with nothing in
+    it is not painted at all, so the background stays visible; off, it is
+    painted with the lowest colour of the scale.
+* **Pie properties** (visible for Pie Charts):
+  * `Slice colours`: the colour map the slices are taken from - `Tab10` and
+    `Tab20` give distinct colours, the others a smooth scale.
+  * The **names of the slices** (a list): the text of the first column, the
+    row number, or nothing at all.
+  * `Start angle` (90 degrees is the top) with the `Edge colour` beside it.
+  * `Per cent` with `Decimals` beside it: the share written on every slice.
+  * `Hole (0-0.9)` turns the pie into a **doughnut**, `Text size` sets the
+    font of the names and the percentages.
+  * `Pull out the first` moves the first slice out of the circle, and
+    `Edge width` sets the line between the slices.
+  * `Go round anticlockwise` reverses the direction.
+  * Only **one** column can be a pie, and one pie fills the whole plot
+    area: the first ticked column with numbers in it is the one that is
+    drawn.  Empty cells and zeros are not slices, and a negative number is
+    taken by its size.  A pie has no axes at all - no numbers, no labels,
+    no frame lines - and it stays round whatever the shape of the window.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
   vertical, horizontal, crossed, circles, dots, stars and their dense
@@ -12859,7 +13674,7 @@ class App:
                 "The ticked columns hold no numbers to plot.\n"
                 "Type some values into the table first.")
             return False
-        if style != "histogram" and len(columns) < 2:
+        if style not in ("histogram", "pie") and len(columns) < 2:
             switched_off = [name for name in list(self.df.columns)[1:]
                             if PlotWindow.has_numbers(self.df, name)]
             if switched_off:

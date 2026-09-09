@@ -30,7 +30,7 @@ the only filled one** draws that column against the **row numbers**.
 
 | Button | What it does |
 | --- | --- |
-| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 6 styles. |
+| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 9 styles. |
 | Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
 | Add row (icon, split button) | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
 | Delete row (icon) | Deletes every row the highlighted block touches. |
@@ -114,6 +114,19 @@ an immediate action with a style menu:
     the diagram itself into a given number of bins (20 by default, set per
     curve in `Curve properties`). Every column is a sample of its own, and
     one single column is enough.
+  * **Stairs**: A stepped outline of the values (`ax.stairs`) - one flat
+    tread per point instead of a straight line between two of them. The
+    step may stand midway between two X values, at the X value itself or
+    just before it, and the staircase can be left open or filled with a
+    colour and a pattern.
+  * **2D Histogram**: The X/Y **pairs** counted in a grid of cells
+    (`ax.hist2d`): where the points crowd together the cell is brighter.
+    The number of bins across X and up Y, the colour scale, the opacity and
+    an optional colour bar are all settings of the curve.
+  * **Pie Chart**: The values of **one** column as slices of a circle
+    (`ax.pie`). The first column of the table names the slices, the
+    percentages can be written on them, and the pie may be turned, pulled
+    apart or opened into a doughnut.
 
 Selecting a style updates the button icon and immediately opens a diagram
 rendered in that style. Any curve's style can also be switched individually at
@@ -1039,9 +1052,22 @@ If the old behaviour is preferred, `Property windows always on top` in the
 ### Curve properties
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 6 styles: **Line + Symbol**,
-**Line**, **Scatter**, **Bar Chart**, **Error Bar**, and **Histogram**.  The
-dialog dynamically adapts its sections and options to match the active style.
+representation of any individual curve between all 9 styles: **Line + Symbol**,
+**Line**, **Scatter**, **Bar Chart**, **Error Bar**, **Histogram**,
+**Stairs**, **2D Histogram** and **Pie Chart**.  The dialog shows exactly
+the sections that style can use, and nothing else:
+
+| Style | Sections |
+| --- | --- |
+| Line + Symbol | Legend, Line, Marker, Fill under the curve |
+| Line | Legend, Line, Fill under the curve |
+| Scatter | Legend, Marker, Fill under the curve |
+| Bar Chart | Legend, Bar properties |
+| Error Bar | Legend, Marker, Line, Error bar properties |
+| Histogram | Legend, Histogram properties |
+| Stairs | Legend, Stairs properties |
+| 2D Histogram | Legend, 2D histogram properties |
+| Pie Chart | Legend, Pie properties |
 
 The dialog sections each have **their own check button as the title**: switched
 off, that part of the curve is simply not drawn.  The settings that belong
@@ -1057,8 +1083,10 @@ lines up cleanly.
   `Fill colour` next to it, and `Edge width` with `Edge colour` next to it.
 The **legend** of every kind of diagram shows what that diagram really
 looks like in front of the text: a line with its marker for a curve, a
-**coloured bar** for a bar chart and a histogram, and a marker with an
-**error bar** through it for an error bar plot.
+**coloured bar** for a bar chart and a histogram, a marker with an
+**error bar** through it for an error bar plot, the **staircase** itself for
+a stairs plot, one **slice** for a pie and a patch of the **colour scale**
+for a 2D histogram.
 
 * **Bar properties** (visible for Bar Charts):
   * `Width`: the width of the bars in X-axis data units.
@@ -1066,6 +1094,9 @@ looks like in front of the text: a line with its marker for a curve, a
   * `Edge width`: thickness of the bar outline.
   * `Bar colour` and `Edge colour`: independently selectable colours for the
     bar body and border.
+  * `Pattern`: a hatching over the colour - the same choice a filled area
+    has, which is what makes bars tell each other apart in a black and
+    white print.
   * *Tip:* Clicking any bar directly inside the diagram window opens this dialog.
 * **Histogram properties** (the same section, for Histograms): the bars of a
   histogram touch, so there is no width to set - the **number of bins** takes
@@ -1075,9 +1106,9 @@ looks like in front of the text: a line with its marker for a curve, a
     column again at once and the range follows the new counts.  Every
     histogram carries its own number of bins, and it is written into the
     `.aplt` file with the rest of the curve.
-  * `Opacity (0-1)`, `Edge width`, `Bar colour` and `Edge colour` work
-    exactly as they do for a bar chart (the edges start out white, which is
-    what separates bars that touch).
+  * `Opacity (0-1)`, `Edge width`, `Bar colour`, `Edge colour` and
+    `Pattern` work exactly as they do for a bar chart (the edges start out
+    white, which is what separates bars that touch).
 * **Error Bar properties** (visible for Error Bars):
   * `Source`: determines how error bars are calculated:
     * `Next column (x, mean, std)` **(default)**: the column standing right
@@ -1089,9 +1120,47 @@ looks like in front of the text: a line with its marker for a curve, a
     * `From column`: select any other column from the table to specify individual error values for each row.
   * `Value / Column`: sets the percentage or fixed value, or selects the error column.
   * `Cap width`: width of the horizontal end caps.
-  * `Line width`: thickness of the error bar stems and caps.
+  * `Line width`: thickness of the error bar stems.
+  * `Cap thickness`: how thick the end caps themselves are drawn.
   * `Colour`: colour of the error bars.
   * *Tip:* Clicking on any error bar stem or horizontal cap directly opens this dialog.
+* **Stairs properties** (visible for Stairs):
+  * The **place of the step** (a list at the top): midway between two X
+    values - every value is valid around its own X - or at the X value
+    itself, with the step after it or before it.
+  * `Line width` with the `Colour` of the staircase next to it.
+  * `Fill it` with `Opacity (0-1)` next to it: a filled staircase keeps a
+    crisp outline over a see-through face.
+  * `Pattern`: the same choice of hatchings a filled area has.
+  * `Close it down to the zero line`: an open staircase is a line and may
+    hang in the air; closed, it stands on zero like a bar chart.
+* **2D histogram properties** (visible for 2D Histograms):
+  * `Bins across X` and `Bins up Y`: the grid the pairs are counted into
+    (20 x 20 to begin with, up to 500 either way).
+  * `Colour scale`: 21 colour maps, from `Viridis` to `Greys`.
+  * `Opacity (0-1)` with a `Colour bar` switch next to it.  The colour bar
+    is drawn **beside the plot area, in axes of its own**, so it follows the
+    frame wherever it is dragged and never takes room away from the diagram.
+  * `Leave the empty cells white`: on (the default) a cell with nothing in
+    it is not painted at all, so the background stays visible; off, it is
+    painted with the lowest colour of the scale.
+* **Pie properties** (visible for Pie Charts):
+  * `Slice colours`: the colour map the slices are taken from - `Tab10` and
+    `Tab20` give distinct colours, the others a smooth scale.
+  * The **names of the slices** (a list): the text of the first column, the
+    row number, or nothing at all.
+  * `Start angle` (90 degrees is the top) with the `Edge colour` beside it.
+  * `Per cent` with `Decimals` beside it: the share written on every slice.
+  * `Hole (0-0.9)` turns the pie into a **doughnut**, `Text size` sets the
+    font of the names and the percentages.
+  * `Pull out the first` moves the first slice out of the circle, and
+    `Edge width` sets the line between the slices.
+  * `Go round anticlockwise` reverses the direction.
+  * Only **one** column can be a pie, and one pie fills the whole plot
+    area: the first ticked column with numbers in it is the one that is
+    drawn.  Empty cells and zeros are not slices, and a negative number is
+    taken by its size.  A pie has no axes at all - no numbers, no labels,
+    no frame lines - and it stays round whatever the shape of the window.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
   vertical, horizontal, crossed, circles, dots, stars and their dense
