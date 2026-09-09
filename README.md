@@ -574,6 +574,18 @@ The block is what the data operations work on:
 | `Delete` or `Backspace` | Empties the cells of the block. |
 | `Delete row` button | Removes every row of the block. |
 
+**Copying carries the values, not the formulas.**  What goes on the
+clipboard is what the cells **show**: copying a calculated column and
+pasting it somewhere else gives the numbers there, not the expressions
+behind them.  That is what makes it possible to hand a result to another
+program, or to freeze a calculated column into plain data.
+
+**An emptied cell is really empty.**  A cell that is **cut**, **cleared**
+(`Delete`) or **written over** with a pasted value loses the formula that
+stood in it, together with its value: it is not a calculated cell any more.
+Every other formula of the sheet is then worked out again at once, so a
+formula that read one of those cells shows its new result immediately.
+
 ### Leaving a gap in a curve
 
 An **empty cell is a gap, not a zero**: the curve is cut there instead of

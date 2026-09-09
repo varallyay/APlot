@@ -5743,6 +5743,19 @@ class DataTable(ttk.Frame):
         self.clipboard_append(text)
         return True
 
+    def forget_formulas(self, cells):
+        """A cell that was emptied or written over is not calculated any more.
+
+        The formula of such a cell has to go with its value.  Left behind,
+        it would put the old value back at the very next recalculation -
+        the column would look empty and come back from the dead as soon as
+        anything else in the sheet was touched.
+        """
+        gone = [key for key in self.cell_formulas if key in set(cells)]
+        for key in gone:
+            del self.cell_formulas[key]
+        return len(gone)
+
     def clear_block(self, _event=None):
         """Delete: empty every cell of the block.
 
@@ -5760,7 +5773,14 @@ class DataTable(ttk.Frame):
                 self.df.iat[row, col] = ""
                 if self.tree.exists(str(row)):
                     self.tree.set(str(row), column, "")
+        # the formulas of those cells are gone with their values, and what
+        # the rest of the sheet reads from them is worked out again
+        self.forget_formulas([(row, col) for row in range(r0, r1 + 1)
+                              for col in range(c0, c1 + 1)])
+        self.recalculate_all()
         self._changed()
+        self._update_formula_bar()
+        self._update_status_bar()
         return True
 
     def cut_block(self, _event=None):
@@ -5796,6 +5816,7 @@ class DataTable(ttk.Frame):
             else:
                 rows = rows[:len(self.df) - r0]
         columns = len(self.df.columns)
+        written = []
         for offset, line in enumerate(rows):
             row = r0 + offset
             if row >= len(self.df):
@@ -5814,6 +5835,10 @@ class DataTable(ttk.Frame):
                 if self.tree.exists(str(row)):
                     self.tree.set(str(row), column,
                                   "" if value == "" else str(value))
+                written.append((row, col))
+        # a pasted value replaces a formula that stood in that cell
+        self.forget_formulas(written)
+        self.recalculate_all()
         last_row = min(len(self.df) - 1, r0 + len(rows) - 1)
         last_col = min(columns - 1, c0 + max(len(line) for line in rows) - 1)
         self.select_block(r0, c0, last_row, last_col)
@@ -11898,6 +11923,18 @@ The block is what the data operations work on:
 | `Ctrl/Cmd+X` | Copies the block and empties it (inside a cell editor it cuts the selected text instead). |
 | `Delete` or `Backspace` | Empties the cells of the block. |
 | `Delete row` button | Removes every row of the block. |
+
+**Copying carries the values, not the formulas.**  What goes on the
+clipboard is what the cells **show**: copying a calculated column and
+pasting it somewhere else gives the numbers there, not the expressions
+behind them.  That is what makes it possible to hand a result to another
+program, or to freeze a calculated column into plain data.
+
+**An emptied cell is really empty.**  A cell that is **cut**, **cleared**
+(`Delete`) or **written over** with a pasted value loses the formula that
+stood in it, together with its value: it is not a calculated cell any more.
+Every other formula of the sheet is then worked out again at once, so a
+formula that read one of those cells shows its new result immediately.
 
 ### Leaving a gap in a curve
 
