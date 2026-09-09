@@ -70,8 +70,8 @@ buttons**, like `Plot`:
 * **Clicking the icon** inserts the row or column at the place the icon
   shows, measured from the **selected cell** (or from the highlighted
   block).  A new row pushes the rows below it down, a new column pushes
-  the columns on its right to the right, and the formulas stored in those
-  cells move with them.
+  the columns on its right to the right, and the formulas of those cells
+  move with them - **references and all**, see below.
 * **Clicking the arrow** opens the three places.  Choosing one does it
   right away **and** becomes the new default of the icon, so the next
   click repeats it.
@@ -141,6 +141,8 @@ live where they are needed and do not take room above the sheet.
   top cell's formula or value down across the selected block of rows,
   automatically adjusting relative row references (e.g. `=A1+B1` becomes
   `=A2+B2`, `=A3+B3`) while preserving absolute references (e.g. `$A$1`).
+  Pulled with the **black square**, two selected numbers make a series
+  instead of a copy - see `Pulling a series out of two numbers` below.
 * **Column Math**: `Column Math...` in the right click menu of a cell, or
   `Calculate Column '<name>'...` in the right click menu of a heading.  It
   calculates entire columns at once using presets or mathematical formulas.
@@ -149,11 +151,49 @@ live where they are needed and do not take room above the sheet.
 
 * **Interactive Fill Handle (black square)**:
   * When any cell or block of cells is selected, a solid black square handle appears at the bottom-right corner of the selection outline.
-  * **Click and Drag Down**: Pulling the black square down replicates the formula or value across the rows below, adjusting cell coordinates relatively row by row (e.g. `=A1+B1` becomes `=A2+B2`, `=A3+B3`), and immediately computes the results with real-time drag feedback outline.
-  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel.
+  * **Click and Drag Down**: Pulling the black square down carries the
+    selection on across the rows below, with a real-time feedback outline,
+    and computes the results at once.  What is written depends on what was
+    selected - a **series**, a **formula** or a **copy**; see the next
+    section.
+  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel - and if there is no neighbouring column with data, down to the last row of the sheet.
   * The handle is always **on top of the cell editor**, so it can be grabbed
     at once - also right after walking to the cell with the arrow keys,
     while the cell is still open for typing.
+
+#### Pulling a series out of two numbers
+
+Selecting **two or more cells** of a column before pulling the black square
+turns the fill handle into a **series generator**: the step is worked out
+from the numbers themselves and the series is continued for as many rows as
+the handle is pulled over.
+
+| Selected | Pulled down |
+| --- | --- |
+| `1` | `1, 1, 1, 1, ...` - one cell alone is copied, as before |
+| `1`, `3` | `5, 7, 9, 11, ...` - the difference is the step |
+| `10`, `8` | `6, 4, 2, 0, -2, ...` - a falling series counts down |
+| `0.5`, `0.75` | `1.0, 1.25, 1.5, ...` - fractions are exact |
+| `2`, `4`, `6` | `8, 10, 12, ...` - three or more cells work as well |
+
+* The step of **two** cells is simply their difference.  With **more** than
+  two it is their **average** difference, so an evenly spaced selection is
+  continued exactly and an uneven one carries on from the last value with
+  the average step.
+* **`Option`/`Alt`+double click** (or a plain double click) on the black
+  square writes the series all the way down: to the end of the data in the
+  neighbouring column, or to the last row of the sheet if there is none.
+* Every **column** of the selection decides for itself, so a block of two
+  rows and three columns pulled down gives three series with three
+  different steps.
+* Whole numbers stay whole (`1, 3, 5`, never `1.0, 3.0, 5.0`).
+* Anything that is **not a plain number** - a text, an empty cell - is
+  copied, exactly as it was before, and a **formula** is still replicated
+  with its row references moved along (`=A1*10` becomes `=A2*10`,
+  `=A3*10`, ...).
+* While the handle is being pulled, the **status bar** at the bottom says
+  what will be written: *"Series, step 2:  5, 7, 9, ...   (7 rows)"* or
+  *"Fill down: the value is copied into 3 more rows"*.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
@@ -206,7 +246,9 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
 * **Math & Statistics**: `SUM(range)`, `AVERAGE(range)` / `AVG(range)`,
   `COUNT(range)`, `MIN(...)`, `MAX(...)`, `ABS(x)`, `ROUND(x, decimals)`,
   `INT(x)`, `SQRT(x)`, `POWER(base, exp)`, `EXP(x)`, `LN(x)` / `LOG(x)`,
-  `LOG10(x)`, `MOD(n, d)`.
+  `LOG10(x)`, `LOG2(x)`, `MOD(n, d)`.  A function whose name ends in digits
+  is read as a function, never as a cell (`LOG10(A1)` is the base-10
+  logarithm of `A1`, not the cell `LOG10`).
 * **Trigonometry**: `SIN(x)`, `COS(x)`, `TAN(x)`, `ASIN(x)`, `ACOS(x)`,
   `ATAN(x)`, `DEGREES(rad)`, `RADIANS(deg)`, `PI()`.
 * **Constants**: `pi`, `e` and `tau` are numbers on their own, so they can be
@@ -227,8 +269,35 @@ error codes are displayed:
 * `#NAME?`: Unrecognized function or variable name.
 * `#CYCLE!`: Circular dependency detected between cells (e.g., `A1` depends on
   `B1` which depends back on `A1`).
-* `#REF!`: Cell reference outside table bounds.
+* `#REF!`: A cell reference outside the table - or one whose row or column
+  has been deleted.
 * `#VALUE!`: Incompatible operand types.
+
+#### The formulas follow the rows and columns that move
+
+A formula does not only live in a cell, it also **points** at cells, and
+inserting or deleting rows and columns moves both.  Every stored formula of
+the sheet is rewritten so that it goes on saying what it said before:
+
+* **Inserting a row** above row 14 turns `=log(A14)/log(10)` into
+  `=log(A15)/log(10)` - in the formula that moved down with that row and in
+  every other formula that referred to it.  A reference to a row **above**
+  the new one is left alone.
+* **Deleting rows** moves the references of the rows below them **up** by as
+  many rows as were removed; a reference to a row that is **gone** becomes
+  `#REF!`, so a broken calculation says so instead of quietly reading the
+  wrong cell.
+* **Inserting a column** in front of another shifts the letters: `=A1*100`
+  becomes `=B1*100`.  **Deleting** one shifts them back, and a reference to
+  the deleted column becomes `#REF!` as well.
+* Ranges move with everything else, so a new row inside `=SUM(A1:A5)` makes
+  it `=SUM(A1:A6)`.
+* This is what a spreadsheet does, and unlike **pulling a formula down**
+  (where `$A$1` stays put on purpose), a **fixed** reference moves here too:
+  `$A$14` becomes `$A$15`, because it is the values themselves that moved.
+* Whole columns of calculated cells therefore survive editing: pull
+  `=log(A1)/log(10)` down over a thousand rows, insert or delete rows
+  anywhere, and every cell still reads the value beside it.
 
 #### Status bar summary
 

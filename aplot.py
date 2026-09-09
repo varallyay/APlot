@@ -19,6 +19,8 @@ Spreadsheet window
   on a row number (1, 2, 3, ...) the whole row, the corner the whole table
 * the block is copied (Ctrl/Cmd+C), pasted (Ctrl/Cmd+V), cut (Ctrl/Cmd+X),
   emptied (Delete) and its rows deleted with one button
+* the black square of the selection pulls a value down as a copy, and two
+  or more selected numbers down as a series (1, 3 -> 5, 7, 9, ...)
 * empty cells break the curves instead of connecting over them, so a range
   of data can be plotted in separate pieces
 * "Plot" opens a new diagram, "Update plot" sends the edited values to the
@@ -2892,6 +2894,49 @@ def letter_to_col(letters: str) -> int:
 
 
 REF_PATTERN = re.compile(r'(\$?)([A-Za-z]+)(\$?)(\d+)')
+# a cell reference *inside a formula*: not a piece of a longer word, and not
+# the name of a function that happens to end in digits (log10, log2)
+CELL_IN_FORMULA = re.compile(
+    r'(?<![A-Za-z0-9_"\'])(\$?)([A-Za-z]+)(\$?)(\d+)'
+    r'(?![A-Za-z0-9_"\'])(?!\s*\()')
+# an error left in a formula by a deleted row or column
+BROKEN_REF = re.compile(r'#[A-Za-z]+[!?]')
+
+
+def renumber_formula_rows(formula: str, at_row: int, delta: int) -> str:
+    """Move the row references of a formula when rows come or go.
+
+    `at_row` is the **1-based** row where the change happens and `delta`
+    how many rows appear (positive) or disappear (negative).  A reference
+    to that row, or to one below it, moves with its data - the fixed ones
+    (`$A$14`) as well, because it is the values themselves that moved.  A
+    reference to a row that was deleted becomes `#REF!`.
+    """
+    def repl(match):
+        col_fixed, letters, row_fixed, digits = match.groups()
+        row = int(digits)
+        if row < at_row:
+            return match.group(0)
+        if delta < 0 and row < at_row - delta:
+            return "#REF!"
+        return f"{col_fixed}{letters}{row_fixed}{row + delta}"
+
+    return CELL_IN_FORMULA.sub(repl, formula)
+
+
+def renumber_formula_columns(formula: str, at_col: int, delta: int) -> str:
+    """The same for the columns; `at_col` is 0-based, as in the table."""
+    def repl(match):
+        col_fixed, letters, row_fixed, digits = match.groups()
+        index = letter_to_col(letters.upper())
+        if index < at_col:
+            return match.group(0)
+        if delta < 0 and index < at_col - delta:
+            return "#REF!"
+        return (f"{col_fixed}{col_to_letter(index + delta)}"
+                f"{row_fixed}{digits}")
+
+    return CELL_IN_FORMULA.sub(repl, formula)
 
 
 def adjust_formula_references(formula: str, delta_row: int, delta_col: int = 0) -> str:
@@ -2915,7 +2960,7 @@ def adjust_formula_references(formula: str, delta_row: int, delta_col: int = 0) 
         r_prefix = "$" if row_fixed else ""
         return f"{c_prefix}{new_col}{r_prefix}{new_row}"
 
-    return REF_PATTERN.sub(repl, formula)
+    return CELL_IN_FORMULA.sub(repl, formula)
 
 
 class FormulaEvaluator:
@@ -3011,6 +3056,11 @@ class FormulaEvaluator:
         if not s:
             return ""
 
+        # a reference that a deleted row or column has broken says so
+        broken = BROKEN_REF.search(s)
+        if broken:
+            return broken.group(0).upper()
+
         # Replace ^ with ** for power, and <> with !=
         s = s.replace("^", "**")
         s = s.replace("<>", "!=")
@@ -3025,9 +3075,10 @@ class FormulaEvaluator:
             c_letter = col_to_letter(c_idx)
             s = s.replace(f"[{c_name}]", f"{c_letter}{current_row + 1}")
 
-        # Replace single cell references with __cell__("A1")
-        token_cell_re = re.compile(r'(?<![A-Za-z0-9_"\'])(\$?[A-Za-z]+\$?\d+)(?![A-Za-z0-9_"\'])')
-        s = token_cell_re.sub(r'__cell__("\1")', s)
+        # Replace single cell references with __cell__("A1").  A function
+        # whose name ends in digits (log10, log2) is not a cell reference,
+        # so a name followed by "(" is left alone.
+        s = CELL_IN_FORMULA.sub(r'__cell__("\1\2\3\4")', s)
 
         # Parse AST
         try:
@@ -4276,9 +4327,32 @@ class DataTable(ttk.Frame):
         self._fill_target_row = target_r
         if target_r > r1:
             self._show_fill_feedback(r1 + 1, target_r, c0, c1)
+            self._show_fill_hint(r0, r1, c0, target_r)
         else:
             self._hide_fill_feedback()
+            self._update_status_bar()
         return "break"
+
+    def _show_fill_hint(self, r0, r1, column, target_r):
+        """Say in the status bar what pulling the handle down will write."""
+        if not hasattr(self, "status_label"):
+            return
+        rows = target_r - r1
+        step = self.series_step(r0, r1, column)
+        anchor = self.cell_number(r1, column)
+        if step is None or anchor is None:
+            self.status_label.configure(
+                text=f"Fill down: the value is copied into {rows} more "
+                     f"row{'s' if rows != 1 else ''}")
+            return
+        preview = ", ".join(
+            self._number_text(self.series_value(anchor, step, one))
+            for one in range(1, min(rows, 3) + 1))
+        if rows > 3:
+            preview += ", ..."
+        self.status_label.configure(
+            text=f"Series, step {self._number_text(step)}:  {preview}"
+                 f"   ({rows} row{'s' if rows != 1 else ''})")
 
     def _on_fill_release(self, _event=None):
         if not getattr(self, "_fill_dragging", False):
@@ -4290,9 +4364,11 @@ class DataTable(ttk.Frame):
         r0, c0, r1, c1 = self._fill_start_bounds
         target_r = getattr(self, "_fill_target_row", r1)
         if target_r > r1:
-            self._execute_fill_down(r1, target_r, c0, c1)
+            self._execute_fill_down(r1, target_r, c0, c1, first_r=r0)
             self.select_block(r0, c0, target_r, c1, anchor=(r0, c0), cursor=(target_r, c1))
             self.tree.see(str(target_r))
+        else:
+            self._update_status_bar()
         return "break"
 
     def _on_fill_double_click(self, _event=None):
@@ -4303,7 +4379,7 @@ class DataTable(ttk.Frame):
         r0, c0, r1, c1 = bounds
         target_r = self._find_neighbor_extent(r1, c0, c1)
         if target_r > r1:
-            self._execute_fill_down(r1, target_r, c0, c1)
+            self._execute_fill_down(r1, target_r, c0, c1, first_r=r0)
             self.select_block(r0, c0, target_r, c1, anchor=(r0, c0), cursor=(target_r, c1))
             self.tree.see(str(target_r))
         return "break"
@@ -4343,26 +4419,107 @@ class DataTable(ttk.Frame):
 
         return rows_count - 1
 
-    def _execute_fill_down(self, source_r, target_r, c0, c1):
-        """Replicate formula (with row adjustment) or value down from source_r to target_r."""
+    # -- a mathematical series instead of a copy ---------------------------
+    def cell_number(self, row, column):
+        """The value of one cell as a number, or None if it is not one."""
+        if not (0 <= row < len(self.df) and 0 <= column < len(self.df.columns)):
+            return None
+        value = self.df.iat[row, column]
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            number = float(value)
+        else:
+            text = str(value).strip()
+            if not text:
+                return None
+            number = to_float(text)
+        if number is None or not np.isfinite(number):
+            return None
+        return number
+
+    def series_step(self, r0, r1, column):
+        """The step of the numbers selected in one column, or None.
+
+        **Two or more numbers** in a column are read as a mathematical
+        series, and the step is their average difference - so 1 and 3 go on
+        as 5, 7, 9, ... and 10, 8 as 6, 4, 2, ...  Anything that is not a
+        plain number (a formula, a text, an empty cell) has no step: such a
+        cell is copied, exactly as before.
+        """
+        if r1 <= r0:
+            return None                # one single cell is copied
+        values = []
+        for row in range(r0, r1 + 1):
+            if (row, column) in self.cell_formulas:
+                return None            # a formula is carried on, not counted
+            number = self.cell_number(row, column)
+            if number is None:
+                return None
+            values.append(number)
+        if len(values) < 2:
+            return None
+        return (values[-1] - values[0]) / (len(values) - 1)
+
+    @staticmethod
+    def series_value(anchor, step, distance):
+        """The `distance`-th member of the series that follows `anchor`."""
+        anchor, step = float(anchor), float(step)
+        value = round(anchor + step * int(distance), 10)
+        if anchor.is_integer() and step.is_integer():
+            return int(round(value))
+        return value
+
+    @staticmethod
+    def _number_text(value):
+        """A number the way it is written into a cell."""
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{round(number, 10):g}"
+
+    def _set_cell_value(self, row, column, value):
+        """Write one value into the frame and into the row on the screen."""
+        name = self.df.columns[column]
+        try:
+            self.df.iat[row, column] = value
+        except (ValueError, TypeError):
+            self.df[name] = self.df[name].astype(object)
+            self.df.iat[row, column] = value
+        if self.tree.exists(str(row)):
+            try:
+                empty = value is None or pd.isna(value)
+            except (TypeError, ValueError):
+                empty = False
+            self.tree.set(str(row), name, "" if empty else str(value))
+
+    def _execute_fill_down(self, source_r, target_r, c0, c1, first_r=None):
+        """Carry the block on downwards, from `source_r` to `target_r`.
+
+        Every column decides for itself.  Two or more **numbers** selected
+        in it are a mathematical series and it is continued with their
+        step; a **formula** is replicated with its row references moved
+        along; anything else is simply copied - which is what a single
+        cell always does.
+        """
         for c in range(c0, c1 + 1):
+            step = None if first_r is None else self.series_step(first_r, source_r, c)
             source_formula = self.cell_formulas.get((source_r, c))
             source_val = self.df.iat[source_r, c]
+            anchor = self.cell_number(source_r, c) if step is not None else None
             col_name = self.df.columns[c]
             for r in range(source_r + 1, target_r + 1):
-                if source_formula is not None:
+                if step is not None:
+                    self.cell_formulas.pop((r, c), None)
+                    self._set_cell_value(
+                        r, c, self.series_value(anchor, step, r - source_r))
+                elif source_formula is not None:
                     delta_row = r - source_r
                     adj = adjust_formula_references(source_formula, delta_row=delta_row, delta_col=0)
                     self.cell_formulas[(r, c)] = adj
                 else:
                     self.cell_formulas.pop((r, c), None)
-                    try:
-                        self.df.iat[r, c] = copy.deepcopy(source_val)
-                    except (ValueError, TypeError):
-                        self.df[col_name] = self.df[col_name].astype(object)
-                        self.df.iat[r, c] = copy.deepcopy(source_val)
-                    if self.tree.exists(str(r)):
-                        self.tree.set(str(r), col_name, "" if pd.isna(source_val) else str(source_val))
+                    self._set_cell_value(r, c, copy.deepcopy(source_val))
 
         self.recalculate_all()
         self._changed()
@@ -4605,15 +4762,24 @@ class DataTable(ttk.Frame):
         return max(MIN_COLUMN_WIDTH, wanted)
 
     # -- data --------------------------------------------------------------
-    def set_dataframe(self, df, check_all=False, blank=False):
+    def set_dataframe(self, df, check_all=False, blank=False,
+                      keep_formulas=False):
         """Show a data frame; `check_all` ticks every column again.
 
         `blank` marks the empty sheet the program starts with: only that one
         grows more columns by itself when the window is made wider.  Data
         that was loaded or typed is never touched.
+
+        A new table also starts with **no stored formulas**: they belong to
+        the cells of the table that is being replaced, and left behind they
+        would overwrite the values that have just arrived.  The operations
+        that only reshape the same table (inserting a row, deleting a
+        column, sorting) pass `keep_formulas=True` and move them themselves.
         """
         self.df = df.reset_index(drop=True)
         self.df.columns = self._unique_columns(self.df.columns)
+        if not keep_formulas:
+            self.cell_formulas = {}
         self.auto_columns = bool(blank)
         self.refresh(check_all=check_all)
         if self.auto_columns:
@@ -4766,6 +4932,32 @@ class DataTable(ttk.Frame):
                               for (row, col), formula
                               in self.cell_formulas.items() if row in place}
 
+    def renumber_formulas(self, rows=None, columns=None):
+        """Rewrite the *text* of every formula after a move of the table.
+
+        Moving a formula to another cell is not enough: what it points at
+        has moved too.  Inserting a row above row 14 turns `=log(A14)` into
+        `=log(A15)` in every formula of the sheet - the one that moved down
+        with it and the ones that only refer to that row - so that every
+        formula goes on saying what it said before.
+
+        `rows` is `(1-based row, how many)` and `columns` `(0-based
+        column, how many)`; a negative count is a deletion, and a
+        reference to something that is gone becomes `#REF!`.
+        """
+        if not self.cell_formulas:
+            return False
+        moved = {}
+        for key, formula in self.cell_formulas.items():
+            text = str(formula)
+            if rows is not None and rows[1]:
+                text = renumber_formula_rows(text, rows[0], rows[1])
+            if columns is not None and columns[1]:
+                text = renumber_formula_columns(text, columns[0], columns[1])
+            moved[key] = text
+        self.cell_formulas = moved
+        return True
+
     def insert_row(self, at=None, focus=True):
         """Put one empty row at `at`; `None` appends it at the end.
 
@@ -4783,10 +4975,11 @@ class DataTable(ttk.Frame):
                              columns=self.df.columns)
         frame = pd.concat([self.df.iloc[:at], blank, self.df.iloc[at:]],
                           ignore_index=True)
-        self.shift_row_formulas(at, 1)
+        self.shift_row_formulas(at, 1)          # the cells they sit in
+        self.renumber_formulas(rows=(at + 1, 1))   # ... and what they read
         growing = getattr(self, "auto_columns", False)
         self.block = None
-        self.set_dataframe(frame, check_all=False)
+        self.set_dataframe(frame, check_all=False, keep_formulas=True)
         self.auto_columns = growing
         self.recalculate_all()
         column = max(0, min(column, len(self.df.columns) - 1))
@@ -4806,9 +4999,11 @@ class DataTable(ttk.Frame):
         at = max(0, int(at))
         self.df.insert(at, name, ["" for _ in range(len(self.df))])
         self.shift_column_formulas(at, 1)
+        self.renumber_formulas(columns=(at, 1))
         growing = getattr(self, "auto_columns", False)
         self.refresh()
         self.auto_columns = growing
+        self.recalculate_all()      # the formulas point one column further
         self.current_column = name
         self.select_cell(self.cursor[0] if self.cursor else 0, at)
         self._changed()
@@ -4826,10 +5021,12 @@ class DataTable(ttk.Frame):
         self.cell_formulas = {(row, col - 1 if col > at else col): formula
                               for (row, col), formula
                               in self.cell_formulas.items() if col != at}
+        self.renumber_formulas(columns=(at, -1))
         growing = getattr(self, "auto_columns", False)
         self.current_column = None
         self.block = None
-        self.set_dataframe(self.df.drop(columns=[name]), check_all=False)
+        self.set_dataframe(self.df.drop(columns=[name]), check_all=False,
+                           keep_formulas=True)
         self.auto_columns = growing
         self.recalculate_all()
         self.select_cell(self.cursor[0] if self.cursor else 0,
@@ -4841,7 +5038,12 @@ class DataTable(ttk.Frame):
         if index is None:
             return self.delete_selected_rows()
         self.block = None
-        self.set_dataframe(self.df.drop(index=index))
+        index = int(index)
+        self.remap_row_formulas([one for one in range(len(self.df))
+                                 if one != index])
+        self.renumber_formulas(rows=(index + 1, -1))
+        self.set_dataframe(self.df.drop(index=index), keep_formulas=True)
+        self.recalculate_all()
         return True
 
     def add_column(self, name):
@@ -5299,8 +5501,10 @@ class DataTable(ttk.Frame):
         keep = [index for index in range(len(self.df)) if index not in set(rows)]
         self.block = None
         self.remap_row_formulas(keep)      # the formulas follow their rows
+        # ... and what they read moves up with the rows below them
+        self.renumber_formulas(rows=(min(rows) + 1, -len(rows)))
         column = self.cursor[1] if self.cursor else 0
-        self.set_dataframe(self.df.iloc[keep])
+        self.set_dataframe(self.df.iloc[keep], keep_formulas=True)
         self.recalculate_all()
         first = min(rows)
         if len(self.df):
@@ -5693,7 +5897,8 @@ class DataTable(ttk.Frame):
             sorted_df = self.df.sort_values(by=col_name, ascending=ascending, kind='stable')
 
         self.remap_row_formulas(list(sorted_df.index))
-        self.set_dataframe(sorted_df.reset_index(drop=True), check_all=False)
+        self.set_dataframe(sorted_df.reset_index(drop=True),
+                           check_all=False, keep_formulas=True)
         self.recalculate_all()
         self._changed()
 
@@ -10444,8 +10649,8 @@ buttons**, like `Plot`:
 * **Clicking the icon** inserts the row or column at the place the icon
   shows, measured from the **selected cell** (or from the highlighted
   block).  A new row pushes the rows below it down, a new column pushes
-  the columns on its right to the right, and the formulas stored in those
-  cells move with them.
+  the columns on its right to the right, and the formulas of those cells
+  move with them - **references and all**, see below.
 * **Clicking the arrow** opens the three places.  Choosing one does it
   right away **and** becomes the new default of the icon, so the next
   click repeats it.
@@ -10515,6 +10720,8 @@ live where they are needed and do not take room above the sheet.
   top cell's formula or value down across the selected block of rows,
   automatically adjusting relative row references (e.g. `=A1+B1` becomes
   `=A2+B2`, `=A3+B3`) while preserving absolute references (e.g. `$A$1`).
+  Pulled with the **black square**, two selected numbers make a series
+  instead of a copy - see `Pulling a series out of two numbers` below.
 * **Column Math**: `Column Math...` in the right click menu of a cell, or
   `Calculate Column '<name>'...` in the right click menu of a heading.  It
   calculates entire columns at once using presets or mathematical formulas.
@@ -10523,11 +10730,49 @@ live where they are needed and do not take room above the sheet.
 
 * **Interactive Fill Handle (black square)**:
   * When any cell or block of cells is selected, a solid black square handle appears at the bottom-right corner of the selection outline.
-  * **Click and Drag Down**: Pulling the black square down replicates the formula or value across the rows below, adjusting cell coordinates relatively row by row (e.g. `=A1+B1` becomes `=A2+B2`, `=A3+B3`), and immediately computes the results with real-time drag feedback outline.
-  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel.
+  * **Click and Drag Down**: Pulling the black square down carries the
+    selection on across the rows below, with a real-time feedback outline,
+    and computes the results at once.  What is written depends on what was
+    selected - a **series**, a **formula** or a **copy**; see the next
+    section.
+  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel - and if there is no neighbouring column with data, down to the last row of the sheet.
   * The handle is always **on top of the cell editor**, so it can be grabbed
     at once - also right after walking to the cell with the arrow keys,
     while the cell is still open for typing.
+
+#### Pulling a series out of two numbers
+
+Selecting **two or more cells** of a column before pulling the black square
+turns the fill handle into a **series generator**: the step is worked out
+from the numbers themselves and the series is continued for as many rows as
+the handle is pulled over.
+
+| Selected | Pulled down |
+| --- | --- |
+| `1` | `1, 1, 1, 1, ...` - one cell alone is copied, as before |
+| `1`, `3` | `5, 7, 9, 11, ...` - the difference is the step |
+| `10`, `8` | `6, 4, 2, 0, -2, ...` - a falling series counts down |
+| `0.5`, `0.75` | `1.0, 1.25, 1.5, ...` - fractions are exact |
+| `2`, `4`, `6` | `8, 10, 12, ...` - three or more cells work as well |
+
+* The step of **two** cells is simply their difference.  With **more** than
+  two it is their **average** difference, so an evenly spaced selection is
+  continued exactly and an uneven one carries on from the last value with
+  the average step.
+* **`Option`/`Alt`+double click** (or a plain double click) on the black
+  square writes the series all the way down: to the end of the data in the
+  neighbouring column, or to the last row of the sheet if there is none.
+* Every **column** of the selection decides for itself, so a block of two
+  rows and three columns pulled down gives three series with three
+  different steps.
+* Whole numbers stay whole (`1, 3, 5`, never `1.0, 3.0, 5.0`).
+* Anything that is **not a plain number** - a text, an empty cell - is
+  copied, exactly as it was before, and a **formula** is still replicated
+  with its row references moved along (`=A1*10` becomes `=A2*10`,
+  `=A3*10`, ...).
+* While the handle is being pulled, the **status bar** at the bottom says
+  what will be written: *"Series, step 2:  5, 7, 9, ...   (7 rows)"* or
+  *"Fill down: the value is copied into 3 more rows"*.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
@@ -10580,7 +10825,9 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
 * **Math & Statistics**: `SUM(range)`, `AVERAGE(range)` / `AVG(range)`,
   `COUNT(range)`, `MIN(...)`, `MAX(...)`, `ABS(x)`, `ROUND(x, decimals)`,
   `INT(x)`, `SQRT(x)`, `POWER(base, exp)`, `EXP(x)`, `LN(x)` / `LOG(x)`,
-  `LOG10(x)`, `MOD(n, d)`.
+  `LOG10(x)`, `LOG2(x)`, `MOD(n, d)`.  A function whose name ends in digits
+  is read as a function, never as a cell (`LOG10(A1)` is the base-10
+  logarithm of `A1`, not the cell `LOG10`).
 * **Trigonometry**: `SIN(x)`, `COS(x)`, `TAN(x)`, `ASIN(x)`, `ACOS(x)`,
   `ATAN(x)`, `DEGREES(rad)`, `RADIANS(deg)`, `PI()`.
 * **Constants**: `pi`, `e` and `tau` are numbers on their own, so they can be
@@ -10601,8 +10848,35 @@ error codes are displayed:
 * `#NAME?`: Unrecognized function or variable name.
 * `#CYCLE!`: Circular dependency detected between cells (e.g., `A1` depends on
   `B1` which depends back on `A1`).
-* `#REF!`: Cell reference outside table bounds.
+* `#REF!`: A cell reference outside the table - or one whose row or column
+  has been deleted.
 * `#VALUE!`: Incompatible operand types.
+
+#### The formulas follow the rows and columns that move
+
+A formula does not only live in a cell, it also **points** at cells, and
+inserting or deleting rows and columns moves both.  Every stored formula of
+the sheet is rewritten so that it goes on saying what it said before:
+
+* **Inserting a row** above row 14 turns `=log(A14)/log(10)` into
+  `=log(A15)/log(10)` - in the formula that moved down with that row and in
+  every other formula that referred to it.  A reference to a row **above**
+  the new one is left alone.
+* **Deleting rows** moves the references of the rows below them **up** by as
+  many rows as were removed; a reference to a row that is **gone** becomes
+  `#REF!`, so a broken calculation says so instead of quietly reading the
+  wrong cell.
+* **Inserting a column** in front of another shifts the letters: `=A1*100`
+  becomes `=B1*100`.  **Deleting** one shifts them back, and a reference to
+  the deleted column becomes `#REF!` as well.
+* Ranges move with everything else, so a new row inside `=SUM(A1:A5)` makes
+  it `=SUM(A1:A6)`.
+* This is what a spreadsheet does, and unlike **pulling a formula down**
+  (where `$A$1` stays put on purpose), a **fixed** reference moves here too:
+  `$A$14` becomes `$A$15`, because it is the values themselves that moved.
+* Whole columns of calculated cells therefore survive editing: pull
+  `=log(A1)/log(10)` down over a thousand rows, insert or delete rows
+  anywhere, and every cell still reads the value beside it.
 
 #### Status bar summary
 
