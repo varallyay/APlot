@@ -8,8 +8,9 @@ Matplotlib.
 
 Spreadsheet window
 ------------------
-* toolbar: Plot / Update plot / Add row / Delete row / Add column /
-  Delete column / Settings
+* toolbar: Plot / Update plot / four coloured row and column icons (blue
+  adds, red deletes; the two adding ones are split buttons that insert
+  above/below and before/after the selected cell) / Settings
 * a check button above every column: only the ticked columns are plotted
   (a newly opened file starts with all of them ticked)
 * a highlighted block of cells: click and drag, Shift+click, Shift+arrows,
@@ -117,6 +118,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.colors import to_hex, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.legend import Legend
+from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Polygon, Rectangle
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
@@ -137,10 +139,11 @@ PLOT_STYLES = [
     ("Scatter", "scatter", "Discrete symbols/markers only"),
     ("Bar Chart", "bar", "Vertical bar chart"),
     ("Error Bar", "errorbar", "Points with vertical error bars and caps"),
-    ("Histogram", "histogram", "Frequency distribution bins"),
+    ("Histogram", "histogram", "Counts the values of a column into bins"),
 ]
 
 ERROR_SOURCES = [
+    ("Next column (x, mean, std)", "pair"),
     ("Percentage (%)", "percent"),
     ("Fixed value", "fixed"),
     ("Standard deviation", "std"),
@@ -246,7 +249,8 @@ BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
 BLOCK_LINE = 2              # thickness of the outline around the block
 AUTO_SCROLL_EDGE = 14       # pixels: how close to the border scrolling starts
 AUTO_SCROLL_MS = 55         # how often the table scrolls on during a drag
-CHECK_BAR_HEIGHT = 26       # the strip of "plot this column" check buttons
+CHECK_BAR_HEIGHT = 46       # the strip of "plot this column" check buttons and column letters
+ROW_HEADER_WIDTH = 48       # width of the line numbers column on the left side of the table
 # the two check buttons above every column of the table: they say which axis
 # that column belongs to.  The first column feeds one of the two X axes, all
 # the others one of the two Y axes - or none of them at all.
@@ -269,8 +273,14 @@ HORIZONTAL_SIDES = ("bottom", "top")
 TOOLTIP_DELAY = 250        # milliseconds before a hint pops up
 TOOLTIP_BACKGROUND = "#ffffe0"
 AXIS_CHECK_FONT = 10       # the x_B / x_T / y_L / y_R labels
+# the column letters (A, B, C, ...) and the row numbers share it
+HEADER_COLOR = "#1a5fb4"
 # a table column is never narrower than its two check buttons
 MIN_COLUMN_WIDTH = 104
+FILL_HANDLE_SIZE = 6       # the black square that pulls a selection down
+MAX_AUTO_COLUMNS = 64      # a blank sheet never grows past this
+HISTOGRAM_BINS = 20        # a histogram counts into this many bins by default
+MAX_HISTOGRAM_BINS = 1000  # ... and never into more than this
 CLIPBOARD_DPI = 200        # the picture put on the clipboard is a good one
 SCRIPT_SUFFIX = ".py"      # the diagram exported as a matplotlib program
 SPIN_WIDTH = 4             # characters in the little number boxes
@@ -288,15 +298,15 @@ PALETTE_FALLBACK = "#1f77b4"
 
 
 def names(table):
-    """Human readable names of a (name, code) table."""
-    return [name for name, _ in table]
+    """Human readable names of a (name, code, ...) table."""
+    return [row[0] for row in table]
 
 
 def code_of(table, name, default):
     """Matplotlib code belonging to a human readable name."""
-    for label, code in table:
-        if label == name:
-            return code
+    for row in table:
+        if row[0] == name:
+            return row[1]
     return default
 
 
@@ -306,16 +316,16 @@ def drawn_names(table):
     The curve dialog switches the line, the marker, the legend and the fill on
     and off with a check button, so "None" is not offered in the lists.
     """
-    return [name for name, code in table if str(code).lower() != "none"]
+    return [row[0] for row in table if str(row[1]).lower() != "none"]
 
 
 def name_of(table, code, default):
     """Human readable name belonging to a matplotlib code."""
     if code is None:
         code = "None"
-    for label, value in table:
-        if value == code:
-            return label
+    for row in table:
+        if row[1] == code:
+            return row[0]
     return default
 
 
@@ -1212,6 +1222,144 @@ class PlotSplitButton(tk.Canvas):
         self.create_polygon([ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3], fill="#000000", outline="#000000")
 
 
+class TableToolButton(tk.Canvas):
+    """Toolbar button of the spreadsheet, drawn as a small coloured icon.
+
+    `kind` is `"row"` or `"column"` and `action` is `"add"` or `"delete"`:
+    a **blue** icon adds, a **red** one deletes, and the band that is
+    painted shows *where* it happens.  When `on_menu` is given the button
+    is a **split button**: the icon does the thing its picture shows and
+    the little arrow opens the list of the places (before or after the
+    selected cell, or at the end of the sheet).
+
+    A tooltip under the pointer always spells the operation out in words.
+    """
+
+    ARROW_ZONE = 14
+    ICON_WIDTH = 38
+    HEIGHT = 26
+    ADD_COLOR = "#1a5fb4"           # blue: something is added
+    DELETE_COLOR = "#c01c28"        # red: something is removed
+    CELL_OUTLINE = "#8a8a8a"
+    CELL_FILL = "#ffffff"
+    HOVER = "#e5effa"
+
+    # which of the three bands of the icon is painted
+    TARGET_BAND = {"above": 0, "before": 0, "below": 2, "after": 2, "end": 2}
+
+    def __init__(self, master, kind="row", action="add", where=None,
+                 background=None, command=None, on_menu=None):
+        self.kind = kind
+        self.action = action
+        self.split = on_menu is not None
+        self._background = background or "#f0f0f0"
+        width = self.ICON_WIDTH + (self.ARROW_ZONE if self.split else 0)
+        super().__init__(master, width=width, height=self.HEIGHT,
+                         highlightthickness=1, highlightbackground="#b8b8b8",
+                         borderwidth=0, background=self._background,
+                         cursor="hand2")
+        self._width = width
+        self._command = command
+        self._on_menu = on_menu
+        self._hover_part = None
+        self.tooltip = Tooltip(self, "")
+        self.bind("<Button-1>", self._clicked)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
+        default = "below" if kind == "row" else "after"
+        self.set_where(where or default)
+
+    # -- what the icon shows -----------------------------------------------
+    def set_where(self, where):
+        """Remember the place the icon shows and say it in the tooltip."""
+        self.where = where
+        self.tooltip.set_text(self.describe())
+        self._redraw()
+
+    def describe(self):
+        """The words of the tooltip: what this button does."""
+        thing = "row" if self.kind == "row" else "column"
+        if self.action == "delete":
+            if self.kind == "row":
+                return ("Delete row: removes every row the selected cells "
+                        "touch, with their data")
+            return ("Delete column: removes the column of the selected "
+                    "cell, with its data")
+        places = {"above": "above the selected cell",
+                  "below": "below the selected cell",
+                  "before": "before (left of) the selected cell",
+                  "after": "after (right of) the selected cell",
+                  "end": ("at the end of the sheet" if self.kind == "row"
+                          else "at the right end of the sheet")}
+        return (f"Add {thing}: inserts an empty {thing} "
+                f"{places.get(self.where, '')} "
+                f"(the arrow chooses the place)")
+
+    # -- drawing ------------------------------------------------------------
+    def _redraw(self):
+        self.delete("all")
+        height = self.HEIGHT
+        split_x = self._width - self.ARROW_ZONE if self.split else self._width
+        if self._hover_part == "left":
+            self.create_rectangle(1, 1, split_x - 1, height - 1,
+                                  fill=self.HOVER, outline="")
+        elif self._hover_part == "right":
+            self.create_rectangle(split_x + 1, 1, self._width - 1, height - 1,
+                                  fill=self.HOVER, outline="")
+        if self.split:
+            self.create_line(split_x, 4, split_x, height - 4, fill="#c0c0c0")
+            ax, ay = split_x + self.ARROW_ZONE / 2, height / 2
+            self.create_polygon([ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3],
+                                fill="#000000", outline="#000000")
+
+        colour = self.ADD_COLOR if self.action == "add" else self.DELETE_COLOR
+        low, high = 3, height - 5                 # the little table: 3 bands
+        target = 1 if self.action == "delete" else \
+            self.TARGET_BAND.get(self.where, 2)
+        gap = 1.5
+        span = (high - low - 2 * gap) / 3.0
+        starts = [low + index * (span + gap) for index in range(3)]
+        if self.action == "add" and self.where == "end":
+            # the coloured band stands apart: the far end of the whole sheet
+            span = (high - low - 4 * gap) / 3.0
+            starts = [low, low + span + gap, high - span]
+        for index in range(3):
+            start, stop = starts[index], starts[index] + span
+            fill = colour if index == target else self.CELL_FILL
+            box = ((low, start, high, stop) if self.kind == "row"
+                   else (start, low, stop, high))
+            self.create_rectangle(*box, fill=fill, outline=self.CELL_OUTLINE,
+                                  width=1, tags="icon")
+
+        glyph = "+" if self.action == "add" else "×"
+        gx, gy = self.ICON_WIDTH - 9, height / 2
+        self.create_oval(gx - 6, gy - 6, gx + 6, gy + 6, fill=self.CELL_FILL,
+                         outline=colour, width=1, tags="icon")
+        self.create_text(gx, gy, text=glyph, fill=colour,
+                         font=("TkDefaultFont", 12, "bold"), tags="icon")
+
+    # -- behaviour ----------------------------------------------------------
+    def _on_motion(self, event):
+        part = ("right" if self.split and event.x >= self._width - self.ARROW_ZONE
+                else "left")
+        if part != self._hover_part:
+            self._hover_part = part
+            self._redraw()
+
+    def _on_leave(self, _event=None):
+        if self._hover_part is not None:
+            self._hover_part = None
+            self._redraw()
+
+    def _clicked(self, event):
+        if self.split and event.x >= self._width - self.ARROW_ZONE:
+            if self._on_menu:
+                self._on_menu(event)
+        elif self._command:
+            self._command()
+        return "break"
+
+
 class ToolDialog(tk.Toplevel):
     """Base class of the small property windows.
 
@@ -1639,6 +1787,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                  plot_style="line_symbol", on_plot_style=None,
                  bar_cfg=None, on_bar_cfg=None,
                  error_cfg=None, on_error_cfg=None,
+                 histogram_cfg=None, on_histogram_cfg=None,
                  available_columns=None):
         super().__init__(master, "Curve properties", on_close=on_close)
         self.line = line
@@ -1651,6 +1800,8 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.on_plot_style = on_plot_style
         self.bar_cfg = dict(bar_cfg or {})
         self.on_bar_cfg = on_bar_cfg
+        self.hist_cfg = dict(histogram_cfg or {})
+        self.on_histogram_cfg = on_histogram_cfg
         self.error_cfg = dict(error_cfg or {})
         self.on_error_cfg = on_error_cfg
         self.available_columns = list(available_columns or [])
@@ -1829,23 +1980,43 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.mwidth_var.trace_add("write", self._apply)
 
     def _build_bar_box(self, line_color):
+        """Bars: shared by the bar chart and the histogram.
+
+        The two differ in one field only: a bar chart has a width, while
+        the bars of a histogram touch and it is the **number of bins** that
+        can be set instead.  So the first line of the section carries
+        whichever of the two belongs to the style of this curve.
+        """
         box = ttk.LabelFrame(self.body, text="Bar properties", padding=8)
         self.bar_box = box
+        histogram = self.style_code() == "histogram"
+        # a histogram curve reads its colours from its own settings
+        source = self.hist_cfg if histogram else self.bar_cfg
         self.bar_width_var = tk.StringVar(value=str(self.bar_cfg.get("width", 0.8)))
-        self.bar_alpha_var = tk.StringVar(value=str(self.bar_cfg.get("alpha", 0.85)))
-        self.bar_edge_width_var = tk.StringVar(value=str(self.bar_cfg.get("edgewidth", 1.0)))
-        self.bar_color = ColorSwatch(box, self.bar_cfg.get("color", line_color),
+        self.hist_bins_var = tk.StringVar(
+            value=str(int(self.hist_cfg.get("bins", HISTOGRAM_BINS))))
+        self.bar_alpha_var = tk.StringVar(value=str(source.get("alpha", 0.85)))
+        self.bar_edge_width_var = tk.StringVar(value=str(source.get("edgewidth", 1.0)))
+        self.bar_color = ColorSwatch(box, source.get("color", line_color),
                                      command=lambda _c: self._apply())
-        self.bar_edge_color = ColorSwatch(box, self.bar_cfg.get("edgecolor", line_color),
-                                          command=lambda _c: self._apply())
+        self.bar_edge_color = ColorSwatch(
+            box, source.get("edgecolor", "#ffffff" if histogram else line_color),
+            command=lambda _c: self._apply())
 
-        self._pair(box, 0,
-                   "Width:",
-                   ttk.Spinbox(box, from_=0.05, to=10, increment=0.05,
-                               width=SPIN_WIDTH, textvariable=self.bar_width_var,
-                               command=self._apply),
+        self.bar_width_spin = ttk.Spinbox(
+            box, from_=0.05, to=10, increment=0.05, width=SPIN_WIDTH,
+            textvariable=self.bar_width_var, command=self._apply)
+        self._pair(box, 0, "Width:", self.bar_width_spin,
                    "Bar colour:", self.bar_color)
+        self.bar_width_label = box.grid_slaves(row=0, column=0)[0]
         self.bar_width_var.trace_add("write", self._apply)
+
+        # the number of bins takes the same place when this is a histogram
+        self.hist_bins_label = ttk.Label(box, text="Bins:")
+        self.hist_bins_spin = ttk.Spinbox(
+            box, from_=1, to=MAX_HISTOGRAM_BINS, increment=1, width=SPIN_WIDTH,
+            textvariable=self.hist_bins_var, command=self._apply)
+        self.hist_bins_var.trace_add("write", self._apply)
 
         self._pair(box, 1,
                    "Opacity (0-1):",
@@ -1866,9 +2037,9 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
     def _build_error_box(self, line_color):
         box = ttk.LabelFrame(self.body, text="Error bar properties", padding=8)
         self.error_box = box
-        err_type = self.error_cfg.get("type", "percent")
+        err_type = self.error_cfg.get("type", "pair")
         self.err_type_var = tk.StringVar(
-            value=name_of(ERROR_SOURCES, err_type, "Percentage (%)"))
+            value=name_of(ERROR_SOURCES, err_type, names(ERROR_SOURCES)[0]))
         self.err_val_var = tk.StringVar(value=str(self.error_cfg.get("value", 5.0)))
         self.err_col_var = tk.StringVar(value=str(self.error_cfg.get("column", "")))
         self.err_capsize_var = tk.StringVar(value=str(self.error_cfg.get("capsize", 4.0)))
@@ -1910,11 +2081,11 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.err_elinewidth_var.trace_add("write", self._apply)
 
     def _on_err_type_changed(self, _event=None):
-        src = code_of(ERROR_SOURCES, self.err_type_var.get(), "percent")
+        src = code_of(ERROR_SOURCES, self.err_type_var.get(), "pair")
         if src == "column":
             self._err_col_combo.configure(state="readonly")
             self._err_val_spin.configure(state="disabled")
-        elif src == "std":
+        elif src in ("std", "pair"):
             self._err_col_combo.configure(state="disabled")
             self._err_val_spin.configure(state="disabled")
         else:
@@ -1922,12 +2093,33 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             self._err_val_spin.configure(state="normal")
         self._apply()
 
+    def style_code(self):
+        """The plot style this curve is drawn with, as a code."""
+        return code_of(PLOT_STYLES, self.plot_style_var.get(), "line_symbol")
+
+    def _show_bar_fields(self, histogram):
+        """A histogram has a number of bins where a bar chart has a width."""
+        self.bar_box.configure(text="Histogram properties" if histogram
+                               else "Bar properties")
+        if histogram:
+            self.bar_width_label.grid_remove()
+            self.bar_width_spin.grid_remove()
+            self.hist_bins_label.grid(row=0, column=0, sticky="w",
+                                      padx=(0, 8), pady=3)
+            self.hist_bins_spin.grid(row=0, column=1, sticky="w", pady=3)
+        else:
+            self.hist_bins_label.grid_remove()
+            self.hist_bins_spin.grid_remove()
+            self.bar_width_label.grid()
+            self.bar_width_spin.grid()
+
     def _update_section_visibility(self):
-        st = code_of(PLOT_STYLES, self.plot_style_var.get(), "line_symbol")
+        st = self.style_code()
         for box in (self.line_box, self.marker_box, self.bar_box, self.error_box, self.fill_box):
             box.pack_forget()
 
         if st in ("bar", "histogram"):
+            self._show_bar_fields(st == "histogram")
             self.bar_box.pack(fill="x", pady=(10, 0))
         elif st == "errorbar":
             self.marker_box.pack(fill="x", pady=(10, 0))
@@ -1945,7 +2137,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             self.fill_box.pack(fill="x", pady=(10, 0))
 
     def _on_style_changed(self, _event=None):
-        st = code_of(PLOT_STYLES, self.plot_style_var.get(), "line_symbol")
+        st = self.style_code()
         if st == "line":
             self.line_on_var.set(True)
             self.marker_on_var.set(False)
@@ -2068,9 +2260,21 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                 "color": self.bar_color.color,
                 "edgecolor": self.bar_edge_color.color,
             })
+        if self.on_histogram_cfg:
+            # the same fields serve the histogram; only the number of bins
+            # is its own
+            self.on_histogram_cfg({
+                "bins": max(1, min(to_int(self.hist_bins_var.get(),
+                                          HISTOGRAM_BINS),
+                                   MAX_HISTOGRAM_BINS)),
+                "alpha": to_float(self.bar_alpha_var.get(), 0.85),
+                "edgewidth": to_float(self.bar_edge_width_var.get(), 1.0),
+                "color": self.bar_color.color,
+                "edgecolor": self.bar_edge_color.color,
+            })
         if self.on_error_cfg:
             self.on_error_cfg({
-                "type": code_of(ERROR_SOURCES, self.err_type_var.get(), "percent"),
+                "type": code_of(ERROR_SOURCES, self.err_type_var.get(), "pair"),
                 "value": to_float(self.err_val_var.get(), 5.0),
                 "column": self.err_col_var.get(),
                 "capsize": to_float(self.err_capsize_var.get(), 4.0),
@@ -2733,6 +2937,13 @@ class FormulaEvaluator:
         'median': lambda vals: float(sorted(vals)[len(vals)//2]) if len(vals) else 0.0,
     }
 
+    # names that stand for a number on their own, so that a formula such as
+    # =sin((B1+C1)+pi/6) means what it says
+    CONSTANTS = {'pi': math.pi, 'tau': math.tau, 'e': math.e}
+    # ... but a bare column letter always wins over a constant: in a sheet
+    # with five columns "e" is column E of the current row
+    LETTER_CONSTANTS = ('e',)
+
     def __init__(self, df: pd.DataFrame, cell_formulas: dict):
         self.df = df
         self.cell_formulas = cell_formulas
@@ -2851,16 +3062,25 @@ class FormulaEvaluator:
             return node.value
         elif isinstance(node, ast.Name):
             name = node.id.lower()
+            cols_lower = [str(c).lower() for c in self.df.columns]
+            # a constant used as a value (pi, e, tau) comes first, so that
+            # "pi/6" is a number and not the function pi() divided by six -
+            # unless the sheet really has a column of that name, or the
+            # letter is a column letter (E is column 5)
+            if name in self.CONSTANTS:
+                if name in cols_lower:
+                    return self.get_cell_value(current_row,
+                                               cols_lower.index(name))
+                if name in self.LETTER_CONSTANTS:
+                    c_idx = letter_to_col(name)
+                    if 0 <= c_idx < len(self.df.columns):
+                        return self.get_cell_value(current_row, c_idx)
+                return self.CONSTANTS[name]
             if name in self.SAFE_FUNCS:
                 return self.SAFE_FUNCS[name]
-            elif name == 'pi':
-                return math.pi
-            elif name == 'e':
-                return math.e
             elif name in ('true', 'false'):
                 return name == 'true'
             # If name is a column name or column letter, resolve for current row
-            cols_lower = [str(c).lower() for c in self.df.columns]
             if name in cols_lower:
                 c_idx = cols_lower.index(name)
                 return self.get_cell_value(current_row, c_idx)
@@ -3046,7 +3266,9 @@ class FormulaBar(ttk.Frame):
         self.entry.bind("<KP_Enter>", self._commit)
         self.entry.bind("<Escape>", self._cancel)
 
-        # Buttons: Commit (✓), Cancel (✕), Fill Down, Column Math
+        # Buttons: Commit (✓) and Cancel (✕).  Filling down and the column
+        # operations live on the keyboard (Ctrl/Cmd+D) and in the right
+        # click menus of the cells and the headings, where they belong.
         btn_commit = ttk.Button(self, text="✓", width=3, command=self._commit)
         btn_commit.pack(side="left", padx=(0, 2))
         Tooltip(btn_commit, "Accept formula (Enter)")
@@ -3054,14 +3276,6 @@ class FormulaBar(ttk.Frame):
         btn_cancel = ttk.Button(self, text="✕", width=3, command=self._cancel)
         btn_cancel.pack(side="left", padx=(0, 4))
         Tooltip(btn_cancel, "Cancel formula (Esc)")
-
-        btn_fill = ttk.Button(self, text="Fill Down", command=self._fill_down)
-        btn_fill.pack(side="left", padx=(0, 4))
-        Tooltip(btn_fill, "Fill formula/value down the selected block (Ctrl+D)")
-
-        btn_math = ttk.Button(self, text="Column Math...", command=self._math)
-        btn_math.pack(side="left")
-        Tooltip(btn_math, "Perform operations on columns (Column Math / Formulas)")
 
     def set_cell(self, address_str, formula_or_val):
         self.name_var.set(address_str)
@@ -3309,11 +3523,15 @@ class ColumnMathDialog(ToolDialog):
 class DataTable(ttk.Frame):
     """Treeview based table with in-place cell editing."""
 
-    def __init__(self, master, config: Config, on_change=None, on_rename=None):
+    def __init__(self, master, config: Config, on_change=None, on_rename=None,
+                 on_add_column=None, on_delete_column=None):
         super().__init__(master)
         self.config_obj = config
         self.on_change = on_change
         self.on_rename = on_rename
+        # the program adds and deletes columns (it asks for the name)
+        self.on_add_column = on_add_column
+        self.on_delete_column = on_delete_column
         self.df = pd.DataFrame()
         self.current_column = None      # column of the last clicked cell/heading
         self._editor = None
@@ -3324,6 +3542,18 @@ class DataTable(ttk.Frame):
         self.anchor = (0, 0)            # where Shift+arrows measure from
         self.cursor = (0, 0)            # the cell the keyboard works on
         self._outline = []              # the four frames around the block
+        self._fill_handle = None        # black square at bottom-right corner of selection
+        # the blank starting sheet grows columns to fill the window
+        self.auto_columns = False
+        self._grow_timer = None
+        self._fill_feedback = []        # 4 thin frames indicating fill extent
+        self._fill_dragging = False
+        self._fill_start_bounds = None
+        self._fill_target_row = None
+        self._fill_auto_scroll_timer = None
+        self._row_selecting = False
+        self._row_press = None
+        self._col_labels: dict = {}     # column name -> ttk.Label for column letter (A, B, C...)
         self._selecting = False         # a block is being dragged out
         self._press = None              # (x, cell) of the press that started it
         self._text_dragging = False     # the pointer is selecting cell text
@@ -3334,6 +3564,34 @@ class DataTable(ttk.Frame):
         self.tree = ttk.Treeview(self, show="headings", selectmode="none",
                                  style="APlot.Treeview", takefocus=True)
         self.tree.tag_configure("block", background=BLOCK_TINT)
+
+        # Row line numbers (1, 2, 3...) at the left side of the spreadsheet panel
+        self.corner_box = tk.Frame(self, width=ROW_HEADER_WIDTH,
+                                   height=CHECK_BAR_HEIGHT,
+                                   relief="groove", borderwidth=1,
+                                   cursor="hand2")
+        self.corner_box.grid_propagate(False)
+        self.corner_box_label = ttk.Label(self.corner_box, text="◢", foreground="#888888",
+                                          font=("TkDefaultFont", 8))
+        self.corner_box_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.corner_box.bind("<Button-1>", lambda _e: self.select_all_cells())
+        self.corner_box_label.bind("<Button-1>", lambda _e: self.select_all_cells())
+
+        self.row_tree = ttk.Treeview(self, show="headings", selectmode="none",
+                                     style="APlot.RowHeader.Treeview", takefocus=False)
+        self.row_tree["columns"] = ("#",)
+        self.row_tree.heading("#", text="#", anchor="center", command=self.select_all_cells)
+        self.row_tree.column("#", width=ROW_HEADER_WIDTH, minwidth=ROW_HEADER_WIDTH,
+                             stretch=False, anchor="center")
+        self.row_tree.tag_configure("active_row", background="#d0e2fb", foreground="#000000")
+
+        self.row_tree.bind("<Button-1>", self._on_row_tree_click)
+        self.row_tree.bind("<B1-Motion>", self._on_row_tree_drag)
+        self.row_tree.bind("<ButtonRelease-1>", self._on_row_tree_release)
+        self.row_tree.bind("<MouseWheel>", self._on_row_tree_wheel)
+        self.row_tree.bind("<Button-4>", self._on_row_tree_wheel)
+        self.row_tree.bind("<Button-5>", self._on_row_tree_wheel)
+
         v_scroll = ttk.Scrollbar(self, orient="vertical", command=self._yview)
         h_scroll = ttk.Scrollbar(self, orient="horizontal", command=self._xview)
         self.tree.configure(yscrollcommand=self._y_scrolled,
@@ -3345,29 +3603,34 @@ class DataTable(ttk.Frame):
                                       on_cancel=self._formula_bar_cancel,
                                       on_fill_down=self.fill_down,
                                       on_math=self.open_column_math)
-        self.formula_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
+        self.formula_bar.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
 
-        # one check button per column, above the headings
+        # Corner box above row numbers, and check bar above column data
+        self.corner_box.grid(row=1, column=0, sticky="nsew")
         self.check_bar = tk.Frame(self, height=CHECK_BAR_HEIGHT)
-        self.check_bar.grid(row=1, column=0, sticky="ew")
+        self.check_bar.grid(row=1, column=1, sticky="ew")
         self.check_bar.grid_propagate(False)
+
         # column name -> {"B"/"T" or "L"/"R": BooleanVar} and the two widgets
         self.axis_vars: dict = {}
         self._checks: dict = {}
 
-        self.tree.grid(row=2, column=0, sticky="nsew")
-        v_scroll.grid(row=2, column=1, sticky="ns")
-        h_scroll.grid(row=3, column=0, sticky="ew")
+        self.row_tree.grid(row=2, column=0, sticky="ns")
+        self.tree.grid(row=2, column=1, sticky="nsew")
+        v_scroll.grid(row=2, column=2, sticky="ns")
+        h_scroll.grid(row=3, column=1, sticky="ew")
 
         # Summary status bar at the bottom (Sum, Average, Count, Min, Max)
         self.status_bar = ttk.Frame(self)
-        self.status_bar.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        self.status_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2, 0))
         self.status_label = ttk.Label(self.status_bar, text="", foreground="#444",
                                       font=("TkDefaultFont", 9))
         self.status_label.pack(side="left", padx=4)
 
         self.rowconfigure(2, weight=1)
-        self.columnconfigure(0, weight=1)
+        self.columnconfigure(0, weight=0)
+        self.columnconfigure(1, weight=1)
+        self.columnconfigure(2, weight=0)
 
         self.tree.bind("<Button-1>", self._on_click)
         self.tree.bind("<Shift-Button-1>", self._on_shift_click)
@@ -3391,20 +3654,16 @@ class DataTable(ttk.Frame):
         return "x" if index == 0 else "y"
 
     def _build_checks(self, check_all=False):
-        """Two check buttons per column, in the strip above the headings.
-
-        Above the first column they read `x_B` and `x_T` - the bottom and the
-        top X axis - and exactly one of them is always ticked.  Above every
-        other column they read `y_L` and `y_R`: the left and the right Y
-        axis.  There at most one can be ticked, and both may be empty when
-        the column is not plotted at all.
-        """
+        """Two check buttons and column letters per column, in the strip above the headings."""
         wanted = [str(name) for name in self.df.columns]
         previous = {name: self.column_axis(name) for name in self.axis_vars}
         for widgets in self._checks.values():
             for widget in widgets.values():
                 widget.destroy()
         self._checks.clear()
+        for lbl in getattr(self, "_col_labels", {}).values():
+            lbl.destroy()
+        self._col_labels = {}
         self.axis_vars = {}
         for index, name in enumerate(wanted):
             family = self._axis_family(index)
@@ -3427,6 +3686,12 @@ class DataTable(ttk.Frame):
                 widgets[code] = check
             self.axis_vars[name] = variables
             self._checks[name] = widgets
+
+            c_letter = col_to_letter(index)
+            lbl = ttk.Label(self.check_bar, text=c_letter,
+                            font=("TkDefaultFont", 10, "bold"),
+                            foreground=HEADER_COLOR)
+            self._col_labels[name] = lbl
         self._place_checks()
 
     def _axis_clicked(self, name, code):
@@ -3445,7 +3710,7 @@ class DataTable(ttk.Frame):
         self._changed()
 
     def _place_checks(self):
-        """Put the two check buttons of every column over its middle."""
+        """Put the two check buttons of every column over its middle, and column letter below."""
         if not self._checks:
             return
         rows = self.tree.get_children()
@@ -3464,18 +3729,24 @@ class DataTable(ttk.Frame):
             if not box:
                 box = self._column_span(index)
             pair = list(widgets.values())
+            lbl = getattr(self, "_col_labels", {}).get(name)
             if box is None:
                 for check in pair:
                     check.place_forget()
+                if lbl:
+                    lbl.place_forget()
                 continue
             x = offset + box[0] + box[2] / 2
             if x < 0 or (width and x > width):
                 for check in pair:
                     check.place_forget()
+                if lbl:
+                    lbl.place_forget()
                 continue
-            middle = CHECK_BAR_HEIGHT // 2
-            pair[0].place(x=int(x) - 2, y=middle, anchor="e")
-            pair[1].place(x=int(x) + 2, y=middle, anchor="w")
+            pair[0].place(x=int(x) - 2, y=12, anchor="e")
+            pair[1].place(x=int(x) + 2, y=12, anchor="w")
+            if lbl:
+                lbl.place(x=int(x), y=32, anchor="center")
 
     def _column_span(self, index):
         """(x, y, width, height) of one column when no row is visible."""
@@ -3546,10 +3817,15 @@ class DataTable(ttk.Frame):
                 sides[name] = Y_SIDES[code]
         return {"x": x_name, "x_side": x_side, "y": sides}
 
-    def plot_dataframe(self):
-        """The data of the ticked columns only."""
+    def plot_dataframe(self, least=2):
+        """The data of the ticked columns only.
+
+        `least` is how many columns the diagram needs: two for a curve (X
+        and Y), but only one for a histogram, which counts a single column
+        of raw values by itself.
+        """
         columns = self.plot_columns()
-        if len(columns) < 2:
+        if len(columns) < max(1, int(least)):
             return self.df.iloc[:, :0]
         return self.df[columns].copy()
 
@@ -3757,6 +4033,14 @@ class DataTable(ttk.Frame):
             wanted = ("block",) if int(item) in rows else ()
             if tuple(self.tree.item(item, "tags")) != wanted:
                 self.tree.item(item, tags=wanted)
+
+        if hasattr(self, "row_tree"):
+            active_rows = set(range(bounds[0], bounds[2] + 1)) if bounds is not None else set()
+            for item in self.row_tree.get_children():
+                wanted = ("active_row",) if int(item) in active_rows else ()
+                if tuple(self.row_tree.item(item, "tags")) != wanted:
+                    self.row_tree.item(item, tags=wanted)
+
         self._refresh_outline()
 
     def _outline_frames(self):
@@ -3768,13 +4052,28 @@ class DataTable(ttk.Frame):
     def _hide_outline(self):
         for frame in self._outline:
             frame.place_forget()
+        if hasattr(self, "_fill_handle") and self._fill_handle is not None:
+            self._fill_handle.place_forget()
+        self._hide_fill_feedback()
 
     def _layout_changed(self):
         self._refresh_outline()
         self._place_checks()
+        if getattr(self, "auto_columns", False):
+            # the window became wider: a blank sheet fills it with columns
+            if self._grow_timer is not None:
+                try:
+                    self.after_cancel(self._grow_timer)
+                except tk.TclError:
+                    pass
+            self._grow_timer = self.after(60, self._grow_now)
+
+    def _grow_now(self):
+        self._grow_timer = None
+        self.grow_columns_to_fit()
 
     def _refresh_outline(self):
-        """Draw the blue rectangle around the visible part of the block."""
+        """Draw the blue rectangle around the visible part of the block and the fill handle."""
         bounds = self.block_bounds()
         if bounds is None or not self.tree.get_children():
             self._hide_outline()
@@ -3802,6 +4101,31 @@ class DataTable(ttk.Frame):
         left.place(x=x0, y=y0, width=BLOCK_LINE, height=height)
         right.place(x=x1 - BLOCK_LINE, y=y0, width=BLOCK_LINE, height=height)
 
+        # Black square fill handle at the bottom-right corner of the selection
+        handle = self._get_fill_handle()
+        handle.place(x=x1 - 4, y=y1 - 4,
+                     width=FILL_HANDLE_SIZE, height=FILL_HANDLE_SIZE)
+        self._lift_overlays()
+
+    def _lift_overlays(self):
+        """Keep the fill handle above the cell editor.
+
+        The editor of a cell is a child of the table too, and it is built
+        after the outline, so without this it would lie on top of the black
+        fill handle - the pointer would reach the text field instead of the
+        handle, and the selection could not be pulled down any more.
+
+        Only the handle is raised, never the blue frames: those carry no
+        binding of their own, so above the editor they would only make a
+        two pixel dead border around the text.
+        """
+        handle = getattr(self, "_fill_handle", None)
+        if handle is not None:
+            try:
+                handle.lift()
+            except tk.TclError:
+                pass
+
     def _visible_cell(self, row, other, col, from_bottom=False):
         """bbox of a cell, walking towards `other` until one is on screen."""
         step = -1 if row > other else 1
@@ -3815,9 +4139,246 @@ class DataTable(ttk.Frame):
                 return None
             current += step
 
+    # -- fill handle interaction -------------------------------------------
+    def _get_fill_handle(self):
+        if not hasattr(self, "_fill_handle") or self._fill_handle is None:
+            self._fill_handle = tk.Frame(self.tree, background="#000000", cursor="crosshair")
+            self._fill_handle.bind("<Button-1>", self._on_fill_press)
+            self._fill_handle.bind("<B1-Motion>", self._on_fill_drag)
+            self._fill_handle.bind("<ButtonRelease-1>", self._on_fill_release)
+            self._fill_handle.bind("<Double-Button-1>", self._on_fill_double_click)
+            self._fill_handle.bind("<Alt-Double-Button-1>", self._on_fill_double_click)
+        return self._fill_handle
+
+    def _get_fill_feedback(self):
+        if not hasattr(self, "_fill_feedback") or not self._fill_feedback:
+            self._fill_feedback = [tk.Frame(self.tree, background="#555555")
+                                   for _ in range(4)]
+        return self._fill_feedback
+
+    def _show_fill_feedback(self, r0, r1, c0, c1):
+        first = self._visible_cell(r0, r1, c0)
+        last = self._visible_cell(r1, r0, c1, from_bottom=True)
+        if first is None or last is None:
+            self._hide_fill_feedback()
+            return
+        x0, y0 = first[0], first[1]
+        x1 = last[0] + last[2]
+        y1 = last[1] + last[3]
+        if x1 <= x0 or y1 <= y0:
+            self._hide_fill_feedback()
+            return
+        frames = self._get_fill_feedback()
+        w, h = x1 - x0, y1 - y0
+        frames[0].place(x=x0, y=y0, width=w, height=1)
+        frames[1].place(x=x0, y=y1 - 1, width=w, height=1)
+        frames[2].place(x=x0, y=y0, width=1, height=h)
+        frames[3].place(x=x1 - 1, y=y0, width=1, height=h)
+
+    def _hide_fill_feedback(self):
+        if hasattr(self, "_fill_feedback") and self._fill_feedback:
+            for f in self._fill_feedback:
+                f.place_forget()
+
+    def _on_fill_press(self, event):
+        self._commit_edit()
+        bounds = self.block_bounds()
+        if bounds is None:
+            return "break"
+        self._fill_dragging = True
+        self._fill_start_bounds = bounds
+        self._fill_target_row = bounds[2]
+        self._show_fill_feedback(bounds[2], bounds[2], bounds[1], bounds[3])
+        return "break"
+
+    def _on_fill_drag(self, event):
+        if not getattr(self, "_fill_dragging", False):
+            return "break"
+        try:
+            tree_y = event.y_root - self.tree.winfo_rooty()
+        except (tk.TclError, AttributeError):
+            tree_y = event.y
+
+        row_id = self.tree.identify_row(tree_y)
+        r0, c0, r1, c1 = self._fill_start_bounds
+        if row_id and self.tree.exists(row_id):
+            target_r = max(r1, int(row_id))
+        else:
+            if tree_y > self.tree.winfo_height() - 10:
+                target_r = min(len(self.df) - 1, self._fill_target_row + 1)
+                self._start_fill_auto_scroll()
+            else:
+                target_r = self._fill_target_row
+
+        self._fill_target_row = target_r
+        if target_r > r1:
+            self._show_fill_feedback(r1 + 1, target_r, c0, c1)
+        else:
+            self._hide_fill_feedback()
+        return "break"
+
+    def _on_fill_release(self, _event=None):
+        if not getattr(self, "_fill_dragging", False):
+            return "break"
+        self._stop_fill_auto_scroll()
+        self._hide_fill_feedback()
+        self._fill_dragging = False
+
+        r0, c0, r1, c1 = self._fill_start_bounds
+        target_r = getattr(self, "_fill_target_row", r1)
+        if target_r > r1:
+            self._execute_fill_down(r1, target_r, c0, c1)
+            self.select_block(r0, c0, target_r, c1, anchor=(r0, c0), cursor=(target_r, c1))
+            self.tree.see(str(target_r))
+        return "break"
+
+    def _on_fill_double_click(self, _event=None):
+        self._commit_edit()
+        bounds = self.block_bounds()
+        if bounds is None:
+            return "break"
+        r0, c0, r1, c1 = bounds
+        target_r = self._find_neighbor_extent(r1, c0, c1)
+        if target_r > r1:
+            self._execute_fill_down(r1, target_r, c0, c1)
+            self.select_block(r0, c0, target_r, c1, anchor=(r0, c0), cursor=(target_r, c1))
+            self.tree.see(str(target_r))
+        return "break"
+
+    def _find_neighbor_extent(self, r1, c0, c1):
+        """Find how far down adjacent columns have non-empty data."""
+        rows_count = len(self.df)
+        if rows_count <= r1 + 1:
+            return r1
+
+        left_c = c0 - 1
+        left_extent = r1
+        if left_c >= 0:
+            r = r1 + 1
+            while r < rows_count:
+                val = self.df.iat[r, left_c]
+                if pd.isna(val) or str(val).strip() == "":
+                    break
+                left_extent = r
+                r += 1
+
+        right_c = c1 + 1
+        right_extent = r1
+        if right_c < len(self.df.columns):
+            r = r1 + 1
+            while r < rows_count:
+                val = self.df.iat[r, right_c]
+                if pd.isna(val) or str(val).strip() == "":
+                    break
+                right_extent = r
+                r += 1
+
+        if left_extent > r1:
+            return left_extent
+        if right_extent > r1:
+            return right_extent
+
+        return rows_count - 1
+
+    def _execute_fill_down(self, source_r, target_r, c0, c1):
+        """Replicate formula (with row adjustment) or value down from source_r to target_r."""
+        for c in range(c0, c1 + 1):
+            source_formula = self.cell_formulas.get((source_r, c))
+            source_val = self.df.iat[source_r, c]
+            col_name = self.df.columns[c]
+            for r in range(source_r + 1, target_r + 1):
+                if source_formula is not None:
+                    delta_row = r - source_r
+                    adj = adjust_formula_references(source_formula, delta_row=delta_row, delta_col=0)
+                    self.cell_formulas[(r, c)] = adj
+                else:
+                    self.cell_formulas.pop((r, c), None)
+                    try:
+                        self.df.iat[r, c] = copy.deepcopy(source_val)
+                    except (ValueError, TypeError):
+                        self.df[col_name] = self.df[col_name].astype(object)
+                        self.df.iat[r, c] = copy.deepcopy(source_val)
+                    if self.tree.exists(str(r)):
+                        self.tree.set(str(r), col_name, "" if pd.isna(source_val) else str(source_val))
+
+        self.recalculate_all()
+        self._changed()
+        self._update_formula_bar()
+        self._update_status_bar()
+        self._refresh_outline()
+
+    def _start_fill_auto_scroll(self):
+        if getattr(self, "_fill_auto_scroll_timer", None) is None:
+            self._fill_auto_scroll_timer = self.after(AUTO_SCROLL_MS, self._fill_auto_scroll_step)
+
+    def _stop_fill_auto_scroll(self):
+        timer = getattr(self, "_fill_auto_scroll_timer", None)
+        if timer is not None:
+            try:
+                self.after_cancel(timer)
+            except (tk.TclError, ValueError):
+                pass
+            self._fill_auto_scroll_timer = None
+
+    def _fill_auto_scroll_step(self):
+        self._fill_auto_scroll_timer = None
+        if not getattr(self, "_fill_dragging", False):
+            return
+        self._yview("scroll", 1, "units")
+        if self._fill_target_row < len(self.df) - 1:
+            self._fill_target_row += 1
+            r0, c0, r1, c1 = self._fill_start_bounds
+            self._show_fill_feedback(r1 + 1, self._fill_target_row, c0, c1)
+        self._start_fill_auto_scroll()
+
+    # -- row tree interactions (line numbers on the left) ------------------
+    def _on_row_tree_wheel(self, event):
+        if sys.platform == "darwin":
+            delta = -int(event.delta)
+        elif getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        else:
+            delta = -int(event.delta / 120)
+        self.tree.yview_scroll(delta, "units")
+        if hasattr(self, "row_tree"):
+            self.row_tree.yview_scroll(delta, "units")
+        self.after(1, self._refresh_outline)
+        return "break"
+
+    def _on_row_tree_click(self, event):
+        row_id = self.row_tree.identify_row(event.y)
+        if row_id and self.row_tree.exists(row_id):
+            r = int(row_id)
+            if 0 <= r < len(self.df) and len(self.df.columns):
+                self._commit_edit()
+                self.select_block(r, 0, r, len(self.df.columns) - 1,
+                                  anchor=(r, 0), cursor=(r, len(self.df.columns) - 1))
+                self._row_selecting = True
+                self._row_press = r
+        return "break"
+
+    def _on_row_tree_drag(self, event):
+        if getattr(self, "_row_selecting", False):
+            row_id = self.row_tree.identify_row(event.y)
+            if row_id and self.row_tree.exists(row_id):
+                r = int(row_id)
+                start = getattr(self, "_row_press", r)
+                r0, r1 = min(start, r), max(start, r)
+                self.select_block(r0, 0, r1, len(self.df.columns) - 1,
+                                  anchor=(start, 0), cursor=(r, len(self.df.columns) - 1))
+        return "break"
+
+    def _on_row_tree_release(self, _event=None):
+        self._row_selecting = False
+        return "break"
+
     # -- scrolling keeps the outline in place ------------------------------
     def _yview(self, *args):
         self.tree.yview(*args)
+        if hasattr(self, "row_tree"):
+            self.row_tree.yview(*args)
         self.after(1, self._refresh_outline)
 
     def _xview(self, *args):
@@ -3826,6 +4387,8 @@ class DataTable(ttk.Frame):
 
     def _y_scrolled(self, first, last):
         self._v_scroll.set(first, last)
+        if hasattr(self, "row_tree"):
+            self.row_tree.yview_moveto(first)
         self.after(1, self._refresh_outline)
 
     def _x_scrolled(self, first, last):
@@ -3835,9 +4398,27 @@ class DataTable(ttk.Frame):
     # -- appearance --------------------------------------------------------
     def apply_config(self):
         size = max(6, int(self.config_obj.get("table", "font_size")))
+        row_height = int(size * 2.2)
         self.style.configure("APlot.Treeview", font=("TkDefaultFont", size),
-                             rowheight=int(size * 2.2))
+                             rowheight=row_height)
         self.style.configure("APlot.Treeview.Heading", font=("TkDefaultFont", size))
+        # the row numbers take the very background of the table itself: the
+        # themes of the systems differ (the one of macOS is a dark grey), and
+        # a hard coded light grey strip beside a dark table looks broken
+        paper = self.table_background()
+        ink = self.dim_foreground(paper)
+        self.style.configure("APlot.RowHeader.Treeview", font=("TkDefaultFont", size),
+                             rowheight=row_height, background=paper,
+                             fieldbackground=paper, foreground=ink)
+        self.style.configure("APlot.RowHeader.Treeview.Heading",
+                             font=("TkDefaultFont", size, "bold"))
+        self.style.map("APlot.RowHeader.Treeview",
+                       background=[("selected", paper)],
+                       foreground=[("selected", ink)])
+        try:
+            self.corner_box.configure(background=paper)
+        except (tk.TclError, AttributeError):
+            pass
         # the little x_B / x_T / y_L / y_R switches above the columns keep
         # their own, readable size whatever the table font is
         self.style.configure("APlot.Axis.TCheckbutton",
@@ -3847,17 +4428,105 @@ class DataTable(ttk.Frame):
             self.tree.column(column, width=width, minwidth=MIN_COLUMN_WIDTH)
         self.after(1, self._place_checks)
 
+    def table_background(self):
+        """The colour the table itself is painted with, whatever the theme."""
+        for style_name, option in (("APlot.Treeview", "fieldbackground"),
+                                   ("APlot.Treeview", "background"),
+                                   ("Treeview", "fieldbackground"),
+                                   ("Treeview", "background")):
+            try:
+                found = self.style.lookup(style_name, option)
+            except tk.TclError:
+                found = None
+            if found:
+                text = str(found).strip()
+                if text and text.lower() not in ("none", "systemtransparent"):
+                    return text
+        try:      # the last resort: ask Tk what an empty table looks like
+            return str(self.tree.cget("background"))
+        except tk.TclError:
+            return "#ffffff"
+
+    @staticmethod
+    def dim_foreground(_background=None):
+        """The colour of the row numbers: the one of the column letters."""
+        return HEADER_COLOR
+
     def column_width(self):
         """The width of one column: never narrower than its check buttons."""
         wanted = int(self.config_obj.get("table", "column_width"))
         return max(MIN_COLUMN_WIDTH, wanted)
 
     # -- data --------------------------------------------------------------
-    def set_dataframe(self, df, check_all=False):
-        """Show a data frame; `check_all` ticks every column again."""
+    def set_dataframe(self, df, check_all=False, blank=False):
+        """Show a data frame; `check_all` ticks every column again.
+
+        `blank` marks the empty sheet the program starts with: only that one
+        grows more columns by itself when the window is made wider.  Data
+        that was loaded or typed is never touched.
+        """
         self.df = df.reset_index(drop=True)
         self.df.columns = self._unique_columns(self.df.columns)
+        self.auto_columns = bool(blank)
         self.refresh(check_all=check_all)
+        if self.auto_columns:
+            self.after_idle(self.grow_columns_to_fit)
+
+    # -- a blank sheet fills the window with columns ------------------------
+    def blank_sheet(self):
+        """True while nothing has been typed into the table."""
+        if not getattr(self, "auto_columns", False):
+            return False
+        if self.df.empty or not len(self.df.columns):
+            return True
+        for row in self.df.itertuples(index=False, name=None):
+            for value in row:
+                if value is None:
+                    continue
+                if isinstance(value, float) and pd.isna(value):
+                    continue
+                if str(value).strip():
+                    return False
+        return True
+
+    def columns_that_fit(self):
+        """How many columns of the normal width the table can show."""
+        try:
+            width = int(self.tree.winfo_width())
+        except tk.TclError:
+            return 0
+        if width <= 1:
+            return 0
+        return max(1, width // max(1, self.column_width()))
+
+    def next_column_name(self):
+        """`Y1`, `Y2`, ... - the next name that is still free."""
+        taken = {str(one) for one in self.df.columns}
+        index = len(taken)
+        while True:
+            name = f"Y{index}"
+            if name not in taken:
+                return name
+            index += 1
+
+    def grow_columns_to_fit(self):
+        """Give the blank starting sheet as many columns as the window shows.
+
+        Widening the window brings more columns; narrowing it keeps the ones
+        that are there, so nothing a user may have typed can be lost.
+        """
+        if not self.blank_sheet():
+            return 0
+        wanted = min(self.columns_that_fit(), MAX_AUTO_COLUMNS)
+        have = len(self.df.columns)
+        if wanted <= have:
+            return 0
+        for _ in range(wanted - have):
+            self.df[self.next_column_name()] = ["" for _ in range(len(self.df))]
+        # check_all=False keeps the ticks the user set on the sheet so far;
+        # the new columns get the first axis, as any new column does
+        self.refresh(check_all=False)
+        return wanted - have
 
     @staticmethod
     def _unique_columns(columns):
@@ -3876,11 +4545,14 @@ class DataTable(ttk.Frame):
         self._cancel_edit()
         self._cancel_heading_edit()
         self.tree.delete(*self.tree.get_children())
+        if hasattr(self, "row_tree"):
+            self.row_tree.delete(*self.row_tree.get_children())
         columns = list(self.df.columns)
         width = self.column_width()
         self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
+        for idx, col in enumerate(columns):
+            c_letter = col_to_letter(idx)
+            self.tree.heading(col, text=f"{c_letter}  ({col})")
             # minwidth keeps the two check buttons - and the numbers under
             # them - readable however narrow the window is made; the
             # horizontal scroll bar takes over from there
@@ -3890,6 +4562,9 @@ class DataTable(ttk.Frame):
         for index, row in enumerate(self.df.itertuples(index=False, name=None)):
             self.tree.insert("", "end", iid=str(index),
                              values=["" if pd.isna(v) else str(v) for v in row])
+            if hasattr(self, "row_tree"):
+                self.row_tree.insert("", "end", iid=str(index),
+                                     values=[str(index + 1)])
         self._build_checks(check_all=check_all)
         self._refresh_block()
         self._changed()
@@ -3903,7 +4578,7 @@ class DataTable(ttk.Frame):
         rows = self.selected_rows()
         return rows[0] if rows else None
 
-    def add_row(self, focus=False):
+    def add_row(self, focus=False, column=0):
         """Append one empty row (cheap: no full rebuild) and return its index."""
         if self.df.empty and not len(self.df.columns):
             return None
@@ -3911,11 +4586,108 @@ class DataTable(ttk.Frame):
         self.df.loc[index] = ["" for _ in self.df.columns]
         self.tree.insert("", "end", iid=str(index),
                          values=["" for _ in self.df.columns])
+        if hasattr(self, "row_tree"):
+            self.row_tree.insert("", "end", iid=str(index),
+                                 values=[str(index + 1)])
         self._changed()
         if focus:
             self.tree.see(str(index))
-            self.after(1, lambda: self._begin_edit(str(index), 0))
+            if hasattr(self, "row_tree"):
+                self.row_tree.see(str(index))
+            column = max(0, min(int(column), len(self.df.columns) - 1))
+            self.select_cell(index, column)
+            self.after(1, lambda: self._begin_edit(str(index), column))
         return index
+
+    # -- rows and columns around the selected cell --------------------------
+    def shift_row_formulas(self, at, delta=1):
+        """Make room: the formulas of the rows from `at` on move by `delta`."""
+        self.cell_formulas = {((row + delta) if row >= at else row, col): formula
+                              for (row, col), formula
+                              in self.cell_formulas.items()}
+
+    def shift_column_formulas(self, at, delta=1):
+        """The same for the columns from `at` on."""
+        self.cell_formulas = {(row, (col + delta) if col >= at else col): formula
+                              for (row, col), formula
+                              in self.cell_formulas.items()}
+
+    def remap_row_formulas(self, old_rows):
+        """`old_rows[i]` is the row that becomes row `i`."""
+        place = {old: new for new, old in enumerate(old_rows)}
+        self.cell_formulas = {(place[row], col): formula
+                              for (row, col), formula
+                              in self.cell_formulas.items() if row in place}
+
+    def insert_row(self, at=None, focus=True):
+        """Put one empty row at `at`; `None` appends it at the end.
+
+        The row numbers below it move down, and so do the formulas that
+        were stored in those cells.
+        """
+        if not len(self.df.columns):
+            return None
+        column = self.cursor[1] if self.cursor else 0
+        total = len(self.df)
+        if at is None or at >= total:
+            return self.add_row(focus=focus, column=column)
+        at = max(0, int(at))
+        blank = pd.DataFrame([["" for _ in self.df.columns]],
+                             columns=self.df.columns)
+        frame = pd.concat([self.df.iloc[:at], blank, self.df.iloc[at:]],
+                          ignore_index=True)
+        self.shift_row_formulas(at, 1)
+        growing = getattr(self, "auto_columns", False)
+        self.block = None
+        self.set_dataframe(frame, check_all=False)
+        self.auto_columns = growing
+        self.recalculate_all()
+        column = max(0, min(column, len(self.df.columns) - 1))
+        self.select_cell(at, column)
+        if focus:
+            self.tree.see(str(at))
+            self.after(1, lambda: self._begin_edit(str(at), column))
+        return at
+
+    def insert_column(self, name, at=None):
+        """Put a new empty column at `at`; `None` appends it at the right."""
+        name = str(name).strip()
+        if not name or name in [str(one) for one in self.df.columns]:
+            return False
+        if at is None or at > len(self.df.columns):
+            at = len(self.df.columns)
+        at = max(0, int(at))
+        self.df.insert(at, name, ["" for _ in range(len(self.df))])
+        self.shift_column_formulas(at, 1)
+        growing = getattr(self, "auto_columns", False)
+        self.refresh()
+        self.auto_columns = growing
+        self.current_column = name
+        self.select_cell(self.cursor[0] if self.cursor else 0, at)
+        self._changed()
+        return True
+
+    def remove_column(self, name):
+        """Delete one column with its data, and its stored formulas."""
+        columns = [str(one) for one in self.df.columns]
+        name = str(name)
+        if name not in columns or len(columns) <= 1:
+            return False
+        at = columns.index(name)
+        # the formulas of that column go with it, the ones on its right
+        # move one column to the left
+        self.cell_formulas = {(row, col - 1 if col > at else col): formula
+                              for (row, col), formula
+                              in self.cell_formulas.items() if col != at}
+        growing = getattr(self, "auto_columns", False)
+        self.current_column = None
+        self.block = None
+        self.set_dataframe(self.df.drop(columns=[name]), check_all=False)
+        self.auto_columns = growing
+        self.recalculate_all()
+        self.select_cell(self.cursor[0] if self.cursor else 0,
+                         max(0, min(at, len(self.df.columns) - 1)))
+        return True
 
     def delete_row(self, index=None):
         """Delete one row, or every row of the block when none is given."""
@@ -4379,10 +5151,14 @@ class DataTable(ttk.Frame):
             return False
         keep = [index for index in range(len(self.df)) if index not in set(rows)]
         self.block = None
+        self.remap_row_formulas(keep)      # the formulas follow their rows
+        column = self.cursor[1] if self.cursor else 0
         self.set_dataframe(self.df.iloc[keep])
+        self.recalculate_all()
         first = min(rows)
         if len(self.df):
-            self.select_cell(min(first, len(self.df) - 1), 0)
+            self.select_cell(min(first, len(self.df) - 1),
+                             max(0, min(column, len(self.df.columns) - 1)))
         return True
 
     def _begin_edit(self, row_id, col_index, retry=True):
@@ -4410,12 +5186,20 @@ class DataTable(ttk.Frame):
         # exportselection=False keeps the highlighted text visible even when
         # another widget (e.g. the Treeview) takes over the X selection.
         entry = tk.Entry(self.tree, textvariable=var, exportselection=False,
-                         borderwidth=1, relief="solid", justify="center")
+                         borderwidth=1, relief="solid", justify="center",
+                         insertbackground=CARET_COLOR, insertwidth=2,
+                         insertontime=CARET_ON_MS, insertofftime=CARET_OFF_MS)
         entry.place(x=x, y=y, width=width, height=height)
         entry.focus_set()
         entry.icursor("end")
         entry.select_range(0, "end")
         self._editor = (entry, var, row_id, col_index)
+        # the editor must not bury the fill handle of the selection
+        self._lift_overlays()
+        # a diagram window that was just opened may still be holding the
+        # keyboard: without it the cell shows no blinking cursor at all
+        self._insist_editor_focus(entry)
+        self.after(30, lambda box=entry: self._insist_editor_focus(box))
 
         for sequence, delta in (("<Return>", (1, 0)), ("<KP_Enter>", (1, 0)),
                                 ("<Down>", (1, 0)), ("<Up>", (-1, 0)),
@@ -4439,6 +5223,25 @@ class DataTable(ttk.Frame):
             for letter in ("x", "X"):
                 entry.bind(f"<{prefix}-{letter}>", self._cut_from_editor)
         self._bind_text_editing(entry, cell=True)
+
+    def _insist_editor_focus(self, entry):
+        """Keep the keyboard - and the blinking cursor - inside the cell.
+
+        A diagram window that has just been opened (or a property window
+        that was used last) may still own the keyboard of the application.
+        The cell editor then shows no cursor and swallows nothing that is
+        typed, so it takes the keyboard back for itself.
+        """
+        if self._editor is None or self._editor[0] is not entry:
+            return None
+        try:
+            if not entry.winfo_exists() or not entry.winfo_ismapped():
+                return None
+            if entry.focus_displayof() is not entry:
+                entry.focus_force()
+        except (tk.TclError, KeyError):
+            pass
+        return None
 
     # -- the clipboard while a cell is being edited -------------------------
     def _clipboard_text(self):
@@ -4742,14 +5545,7 @@ class DataTable(ttk.Frame):
         except Exception:
             sorted_df = self.df.sort_values(by=col_name, ascending=ascending, kind='stable')
 
-        old_indices = list(sorted_df.index)
-        new_formulas = {}
-        for (r, c), f in self.cell_formulas.items():
-            if r in old_indices:
-                new_r = old_indices.index(r)
-                new_formulas[(new_r, c)] = f
-        self.cell_formulas = new_formulas
-
+        self.remap_row_formulas(list(sorted_df.index))
         self.set_dataframe(sorted_df.reset_index(drop=True), check_all=False)
         self.recalculate_all()
         self._changed()
@@ -4778,11 +5574,28 @@ class DataTable(ttk.Frame):
         menu.add_command(label="Column Math...", command=self.open_column_math)
         menu.add_separator()
         menu.add_command(label="Clear Cells (Delete)", command=self.clear_block)
+        menu.add_separator()
+        menu.add_command(label="Insert Row Above",
+                         command=lambda: self.insert_row(self.cursor[0]))
+        menu.add_command(label="Insert Row Below",
+                         command=lambda: self.insert_row(self.cursor[0] + 1))
         menu.add_command(label="Delete Row(s)", command=self.delete_selected_rows)
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _ask_new_column(self, where, col_idx):
+        """The program asks for the name and inserts the column."""
+        if self.on_add_column:
+            return self.on_add_column(where, col_idx)
+        return self.insert_column(self.next_column_name(),
+                                  col_idx if where == "before" else col_idx + 1)
+
+    def _ask_delete_column(self, name):
+        if self.on_delete_column:
+            return self.on_delete_column(name)
+        return self.remove_column(name)
 
     def _show_header_context_menu(self, col_idx, event):
         col_name = str(self.df.columns[col_idx])
@@ -4796,9 +5609,15 @@ class DataTable(ttk.Frame):
         menu.add_separator()
         menu.add_command(label="Fill Down (Ctrl+D)", command=self.fill_down)
         menu.add_separator()
-        menu.add_command(label="Insert Column...", command=lambda: getattr(self.winfo_toplevel(), "add_column", lambda: None)())
+        menu.add_command(
+            label="Insert Column Before...",
+            command=lambda: self._ask_new_column("before", col_idx))
+        menu.add_command(
+            label="Insert Column After...",
+            command=lambda: self._ask_new_column("after", col_idx))
         menu.add_command(label=f"Rename '{col_name}'...", command=lambda: self._begin_heading_edit(f"#{col_idx + 1}"))
-        menu.add_command(label=f"Delete Column '{col_name}'", command=lambda: getattr(self.winfo_toplevel(), "delete_column", lambda: None)())
+        menu.add_command(label=f"Delete Column '{col_name}'",
+                         command=lambda: self._ask_delete_column(col_name))
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -4844,7 +5663,11 @@ class PlotWindow(tk.Toplevel):
         self.bar_cfg: dict = {}               # Y column name -> {width, color, alpha, edgecolor, edgewidth}
         self.errorbar_containers: dict = {}   # Y column name -> ErrorbarContainer
         self.error_cfg: dict = {}             # Y column name -> {type, value, column, capsize, capthick, elinewidth, color}
-        self.histogram_cfg: dict = {}         # Y column name -> {bins, color, alpha, edgecolor, edgewidth}
+        self.histogram_cfg: dict = {}         # column name -> {bins, color, alpha, edgecolor, edgewidth}
+        self.histogram_edges: dict = {}       # column name -> the bin edges it was counted with
+        self.histogram_drawn: set = set()     # columns whose curve carries counts
+        # in an error bar diagram: mean column -> the std column beside it
+        self.error_partner: dict = {}
         self.lines: list[Line2D] = []
         self.series: dict = {}          # Y column name -> curve
         self.x_col = str(df.columns[0]) if len(df.columns) else ""
@@ -5081,12 +5904,35 @@ class PlotWindow(tk.Toplevel):
         self.bind("<FocusIn>", self._window_focused, add="+")
 
     def _window_focused(self, _event=None):
+        """This diagram window became the active one: it takes the keyboard.
+
+        A widget of this very window keeps it (a text being written in the
+        little in-place editor, for instance), and so does a cell of the
+        spreadsheet that is open for editing - it must keep its blinking
+        cursor.  The keyboard is taken back from anything else that belongs
+        to another window: after a property dialog was used, its own field
+        may still be holding it.
+        """
         try:
             current = self.focus_displayof()
         except (tk.TclError, KeyError):
             current = None
         if current is None or current is self:
             self.take_focus()
+            return None
+        try:
+            if current.winfo_toplevel() is self:
+                return None            # a widget of this window: it keeps it
+        except tk.TclError:
+            current = None
+        app = getattr(self, "app", None)
+        if app is not None and current is not None:
+            try:
+                if app.keyboard_busy(current):
+                    return None        # a cell is being written: leave it
+            except (tk.TclError, AttributeError):
+                pass
+        self.take_focus()
         return None
 
     def _bind_keys(self):
@@ -5321,17 +6167,37 @@ class PlotWindow(tk.Toplevel):
             self.apply_frame(self.frame_cfg, redraw=False)
         return changed
 
+    def measure_data(self, ax, scalex=True, scaley=True):
+        """Fit the automatic range to the curves, ignoring the filled areas.
+
+        A fill that reaches "down to the axis" takes its baseline from the
+        range that is valid at that moment.  Left in the calculation it
+        would push that baseline further down at every redraw - the range
+        would creep away, and a diagram would not even come back from its
+        own file unchanged.  So the areas are hidden while the range is
+        measured: they are a picture of the curves, not data of their own.
+        """
+        hidden = [fill for fill in self.fills.values()
+                  if getattr(fill, "axes", None) is ax and fill.get_visible()]
+        for fill in hidden:
+            fill.set_visible(False)
+        try:
+            ax.relim(visible_only=True)
+            ax.autoscale_view(scalex=scalex, scaley=scaley)
+        finally:
+            for fill in hidden:
+                fill.set_visible(True)
+        return None
+
     def _rescale(self):
         """Let the automatic ranges follow the data of both Y axes."""
         auto_x = self.axis_cfg["x"]["auto"]
         auto_y = self.axis_cfg["y"]["auto"]
         if (auto_x or auto_y) and self.ax.lines:
-            self.ax.relim()
-            self.ax.autoscale_view(scalex=auto_x, scaley=auto_y)
+            self.measure_data(self.ax, scalex=auto_x, scaley=auto_y)
         if self.ax2 is not None and self.ax2.lines:
             if self.axis_cfg["y2"]["auto"]:
-                self.ax2.relim()
-                self.ax2.autoscale_view(scalex=False, scaley=True)
+                self.measure_data(self.ax2, scalex=False, scaley=True)
 
     @staticmethod
     def _series_data(df, x_col, y_col):
@@ -5486,6 +6352,37 @@ class PlotWindow(tk.Toplevel):
                     except Exception:
                         pass
 
+    def partner_column(self, column):
+        """The column that holds the error bars of one curve.
+
+        In an error bar diagram the pairs are worked out when the curves are
+        built (`curve_columns`).  For a single curve that was switched to
+        this style by hand, the column standing right after it in the table
+        is taken - which is what "the next column" means.
+        """
+        found = self.error_partner.get(column)
+        if found and found in self.df.columns:
+            return found
+        names = [str(one) for one in self.df.columns]
+        text = str(column)
+        if text in names:
+            index = names.index(text) + 1
+            if index < len(names):
+                return names[index]
+        return None
+
+    def _error_from_column(self, name, y_arr):
+        """The error bar lengths read from one column of the table."""
+        name = str(name or "")
+        if not name or name not in self.df.columns:
+            return None
+        values = pd.to_numeric(self.df[name], errors="coerce").to_numpy(float)
+        values = np.abs(values)
+        if len(values) >= len(y_arr):
+            return values[:len(y_arr)]
+        return np.pad(values, (0, len(y_arr) - len(values)),
+                      constant_values=np.nan)
+
     def refresh_errorbar(self, column):
         self._clear_errorbar(column)
         st = self.series_style.get(column, self.plot_style)
@@ -5499,16 +6396,21 @@ class PlotWindow(tk.Toplevel):
             return None
         target = line.axes if line.axes is not None else self.ax
         cfg = self.error_cfg.setdefault(column, {
-            "type": "percent", "value": 5.0, "column": "",
+            "type": "pair", "value": 5.0, "column": "",
             "capsize": 4.0, "capthick": 1.5, "elinewidth": 1.5,
             "color": line.get_color()
         })
 
-        err_type = cfg.get("type", "percent")
+        err_type = cfg.get("type", "pair")
         err_val = float(cfg.get("value", 5.0))
         y_arr = np.asarray(y_data, dtype=float)
 
-        if err_type == "percent":
+        if err_type == "pair":
+            # the column right after this one holds the standard deviation
+            yerr = self._error_from_column(self.partner_column(column), y_arr)
+            if yerr is None:            # no column left over: fall back to 5 %
+                yerr = np.abs(y_arr * 0.05)
+        elif err_type == "percent":
             yerr = np.abs(y_arr * (err_val / 100.0))
         elif err_type == "fixed":
             yerr = np.full_like(y_arr, err_val)
@@ -5517,14 +6419,8 @@ class PlotWindow(tk.Toplevel):
             std = float(np.std(finite_y)) if len(finite_y) > 1 else 1.0
             yerr = np.full_like(y_arr, std)
         elif err_type == "column":
-            col_name = cfg.get("column", "")
-            if col_name and col_name in self.df.columns:
-                err_series = pd.to_numeric(self.df[col_name], errors="coerce").values
-                if len(err_series) >= len(y_arr):
-                    yerr = err_series[:len(y_arr)]
-                else:
-                    yerr = np.pad(err_series, (0, len(y_arr) - len(err_series)), constant_values=np.nan)
-            else:
+            yerr = self._error_from_column(cfg.get("column", ""), y_arr)
+            if yerr is None:
                 yerr = np.abs(y_arr * 0.05)
         else:
             yerr = np.abs(y_arr * 0.05)
@@ -5549,35 +6445,104 @@ class PlotWindow(tk.Toplevel):
     def _clear_histogram(self, column):
         self._clear_bar(f"hist_{column}")
 
+    @staticmethod
+    def _bin_widths(centers):
+        """Bar widths that make the bars of a histogram touch each other."""
+        centers = np.asarray(centers, dtype=float)
+        if len(centers) < 2:
+            return np.ones_like(centers)
+        order = np.argsort(centers)
+        steps = np.diff(centers[order])
+        steps = steps[steps > 0]
+        step = float(np.min(steps)) if len(steps) else 1.0
+        return np.full_like(centers, step)
+
+    # -- a histogram counts the values of one column by itself --------------
+    @staticmethod
+    def default_histogram_cfg(line=None):
+        return {"bins": HISTOGRAM_BINS,
+                "color": (line.get_color() if line is not None
+                          else PALETTE_FALLBACK),
+                "alpha": 0.85, "edgecolor": "#ffffff", "edgewidth": 1.0}
+
+    def histogram_bins(self, column):
+        """How many bins the sample of one column is counted into."""
+        cfg = self.histogram_cfg.get(column) or {}
+        try:
+            count = int(float(cfg.get("bins", HISTOGRAM_BINS)))
+        except (TypeError, ValueError):
+            count = HISTOGRAM_BINS
+        return max(1, min(count, MAX_HISTOGRAM_BINS))
+
+    @staticmethod
+    def sample_values(df, column):
+        """The numbers of one column: the sample a histogram counts.
+
+        Empty cells and text are not values, so they are simply left out -
+        a histogram has no gaps, it has counts.
+        """
+        if df is None or str(column) not in [str(one) for one in df.columns]:
+            return np.array([], dtype=float)
+        values = pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=float)
+        return values[np.isfinite(values)]
+
+    def histogram_points(self, df, column):
+        """The centre of every bin and how many values fell into it.
+
+        This is the statistics `ax.hist` does: the range the sample covers
+        is cut into `bins` equal parts and the values are counted.  One
+        column of raw measurements is all a histogram needs, so the first
+        column of the table is a sample of its own as well.
+        """
+        values = self.sample_values(df, column)
+        if len(values) == 0:
+            self.histogram_edges.pop(column, None)
+            return np.array([], dtype=float), np.array([], dtype=float)
+        counts, edges = np.histogram(values, bins=self.histogram_bins(column))
+        self.histogram_edges[column] = edges
+        centers = (edges[:-1] + edges[1:]) / 2.0
+        return centers, counts.astype(float)
+
+    def series_points(self, df, x_col, y_col, style=None):
+        """The X/Y pairs one curve is drawn from.
+
+        Every style reads the first column as X and the column itself as Y.
+        A **histogram** is the exception: the column holds raw values and
+        the diagram counts them, so the pairs are the bin centres and the
+        counts of that one column alone.
+        """
+        style = style or self.series_style.get(y_col, self.plot_style)
+        if style == "histogram":
+            return self.histogram_points(df, y_col)
+        return self._series_data(df, x_col, y_col)
+
     def refresh_histogram(self, column):
+        """Count the values of `column` again and draw the bars."""
         self._clear_histogram(column)
         st = self.series_style.get(column, self.plot_style)
-        if st != "histogram":
-            return None
         line = self.series.get(column)
-        if line is None:
+        if st != "histogram" or line is None:
             return None
-        x_data, y_data = line.get_data()
-        if len(y_data) == 0:
+        cfg = self.histogram_cfg.setdefault(
+            column, self.default_histogram_cfg(line))
+        for key, value in self.default_histogram_cfg(line).items():
+            cfg.setdefault(key, value)
+
+        # the statistics is made here and now: a changed number of bins,
+        # or changed data, is counted again
+        centers, counts = self.histogram_points(self.df, column)
+        line.set_data(centers, counts)     # the curve behind the bars
+        self.histogram_drawn.add(column)
+        if not len(centers):
             return None
+        edges = self.histogram_edges.get(column)
+        widths = (np.diff(np.asarray(edges, dtype=float))
+                  if edges is not None and len(edges) > 1
+                  else self._bin_widths(centers))
         target = line.axes if line.axes is not None else self.ax
-        cfg = self.histogram_cfg.setdefault(column, {
-            "bins": 10, "color": line.get_color(), "alpha": 0.85,
-            "edgecolor": "#ffffff", "edgewidth": 1.0
-        })
-
-        y_finite = np.asarray(y_data, dtype=float)
-        y_finite = y_finite[np.isfinite(y_finite)]
-        if len(y_finite) == 0:
-            return None
-
-        bins_count = max(2, int(cfg.get("bins", 10)))
-        counts, bin_edges = np.histogram(y_finite, bins=bins_count)
-        widths = np.diff(bin_edges)
-        centers = bin_edges[:-1] + widths / 2.0
 
         container = target.bar(
-            centers, counts, width=widths * 0.95,
+            centers, counts, width=widths, align="center",
             color=cfg.get("color", line.get_color()),
             edgecolor=cfg.get("edgecolor", "#ffffff"),
             linewidth=float(cfg.get("edgewidth", 1.0)),
@@ -5591,10 +6556,29 @@ class PlotWindow(tk.Toplevel):
         self.bar_containers[f"hist_{column}"] = container
         return container
 
+    def restore_series_data(self, column):
+        """Put the values of a column back on its curve after a histogram.
+
+        While a curve is drawn as a histogram it carries the counts of the
+        bins, not the data of the table.  Switching that curve to another
+        style has to give it its own values against the X column again.
+        """
+        self.histogram_drawn.discard(column)
+        self.histogram_edges.pop(column, None)
+        line = self.series.get(column)
+        if line is None or str(column) not in [str(one) for one in self.df.columns]:
+            return False
+        x_name = self.x_col if self.x_col in self.df.columns else \
+            str(self.df.columns[0])
+        line.set_data(*self._series_data(self.df, x_name, column))
+        return True
+
     def refresh_series_visuals(self, column):
         st = self.series_style.get(column, self.plot_style)
         line = self.series.get(column)
         if line is not None:
+            if st != "histogram" and column in self.histogram_drawn:
+                self.restore_series_data(column)
             if st == "bar":
                 line.set_linestyle("none")
                 line.set_marker("None")
@@ -5602,8 +6586,6 @@ class PlotWindow(tk.Toplevel):
                 self._clear_errorbar(column)
                 self._clear_histogram(column)
             elif st == "errorbar":
-                if line.get_marker() in ("None", "none", "", " "):
-                    line.set_marker("o")
                 self.refresh_errorbar(column)
                 self._clear_bar(column)
                 self._clear_histogram(column)
@@ -5614,24 +6596,21 @@ class PlotWindow(tk.Toplevel):
                 self._clear_bar(column)
                 self._clear_errorbar(column)
             elif st == "line":
-                line.set_marker("None")
-                if line.get_linestyle() in ("none", "None", ""):
-                    line.set_linestyle("-")
+                line.set_marker("None")     # this style has no marker at all
                 self._clear_bar(column)
                 self._clear_errorbar(column)
                 self._clear_histogram(column)
             elif st == "scatter":
-                line.set_linestyle("none")
-                if line.get_marker() in ("None", "none", "", " "):
-                    line.set_marker("o")
+                line.set_linestyle("none")  # ... and this one no line
                 self._clear_bar(column)
                 self._clear_errorbar(column)
                 self._clear_histogram(column)
-            else:  # line_symbol
-                if line.get_linestyle() in ("none", "None", ""):
-                    line.set_linestyle("-")
-                if line.get_marker() in ("None", "none", "", " "):
-                    line.set_marker("o")
+            else:  # line_symbol: the Line and the Marker check button of the
+                # curve dialog decide - a switched off line or marker must not
+                # be put back here, or those two switches (and a saved
+                # diagram) would lose what the user chose.  A new curve gets
+                # its line and marker from _create_line instead, and changing
+                # the plot style sets them in _on_style_changed.
                 self._clear_bar(column)
                 self._clear_errorbar(column)
                 self._clear_histogram(column)
@@ -5681,6 +6660,15 @@ class PlotWindow(tk.Toplevel):
             edgecolor=to_rgba(color, 1.0) if hatch else "none",
             hatch=hatch, linewidth=0.0, label="_nolegend_",
             zorder=line.get_zorder() - 0.5)
+        # fill_between() asks the axes to grow its limits around the new
+        # polygon, and matplotlib does that lazily - so putting dataLim back
+        # is not enough on its own.  Hanging the very same collection back
+        # with autolim=False takes it out of the calculation for good.
+        try:
+            fill.remove()
+            ax.add_collection(fill, autolim=False)
+        except (AttributeError, ValueError):
+            pass
         try:
             ax.dataLim.set_points(limits)
             ax.ignore_existing_data_limits = ignoring
@@ -5738,12 +6726,48 @@ class PlotWindow(tk.Toplevel):
         self.refresh_legend()
         self.draw()
 
+    def curve_columns(self, columns):
+        """Which columns become curves, and where their error bars come from.
+
+        Every diagram reads the **first** column as the X axis and the
+        second one as the values of the first curve.  An **error bar**
+        diagram reads the columns in pairs after that: `x`, mean, std,
+        mean, std, ... - so the third column is the length of the error bar
+        of the second one, the fifth belongs to the fourth, and so on.  In
+        every other kind of diagram each column after the first one is a
+        curve of its own.
+
+        A **histogram** is the exception: it counts the values of a column
+        by itself and needs nothing else, so *every* column - the first one
+        included - is a sample and a curve of its own.
+        """
+        columns = [str(one) for one in columns]
+        if self.plot_style == "histogram":
+            return columns, {}
+        if len(columns) < 2:
+            return [], {}
+        rest = columns[1:]
+        if self.plot_style != "errorbar":
+            return rest, {}
+        curves, partner = [], {}
+        for index in range(0, len(rest), 2):
+            mean = rest[index]
+            curves.append(mean)
+            if index + 1 < len(rest):
+                partner[mean] = rest[index + 1]
+        return curves, partner
+
     def _plot_data(self, _plot_cfg=None):
         columns = list(self.df.columns)
+        if not columns:
+            return 0
         x_col = columns[0]
         sides = self.layout.get("y", {})
-        for y_col in columns[1:]:
-            x, y = self._series_data(self.df, x_col, y_col)
+        curves, partner = self.curve_columns(columns)
+        self.error_partner = dict(partner)
+        for y_col in curves:
+            x, y = self.series_points(self.df, x_col, y_col,
+                                      style=self.plot_style)
             if len(x) and bool(np.isfinite(y).any()):
                 self._create_line(x, y, y_col, x_col,
                                   sides.get(str(y_col), "left"),
@@ -5788,7 +6812,8 @@ class PlotWindow(tk.Toplevel):
         from `y_L` to `y_R` in the table moves that curve to the other side.
         """
         columns = list(df.columns)
-        if len(columns) < 2:
+        # a histogram counts one column on its own: it needs no second one
+        if len(columns) < (1 if self.plot_style == "histogram" else 2):
             return False
         self.df = df
         x_col = columns[0]
@@ -5797,9 +6822,11 @@ class PlotWindow(tk.Toplevel):
             self.layout = self._clean_layout(df, layout)
             self.x_side = self.layout["x_side"]
         sides = self.layout.get("y", {})
+        curves, partner = self.curve_columns(columns)
+        self.error_partner = dict(partner)
 
-        for y_col in columns[1:]:
-            x, y = self._series_data(df, x_col, y_col)
+        for y_col in curves:
+            x, y = self.series_points(df, x_col, y_col)
             side = sides.get(str(y_col), self.series_side(y_col))
             line = self.series.get(y_col)
             if line is None:
@@ -5810,12 +6837,12 @@ class PlotWindow(tk.Toplevel):
                 self.move_series(y_col, side)
                 self.refresh_series_visuals(y_col)
 
-        for y_col in [name for name in self.series if name not in columns[1:]]:
+        for y_col in [name for name in self.series if name not in curves]:
             self.remove_series(y_col)
 
         # the curves follow the order of the columns, so a column that is
         # ticked again comes back in its own place and not at the end
-        order = [name for name in columns[1:] if name in self.series]
+        order = [name for name in curves if name in self.series]
         self.series = {name: self.series[name] for name in order}
         self.series_axis = {name: self.series_axis[name] for name in order
                             if name in self.series_axis}
@@ -5845,7 +6872,17 @@ class PlotWindow(tk.Toplevel):
     def _script_data(self):
         """The plotted columns as plain Python lists."""
         lines = ["DATA = {"]
-        columns = [self.x_col] + list(self.series)
+        columns = []
+        for name in [self.x_col] + list(self.series):
+            if name not in columns:     # a histogram counts the X column too
+                columns.append(name)
+        for mean, std in self.error_partner.items():      # the error columns
+            if std not in columns:
+                columns.append(std)
+        for cfg in self.error_cfg.values():
+            name = str(cfg.get("column", ""))
+            if name and name not in columns:
+                columns.append(name)
         for name in columns:
             if name not in self.df.columns:
                 continue
@@ -6039,9 +7076,12 @@ class PlotWindow(tk.Toplevel):
         lit = self._literal
         out = ["", "# ---------------------------------------------- the curves",
                "curves = {}"]
-        for column, line in self.series.items():
+        for number, (column, line) in enumerate(self.series.items(), start=1):
             target = "ax2" if self.series_side(column) == "right" else "ax"
             st = self.series_style.get(column, self.plot_style)
+            # a column name may be anything at all, so the helper variables
+            # are numbered instead of being named after it
+            tag = f"s{number}"
             if st == "bar":
                 b_cfg = self.bar_cfg.get(column, {})
                 bw = float(b_cfg.get("width", 0.8))
@@ -6050,10 +7090,13 @@ class PlotWindow(tk.Toplevel):
                 bec = store_color(b_cfg.get("edgecolor", line.get_color()))
                 bew = float(b_cfg.get("edgewidth", 1.0))
                 out.append(
-                    f"bars_{column} = {target}.bar(DATA[{lit(str(self.x_col))}], DATA[{lit(str(column))}], "
-                    f"width={bw}, color={lit(bc)}, edgecolor={lit(bec)}, linewidth={bew}, "
-                    f"alpha={ba}, label={lit(str(line.get_label()))})"
+                    f"bars_{tag} = {target}.bar(DATA[{lit(str(self.x_col))}], "
+                    f"DATA[{lit(str(column))}], "
+                    f"width={bw}, color={lit(bc)}, edgecolor={lit(bec)}, "
+                    f"linewidth={bew}, alpha={ba}, "
+                    f"label={lit(str(line.get_label()))})"
                 )
+                out.append(f"curves[{lit(str(column))}] = bars_{tag}[0]")
             elif st == "errorbar":
                 e_cfg = self.error_cfg.get(column, {})
                 err_type = e_cfg.get("type", "percent")
@@ -6062,34 +7105,56 @@ class PlotWindow(tk.Toplevel):
                 capthick = float(e_cfg.get("capthick", 1.5))
                 elinewidth = float(e_cfg.get("elinewidth", 1.5))
                 ec = store_color(e_cfg.get("color", line.get_color()))
-                if err_type == "percent":
-                    out.append(f"yerr_{column} = np.abs(np.asarray(DATA[{lit(str(column))}], float) * {err_val / 100.0})")
+                values = f"np.asarray(DATA[{lit(str(column))}], float)"
+                partner = self.partner_column(column)
+                if err_type == "pair" and partner in self.df.columns:
+                    # the column beside this one holds the standard deviation
+                    out.append(f"yerr_{tag} = np.abs(np.asarray("
+                               f"DATA[{lit(str(partner))}], float))")
                 elif err_type == "fixed":
-                    out.append(f"yerr_{column} = np.full_like(DATA[{lit(str(column))}], {err_val}, dtype=float)")
+                    out.append(f"yerr_{tag} = np.full_like({values}, {err_val})")
                 elif err_type == "std":
-                    out.append(f"yerr_{column} = np.full_like(DATA[{lit(str(column))}], np.nanstd(DATA[{lit(str(column))}]), dtype=float)")
+                    out.append(f"yerr_{tag} = np.full_like({values}, "
+                               f"np.nanstd({values}))")
                 elif err_type == "column" and e_cfg.get("column") in self.df.columns:
-                    out.append(f"yerr_{column} = DATA[{lit(str(e_cfg['column']))}]")
+                    out.append(f"yerr_{tag} = np.abs(np.asarray("
+                               f"DATA[{lit(str(e_cfg['column']))}], float))")
+                elif err_type == "percent":
+                    out.append(f"yerr_{tag} = np.abs({values} * "
+                               f"{err_val / 100.0})")
                 else:
-                    out.append(f"yerr_{column} = np.abs(np.asarray(DATA[{lit(str(column))}], float) * 0.05)")
+                    out.append(f"yerr_{tag} = np.abs({values} * 0.05)")
                 out.append(
-                    f"curves[{lit(str(column))}], _caps, _bars = {target}.errorbar("
-                    f"DATA[{lit(str(self.x_col))}], DATA[{lit(str(column))}], yerr=yerr_{column}, "
+                    f"bars_{tag} = {target}.errorbar("
+                    f"DATA[{lit(str(self.x_col))}], DATA[{lit(str(column))}], "
+                    f"yerr=yerr_{tag}, "
                     f"color={lit(ec)}, fmt={lit(str(line.get_marker()))}, "
-                    f"markersize={float(line.get_markersize())}, capsize={capsize}, capthick={capthick}, "
-                    f"elinewidth={elinewidth}, label={lit(str(line.get_label()))})"
+                    f"markersize={float(line.get_markersize())}, "
+                    f"capsize={capsize}, capthick={capthick}, "
+                    f"elinewidth={elinewidth}, "
+                    f"label={lit(str(line.get_label()))})"
                 )
+                out.append(f"curves[{lit(str(column))}] = bars_{tag}")
             elif st == "histogram":
                 h_cfg = self.histogram_cfg.get(column, {})
-                h_bins = int(h_cfg.get("bins", 10))
                 h_alpha = float(h_cfg.get("alpha", 0.85))
                 h_color = store_color(h_cfg.get("color", line.get_color()))
+                h_edge = store_color(h_cfg.get("edgecolor", "#ffffff"))
+                h_width = float(h_cfg.get("edgewidth", 1.0))
+                bins = self.histogram_bins(column)
+                # the column holds raw values: matplotlib counts them itself
+                out.append(f"sample_{tag} = np.asarray("
+                           f"DATA[{lit(str(column))}], float)")
+                out.append(f"sample_{tag} = sample_{tag}"
+                           f"[np.isfinite(sample_{tag})]")
                 out.append(
-                    f"y_clean = [v for v in DATA[{lit(str(column))}]]\n"
-                    f"y_clean = [v for v in y_clean if np.isfinite(v)]\n"
-                    f"{target}.hist(y_clean, bins={h_bins}, color={lit(h_color)}, "
-                    f"edgecolor='white', alpha={h_alpha}, label={lit(str(line.get_label()))})"
+                    f"counts_{tag}, edges_{tag}, bars_{tag} = {target}.hist("
+                    f"sample_{tag}, bins={bins}, "
+                    f"color={lit(h_color)}, edgecolor={lit(h_edge)}, "
+                    f"linewidth={h_width}, alpha={h_alpha}, "
+                    f"label={lit(str(line.get_label()))})"
                 )
+                out.append(f"curves[{lit(str(column))}] = bars_{tag}[0]")
             else:
                 out.append(
                     "curves[%s], = %s.plot(DATA[%s], DATA[%s], linestyle=%s, "
@@ -6348,6 +7413,8 @@ class PlotWindow(tk.Toplevel):
             "axes": axes,
             "series": series,
             "x_side": self.x_side,
+            "error_partner": {str(mean): str(std)
+                              for mean, std in self.error_partner.items()},
         }
 
     def apply_state(self, state):
@@ -6371,6 +7438,11 @@ class PlotWindow(tk.Toplevel):
         if side in ("bottom", "top"):
             self.x_side = side
             self.layout["x_side"] = side
+
+        pairs = state.get("error_partner")
+        if isinstance(pairs, dict):      # which column holds which error
+            self.error_partner = {str(mean): str(std)
+                                  for mean, std in pairs.items()}
 
         saved_series = state.get("series")
         if saved_series is not None:
@@ -6423,6 +7495,11 @@ class PlotWindow(tk.Toplevel):
                                                line.get_markeredgewidth()))
             line.set_visible(entry.get("visible", True))
             self.refresh_series_visuals(column)
+
+        # a histogram counted its bins again just now: the automatic range
+        # follows those counts (a range that was set by hand is restored
+        # below and wins over this)
+        self._rescale()
 
         # a file written before the axis colours existed carried one colour
         # for the whole frame: give it to all three axes, so it looks the same
@@ -6588,6 +7665,30 @@ class PlotWindow(tk.Toplevel):
         self.refresh_legend()
         self.draw()
 
+    def legend_handle(self, column, line):
+        """What is drawn in front of the legend text of one curve.
+
+        A bar chart and a histogram draw their curve with no line and no
+        marker at all - the bars are patches beside it - so the curve itself
+        would leave an empty space in front of the text.  One of the bars is
+        used instead, and an error bar plot shows its own container, so the
+        little sample really looks like what is in the diagram.
+        """
+        style = self.series_style.get(column, self.plot_style)
+        if style == "bar":
+            container = self.bar_containers.get(column)
+        elif style == "histogram":
+            container = self.bar_containers.get(f"hist_{column}")
+        elif style == "errorbar":
+            container = self.errorbar_containers.get(column)
+            # the marker of the curve and one error bar through it, so the
+            # sample in front of the text looks like a point of the diagram
+            return (line, container) if container is not None else line
+        else:
+            return line
+        patches = list(getattr(container, "patches", ()) or ())
+        return patches[0] if patches else line
+
     def refresh_legend(self):
         """One legend box per curve, each at its own (movable) position."""
         for legend in self.legends.values():
@@ -6606,10 +7707,14 @@ class PlotWindow(tk.Toplevel):
             if state is None:
                 state = self.default_legend_state(index)
                 self.legend_state[y_col] = state
-            legend = Legend(self.ax, [line], [label], loc=state["loc"],
+            handle = self.legend_handle(y_col, line)
+            legend = Legend(self.ax, [handle], [label], loc=state["loc"],
                             bbox_to_anchor=state["pos"],
                             bbox_transform=self.ax.transAxes,
-                            prop={"size": state["size"]}, framealpha=1.0)
+                            prop={"size": state["size"]}, framealpha=1.0,
+                            # ndivide=1: the parts are drawn over each other, so a marker with
+                            # an error bar through it is one single sample
+                            handler_map={tuple: HandlerTuple(ndivide=1)})
             for text in legend.get_texts():
                 text.set_color(state.get("color", "#000000"))
             box = legend.get_frame()            # surrounding box of this legend
@@ -8481,8 +9586,7 @@ class PlotWindow(tk.Toplevel):
         if cfg["auto"]:
             axis.set_major_locator(AutoLocator())
             ax.autoscale(enable=True, axis=axis_name)
-            ax.relim()
-            ax.autoscale_view()
+            self.measure_data(ax)
         else:
             now_low, now_high = self.current_limits(which)
             low = cfg.get("min") if cfg.get("min") is not None else now_low
@@ -8902,11 +10006,22 @@ class PlotWindow(tk.Toplevel):
             if column is not None:
                 self.series_style[column] = st
                 self.refresh_series_visuals(column)
+                # a histogram carries its own counts: the range follows
+                self._rescale()
 
         def set_bar_cfg(cfg):
             if column is not None:
                 self.bar_cfg[column] = cfg
                 self.refresh_series_visuals(column)
+
+        def set_histogram_cfg(cfg):
+            if column is None:
+                return
+            before = self.histogram_bins(column)
+            self.histogram_cfg[column] = cfg
+            self.refresh_series_visuals(column)
+            if before != self.histogram_bins(column):
+                self._rescale()      # other bins, other counts and range
 
         def set_error_cfg(cfg):
             if column is not None:
@@ -8927,6 +10042,8 @@ class PlotWindow(tk.Toplevel):
             on_plot_style=set_plot_style,
             bar_cfg=self.bar_cfg.get(column),
             on_bar_cfg=set_bar_cfg,
+            histogram_cfg=self.histogram_cfg.get(column),
+            on_histogram_cfg=set_histogram_cfg,
             error_cfg=self.error_cfg.get(column),
             on_error_cfg=set_error_cfg,
             available_columns=cols))
@@ -9032,23 +10149,271 @@ scientific (advanced) plots quickly (agile).
 
 The main window holds the data table.  The first column is always the
 independent variable (the X axis); every further column is drawn as a
-separate curve.
+separate curve.  The one exception is the **histogram**, which needs no X
+axis: there every column is a sample of raw values that the diagram counts
+by itself.
 
 ### Toolbar
 
 | Button | What it does |
 | --- | --- |
-| Plot | Opens a NEW diagram from the current data, with the default style. |
+| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 6 styles. |
 | Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
-| Add row | Appends an empty row and starts editing it. |
-| Delete row | Deletes every row the highlighted block touches. |
-| Add column | Asks for a name and appends an empty column. |
-| Delete column | Deletes the column you last clicked in (after a confirmation). |
+| Add row (icon, split button) | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
+| Delete row (icon) | Deletes every row the highlighted block touches. |
+| Add column (icon, split button) | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
+| Delete column (icon) | Deletes the column of the selected cell (after a confirmation). |
 | Settings... | Opens the settings editor (see section 4). |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
 `File` menu.
+
+### The row and column icons
+
+The four row and column tools are **coloured icons**, drawn in the same
+style as the `T`, shape and arrow buttons of the diagram window.  Each one
+is a tiny picture of a sheet of three bands - lying down for the rows,
+standing up for the columns - and the band that is painted shows exactly
+what will happen:
+
+* **Blue adds.**  The blue band is the new row or column, drawn where it
+  will appear: at the top or the bottom of the little sheet for a row,
+  at the left or the right for a column.  A band standing **apart** from
+  the other two means the far end of the whole sheet.  A blue `⊕` marks
+  the button as one that adds something.
+* **Red deletes.**  The red band in the middle is the row or column that
+  goes away, and the red `⊗` says that something is removed.
+
+Resting the pointer on any of them brings a **popup text** that spells the
+operation out in words - *"Add row: inserts an empty row below the selected
+cell (the arrow chooses the place)"*, *"Delete column: removes the column of
+the selected cell, with its data"*, and so on.  The text follows the place
+that is chosen, so the button always says what it is about to do.
+
+**Adding around the selected cell.**  The two adding icons are **split
+buttons**, like `Plot`:
+
+* **Clicking the icon** inserts the row or column at the place the icon
+  shows, measured from the **selected cell** (or from the highlighted
+  block).  A new row pushes the rows below it down, a new column pushes
+  the columns on its right to the right, and the formulas stored in those
+  cells move with them.
+* **Clicking the arrow** opens the three places.  Choosing one does it
+  right away **and** becomes the new default of the icon, so the next
+  click repeats it.
+
+| Place | Where the new row / column goes |
+| --- | --- |
+| Above / Before | Directly above the selected row, or directly to the left of the selected column. |
+| Below / After | Directly below the selected row, or directly to the right of the selected column (the default). |
+| At the end | The bottom of the sheet, or its right hand end - the old behaviour. |
+
+A column inserted **before the first one** becomes the new X column: the
+`x_B` / `x_T` check buttons move to it and the old first column becomes a
+curve.  The same tools sit in the right click menus as well: `Insert Row
+Above` / `Insert Row Below` on a cell, and `Insert Column Before...` /
+`Insert Column After...` on a column heading.
+
+### Plotting styles (Plot Split Button)
+
+The **Plot** button in the main window toolbar is a split button that combines
+an immediate action with a style menu:
+
+* **Clicking the main button** opens a new diagram drawn with whichever style is
+  currently active (indicated by its vector icon on the button face).
+* **Clicking the dropdown arrow** opens the menu of all **6 plotting styles**:
+  * **Line + Symbol**: A smooth or solid line connecting data points, with
+    distinct marker symbols (circles, squares, diamonds, etc.).
+  * **Line**: Clean continuous lines without markers, ideal for dense time
+    series, spectra, and continuous functions.
+  * **Scatter**: Discrete data markers without connecting lines (crosses `x`,
+    plus signs `+`, circles, squares, etc.), ideal for point clouds and
+    uncorrelated samples.
+  * **Bar Chart**: Vertical rectangular bars for categorical, discrete, or
+    binned data. Bar width, fill opacity (alpha), edge line width, and colors
+    can be customized in Curve Properties.
+  * **Error Bar**: Data points with vertical error bars and horizontal end caps.
+    Error bounds can be calculated automatically (as a percentage, a fixed
+    value, or standard deviation) or driven directly from a separate column in
+    the spreadsheet table.
+  * **Histogram**: The distribution of a column of raw values, counted by
+    the diagram itself into a given number of bins (20 by default, set per
+    curve in `Curve properties`). Every column is a sample of its own, and
+    one single column is enough.
+
+Selecting a style updates the button icon and immediately opens a diagram
+rendered in that style. Any curve's style can also be switched individually at
+any time from the **Curve properties** dialog.
+
+### The formula bar and Excel-like operations
+
+Directly above the table sits the **Formula Bar**, giving APlot full spreadsheet
+capabilities similar to Excel:
+
+* **Cell Address Box** (left): Displays the coordinate of the currently focused
+  cell (e.g., `A1`, `B3`). You can type any valid cell reference here and press
+  `Enter` to jump straight to that cell.
+* **fx Symbol**: Indicates formula entry mode.
+* **Formula / Value Entry**: Displays and edits either the raw formula (starting
+  with `=`) or the plain text value of the active cell.
+* **Commit (`✓`) button**: Confirms and saves the formula or value (`Enter`).
+* **Cancel (`✕`) button**: Discards edits and restores previous content (`Esc`).
+
+The bar carries nothing else: **filling down** and the **column operations**
+live where they are needed and do not take room above the sheet.
+
+* **Fill down**: `Ctrl/Cmd+D`, the black fill handle of the selection, or
+  `Fill Down` in the right click menu of a cell or a heading.  It copies the
+  top cell's formula or value down across the selected block of rows,
+  automatically adjusting relative row references (e.g. `=A1+B1` becomes
+  `=A2+B2`, `=A3+B3`) while preserving absolute references (e.g. `$A$1`).
+* **Column Math**: `Column Math...` in the right click menu of a cell, or
+  `Calculate Column '<name>'...` in the right click menu of a heading.  It
+  calculates entire columns at once using presets or mathematical formulas.
+
+### Excel-style cell fill handle and row/column numbering
+
+* **Interactive Fill Handle (black square)**:
+  * When any cell or block of cells is selected, a solid black square handle appears at the bottom-right corner of the selection outline.
+  * **Click and Drag Down**: Pulling the black square down replicates the formula or value across the rows below, adjusting cell coordinates relatively row by row (e.g. `=A1+B1` becomes `=A2+B2`, `=A3+B3`), and immediately computes the results with real-time drag feedback outline.
+  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel.
+  * The handle is always **on top of the cell editor**, so it can be grabbed
+    at once - also right after walking to the cell with the arrow keys,
+    while the cell is still open for typing.
+* **Column Letters (A, B, C, ..., AA, AB, ...)**:
+  * Displayed directly below the axis selection checkboxes in the axis check bar.
+  * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
+* **Row Line Numbers (1, 2, 3, ...)**:
+  * Displayed in a fixed left-side header column, painted with the very
+    background of the table itself, so the strip of numbers never stands
+    out against the cells (the themes of the systems differ - the one of
+    macOS is a dark grey).
+  * Stays pinned on the left when scrolling horizontally, while scrolling vertically in lockstep with the spreadsheet table data.
+  * Clicking or dragging along row numbers selects full rows.
+  * Clicking the top-left corner indicator (`◢`) selects all cells in the spreadsheet.
+
+#### Formula syntax and functions
+
+Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
+`A1`, `B2`), absolute coordinates (`$A$1`, `A$1`, `$A1`), and ranges (`A1:A10`,
+`B2:D10`) are fully supported:
+
+* **Arithmetic**: `+`, `-`, `*`, `/`, `^` (exponentiation), `%`.
+* **Comparisons**: `=`, `<>`, `<`, `<=`, `>`, `>=`.
+* **Math & Statistics**: `SUM(range)`, `AVERAGE(range)` / `AVG(range)`,
+  `COUNT(range)`, `MIN(...)`, `MAX(...)`, `ABS(x)`, `ROUND(x, decimals)`,
+  `INT(x)`, `SQRT(x)`, `POWER(base, exp)`, `EXP(x)`, `LN(x)` / `LOG(x)`,
+  `LOG10(x)`, `MOD(n, d)`.
+* **Trigonometry**: `SIN(x)`, `COS(x)`, `TAN(x)`, `ASIN(x)`, `ACOS(x)`,
+  `ATAN(x)`, `DEGREES(rad)`, `RADIANS(deg)`, `PI()`.
+* **Constants**: `pi`, `e` and `tau` are numbers on their own, so they can be
+  written straight into an expression - `=sin((B1+C1)+pi/6)`, `=2*pi*A1`,
+  `=B1/e`. `PI()` and `E()` still work as functions as well. A column that
+  really carries one of these names (or, for `e`, a sheet wide enough for a
+  column `E`) keeps its own meaning: the column always wins over the constant.
+* **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2)`,
+  `OR(c1, c2)`, `NOT(c)`.
+
+#### Error reporting and safety
+
+Formulas are evaluated using an AST-based calculation engine with cycle
+detection. When an invalid expression or calculation issue occurs, Excel-style
+error codes are displayed:
+
+* `#DIV/0!`: Division by zero.
+* `#NAME?`: Unrecognized function or variable name.
+* `#CYCLE!`: Circular dependency detected between cells (e.g., `A1` depends on
+  `B1` which depends back on `A1`).
+* `#REF!`: Cell reference outside table bounds.
+* `#VALUE!`: Incompatible operand types.
+
+#### Status bar summary
+
+Whenever a block of cells is selected in the table, the status bar at the bottom
+of the window immediately shows a live statistical summary of the numeric
+cells:
+
+> `Average: 24.50   Count: 12   Sum: 294.00   Min: 10.00   Max: 45.00`
+
+#### Right-click context menus
+
+Right-clicking inside the table opens a context menu:
+* On any **cell**: `Cut`, `Copy`, `Paste`, `Clear Cells`, `Fill Down`,
+  `Column Math...`, `Insert Row Above`, `Insert Row Below`, `Delete Row(s)`.
+* On any **column header**: `Calculate Column '<name>'...`, `Sort Ascending`,
+  `Sort Descending`, `Fill Down`, `Insert Column Before...`,
+  `Insert Column After...`, `Rename '<name>'...`, `Delete Column '<name>'`.
+
+### Column Math dialog
+
+The **Column Math** dialog (`Column Math...` in the right click menu of a
+cell, or `Calculate Column '<name>'...` on a column heading) lets you
+compute entire columns quickly without
+having to drag formulas across every row:
+
+* **Target column**: Choose an existing column to overwrite, or select `[New Column]`
+  to create a new one automatically.
+* **Presets**:
+  * **Scale and Offset**: `a * x + b` (e.g., multiply by a gain factor and add a bias).
+  * **Normalize**: Rescales values linearly into the range `[0, 1]`.
+  * **Standardize (z-score)**: Subtracts the mean and divides by standard deviation:
+    `(x - mean) / std`.
+  * **Subtract Mean**: Centers the column around zero: `x - mean(x)`.
+  * **Cumulative Sum**: Running sum down the column: `cumsum(x)`.
+  * **Difference / Gradient**: Numerical derivative: `diff(x)`.
+  * **Moving Average / Smooth**: Rolling window mean: `smooth(x, window=5)`.
+  * **Linspace / Index**: Evenly spaced numbers or row index sequence:
+    `linspace(0, 100)`.
+* **Custom Expressions**: Write any algebraic expression referencing column
+  names or letters directly (e.g., `A * 2 + B` or `col('Y1') / 1000`).
+
+### What the columns mean
+
+**Every** diagram reads the table the same way: the **first column is the X
+axis** and the **second one is the value** of the first curve.  What follows
+depends on the kind of diagram:
+
+| Diagram | The columns |
+| --- | --- |
+| Line + Symbol, Line, Scatter, Bar Chart | `x`, `y1`, `y2`, `y3`, ... - one curve per column |
+| Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
+| Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
+
+An **error bar** diagram therefore reads the columns two by two: the third
+column is the length of the error bar of the second one, the fifth belongs
+to the fourth, and so on.  Five columns give **two** curves with their own
+error bars, seven columns give three, and so on.  The `std` columns are used
+up as the errors and are not drawn as curves of their own, so every one of
+them has to stay ticked in the strip above the table.  A last `mean` column
+with no `std` beside it still gets a curve (with a 5 % error, which can be
+changed in `Curve properties`).
+
+A **histogram** is the one diagram that does not read the first column as an
+X axis, because it does not need one.  Each column is a **sample of raw
+measurements** and the diagram makes the statistics itself, exactly as
+`ax.hist` does: the range the values of that column cover is cut into
+**bins** of equal width and the values are counted.  The X axis is then the
+value of the measurement and the Y axis is how many of them fell into each
+bin.
+
+* **One column is enough.**  A thousand numbers in the first column alone
+  give a histogram straight away - no second column, no counting by hand.
+* **Every filled column gets its own histogram**, the first one included,
+  and each of them is counted separately over its own range.  A column that
+  is empty (or ticked off in the strip above the table) is simply left out.
+* **The number of bins is 20 by default** and belongs to the curve: open
+  `Curve properties` (double click the bars) and set `Bins` in the
+  **Histogram properties** section.  The sample is counted again at once and
+  the range follows.  Every histogram can have a different number of bins.
+* Empty cells and text are not measurements, so they are left out of the
+  counting: only the numbers are counted.
+* The bars are exactly as wide as a bin, so they stand side by side with no
+  gap, and the counts start at zero.
+
+Bins that are already counted in the table (one row per bar, `x` = the
+position of the bar and `y` = its height) are a **bar chart**, not a
+histogram - that is what the `Bar Chart` style is for.
 
 ### Which columns are plotted, and against which axis
 
@@ -9065,8 +10430,8 @@ Resting the pointer on any of them pops up its full name - `Bottom x-axis`,
 to be guessed.  A column is never made **narrower than its two check
 buttons**: pulling the window in stops there and the horizontal scroll bar
 takes over, so neither the switches nor the numbers under them can be
-squeezed out of sight.  `Settings > Table > Column width` sets the starting
-width; anything smaller than that minimum is raised to it.
+squeezed out of sight.  `Settings > Spreadsheet > Column width` sets the
+starting width; anything smaller than that minimum is raised to it.
 
 The rules are simple:
 
@@ -9075,7 +10440,10 @@ The rules are simple:
 * the **first column** always feeds one of the two X axes: `x_B` is ticked
   when the data arrives, and clicking `x_T` moves the whole X scale - its
   numbers and its label - **above** the plot area.  Clicking the ticked box
-  does not switch it off; the data has to have an X axis.
+  does not switch it off; the data has to have an X axis.  In a
+  **histogram** that column is a sample like any other and is counted as
+  well, while its `x_B` / `x_T` tick still decides whether the value scale
+  is drawn below or above the bars.
 * every **other column** may have **both boxes empty**: then that column is
   simply not plotted.  The data stays in the table, it is only left out of
   the diagram.
@@ -9089,7 +10457,8 @@ The rules are simple:
   to the other scale** while it keeps its colour, its line style and its
   legend box.
 * with nothing ticked the program says so instead of drawing an empty
-  diagram.
+  diagram.  A curve needs an X column and at least one Y column; a
+  **histogram** is content with one single column of values.
 * the ticks are kept while the table is edited (adding rows, renaming a
   column, adding a column - a new column starts on `y_L`) and are reset to
   the first axis of every column whenever new data is loaded.
@@ -9101,6 +10470,26 @@ left.
 A saved `.aplt` file always contains the **whole** table, and the diagrams
 in it keep exactly the curves they had when they were saved, each one on
 the axis it was drawn against.
+
+### How many columns there are
+
+The **blank sheet the program starts with** is filled with as many columns
+as the window can show: the names from
+`Settings > Spreadsheet > Column names` come first (`X`, `Y1`, ...) and the
+rest are added as `Y2`, `Y3`, ... until the width of the window is used up.
+
+* **Widening the window brings more columns**, one for every column width
+  that fits.
+* **Narrowing it keeps every column** that is there and lets the horizontal
+  scroll bar take over, so nothing can be lost by making the window small.
+* As soon as **one value is typed** into the sheet - or a data file is
+  loaded - the columns stop appearing by themselves: from then on the table
+  is your data and only `Add column` changes its shape.
+* A sheet that is emptied again (a fresh start) fills the window again.
+
+`Add column` and `Delete column` work at any time, and a column that is
+empty from top to bottom is simply not plotted, so a few spare columns cost
+nothing.
 
 ### Editing cells
 
@@ -9155,6 +10544,13 @@ leaves its row quiet.
 | `Ctrl/Cmd+Space` | The whole columns the block touches. |
 | `Ctrl/Cmd+A` | The whole table. |
 | `Enter` or `F2` | Opens the cell under the cursor for editing. |
+
+The open cell always carries a **blinking blue cursor** and always has the
+keyboard, even when a diagram window was the one in front a moment before
+(after a graph was opened, for instance): the cell takes the keyboard back
+for itself, and a diagram window never takes it away from a cell that is
+being edited.  Clicking in the diagram, as always, gives the keyboard back
+to the diagram.
 
 The block is what the data operations work on:
 
@@ -9641,10 +11037,15 @@ If the old behaviour is preferred, `Property windows always on top` in the
 
 ### Curve properties
 
-Four sections, each with **its own check button as the title**: switched
-off, that part of the curve is simply not drawn.  As in the axes dialog,
-the settings that belong together share a line, and the four sections share
-their column widths so everything lines up.
+At the top of the dialog, a **Plot Style** dropdown selector allows switching the
+representation of any individual curve between all 6 styles: **Line + Symbol**,
+**Line**, **Scatter**, **Bar Chart**, **Error Bar**, and **Histogram**.  The
+dialog dynamically adapts its sections and options to match the active style.
+
+The dialog sections each have **their own check button as the title**: switched
+off, that part of the curve is simply not drawn.  The settings that belong
+together share a line, and the sections share their column widths so everything
+lines up cleanly.
 
 * **Legend**: the `Text` of this curve's legend box, then its `Font size`
   with the `Colour` of the text next to it.  An empty text removes the box.
@@ -9653,6 +11054,43 @@ their column widths so everything lines up.
 * **Marker**: `Hollow (no fill)` at the top of the section - an outlined
   marker has no fill colour at all - then `Style` (12 shapes), `Size` with
   `Fill colour` next to it, and `Edge width` with `Edge colour` next to it.
+The **legend** of every kind of diagram shows what that diagram really
+looks like in front of the text: a line with its marker for a curve, a
+**coloured bar** for a bar chart and a histogram, and a marker with an
+**error bar** through it for an error bar plot.
+
+* **Bar properties** (visible for Bar Charts):
+  * `Width`: the width of the bars in X-axis data units.
+  * `Opacity (0-1)`: transparency of the bar fill (0.0 transparent, 1.0 opaque).
+  * `Edge width`: thickness of the bar outline.
+  * `Bar colour` and `Edge colour`: independently selectable colours for the
+    bar body and border.
+  * *Tip:* Clicking any bar directly inside the diagram window opens this dialog.
+* **Histogram properties** (the same section, for Histograms): the bars of a
+  histogram touch, so there is no width to set - the **number of bins** takes
+  its place.
+  * `Bins`: how many equal parts the range of the sample is cut into, `20`
+    to begin with and anything from 1 to 1000.  Changing it counts the
+    column again at once and the range follows the new counts.  Every
+    histogram carries its own number of bins, and it is written into the
+    `.aplt` file with the rest of the curve.
+  * `Opacity (0-1)`, `Edge width`, `Bar colour` and `Edge colour` work
+    exactly as they do for a bar chart (the edges start out white, which is
+    what separates bars that touch).
+* **Error Bar properties** (visible for Error Bars):
+  * `Source`: determines how error bars are calculated:
+    * `Next column (x, mean, std)` **(default)**: the column standing right
+      after this one holds the length of the error bars - see
+      `What the columns mean` above.
+    * `Percentage`: symmetric error computed as a percentage of the Y value (e.g. ±5%).
+    * `Fixed value`: constant symmetric error across all points (e.g. ±0.5).
+    * `Standard deviation`: column standard deviation used as uniform error bounds.
+    * `From column`: select any other column from the table to specify individual error values for each row.
+  * `Value / Column`: sets the percentage or fixed value, or selects the error column.
+  * `Cap width`: width of the horizontal end caps.
+  * `Line width`: thickness of the error bar stems and caps.
+  * `Colour`: colour of the error bars.
+  * *Tip:* Clicking on any error bar stem or horizontal cap directly opens this dialog.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
   vertical, horizontal, crossed, circles, dots, stars and their dense
@@ -9828,8 +11266,8 @@ and the name of the file is shown in the title bar of the table window.
 
 **Nothing is lost by accident.**  The program knows whether anything has
 been changed since the last save (moving or resizing a window does not
-count).  If it has, then closing the diagram, opening another graph or
-leaving the program asks first:
+count).  If it has, then closing the diagram or leaving the program asks
+first:
 
 > This graph has been edited and not saved.  Save it now?
 
@@ -9837,6 +11275,16 @@ leaving the program asks first:
 changes away, `Cancel` leaves everything as it is.  With several diagrams
 open, closing one of them does not ask - only the **last** one carries the
 whole graph.
+
+**Opening a file never asks.**  `Open graph`, `Open data file` and the
+random data of the `Data` menu simply replace what is on the screen: the
+question about unsaved work belongs to **leaving** the program (and to
+closing the last diagram), where something really can be lost.
+
+**Closing a window is not an edit.**  A graph that is in step with its file
+stays in step when its diagram window is closed, so closing the diagram and
+then the spreadsheet does not ask twice - and does not ask at all when
+nothing was changed since the last save.
 
 ### Exporting the diagram
 
@@ -10043,12 +11491,17 @@ class App:
         self.project_path = None
         self._saved_signature = None
         self._just_saved = False        # the last question ended in a save
+        self._was_saved = False         # ... or nothing had been edited at all
 
         self._build_toolbar()
         self.table = DataTable(self.root, self.settings,
-                               on_rename=self._column_renamed)
+                               on_rename=self._column_renamed,
+                               on_add_column=self.add_column,
+                               on_delete_column=self.delete_column)
         self.table.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        self.table.set_dataframe(self._empty_frame(), check_all=True)
+        # the starting sheet is blank: it fills the window with columns
+        self.table.set_dataframe(self._empty_frame(), check_all=True,
+                                 blank=True)
 
         self._build_menu()
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
@@ -10078,6 +11531,9 @@ class App:
         bar = ttk.Frame(self.root, padding=(10, 8))
         bar.pack(fill="x")
         self.current_plot_style = "line_symbol"
+        # where a new row / column goes: remembered from the split buttons
+        self.row_place = getattr(self, "row_place", "below")
+        self.column_place = getattr(self, "column_place", "after")
         self.plot_split_btn = PlotSplitButton(
             bar, style=self.current_plot_style,
             on_plot=lambda: self.open_plot(self.current_plot_style),
@@ -10087,11 +11543,53 @@ class App:
         ttk.Button(bar, text="Update plot", command=self.update_plot).pack(
             side="left", padx=(6, 0))
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Button(bar, text="Add row", command=self.add_row).pack(side="left")
-        ttk.Button(bar, text="Delete row", command=self.delete_row).pack(side="left", padx=(6, 0))
-        ttk.Button(bar, text="Add column", command=self.add_column).pack(side="left", padx=(6, 0))
-        ttk.Button(bar, text="Delete column", command=self.delete_column).pack(side="left", padx=(6, 0))
+        # the four row / column tools: blue icons add, red ones delete
+        self.add_row_btn = TableToolButton(
+            bar, kind="row", action="add", where=self.row_place,
+            command=self.add_row, on_menu=self._show_row_place_menu)
+        self.add_row_btn.pack(side="left")
+        self.delete_row_btn = TableToolButton(
+            bar, kind="row", action="delete", command=self.delete_row)
+        self.delete_row_btn.pack(side="left", padx=(6, 0))
+        self.add_column_btn = TableToolButton(
+            bar, kind="column", action="add", where=self.column_place,
+            command=self.add_column, on_menu=self._show_column_place_menu)
+        self.add_column_btn.pack(side="left", padx=(10, 0))
+        self.delete_column_btn = TableToolButton(
+            bar, kind="column", action="delete", command=self.delete_column)
+        self.delete_column_btn.pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="Settings...", command=self.open_settings).pack(side="right")
+
+    # -- where a new row or column goes -------------------------------------
+    ROW_PLACES = (("Add row above the selected cell", "above"),
+                  ("Add row below the selected cell", "below"),
+                  ("Add row at the end of the sheet", "end"))
+    COLUMN_PLACES = (("Add column before (left of) the selected cell", "before"),
+                     ("Add column after (right of) the selected cell", "after"),
+                     ("Add column at the right end of the sheet", "end"))
+
+    def _place_menu(self, button, places, attribute, action):
+        """The list of the places under a split button; the choice is kept."""
+        menu = tk.Menu(self.root, tearoff=0)
+        for label, code in places:
+            def _choose(place=code):
+                setattr(self, attribute, place)
+                button.set_where(place)
+                action(place)
+            menu.add_command(label=label, command=_choose)
+        try:
+            menu.tk_popup(button.winfo_rootx(),
+                          button.winfo_rooty() + button.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def _show_row_place_menu(self, _event=None):
+        self._place_menu(self.add_row_btn, self.ROW_PLACES, "row_place",
+                         self.add_row)
+
+    def _show_column_place_menu(self, _event=None):
+        self._place_menu(self.add_column_btn, self.COLUMN_PLACES,
+                         "column_place", self.add_column)
 
     def _show_plot_style_menu(self, _event=None):
         menu = tk.Menu(self.root, tearoff=0)
@@ -10347,9 +11845,12 @@ class App:
 
     # -- opening and saving with the keyboard ------------------------------
     def open_graph(self, *_args):
-        """Cmd/Ctrl+O: open a graph saved before."""
-        if not self._may_discard("Open another graph"):
-            return False
+        """Cmd/Ctrl+O: open a graph saved before.
+
+        Opening a file never asks about unsaved work: the question belongs
+        to leaving the program (and to closing the last diagram), where
+        something really can be lost.
+        """
         return self.load_project()
 
     def save_graph(self, *_args):
@@ -10387,17 +11888,26 @@ class App:
 
     def plot_closing(self, window):
         """A diagram window is being closed: the last one takes the graph."""
+        # whether the graph was already in step with its file is decided
+        # here, before the window disappears from the document
+        self._was_saved = not self.is_modified()
         others = [one for one in self.open_windows() if one is not window]
         if others:
             return True
         return bool(self._may_discard("Close the diagram"))
 
     def plot_closed(self, window):
-        """The diagram is gone; a graph just saved stays "saved"."""
+        """The diagram is gone; a graph in step with its file stays in step.
+
+        Closing a window is not an edit of the graph: a saved diagram that
+        is simply closed must not make the program ask about unsaved work
+        when the spreadsheet window is closed afterwards.
+        """
         self.plot_windows = [one for one in self.plot_windows
                              if one is not window and one.winfo_exists()]
-        if self._just_saved:
+        if self._just_saved or self._was_saved:
             self._just_saved = False
+            self._was_saved = False
             self._saved_signature = self.project_signature()
         return None
 
@@ -10454,6 +11964,30 @@ class App:
             messagebox.showinfo("Information", "There is no diagram yet.")
             return False
         return window.copy_figure_to_clipboard()
+
+    def keyboard_busy(self, widget):
+        """True when `widget` is a field that must not lose the keyboard.
+
+        A cell (or a column heading) of the spreadsheet that is open for
+        editing keeps the keyboard even when a diagram window becomes the
+        active one - otherwise the blinking cursor disappears and nothing
+        typed into the cell arrives.
+        """
+        fields = []
+        table = getattr(self, "table", None)
+        for holder in (getattr(table, "_editor", None),
+                       getattr(table, "_heading_editor", None)):
+            if holder:
+                fields.append(holder[0])
+        for field in fields:
+            try:
+                if not field.winfo_exists():
+                    continue
+                if widget is field or str(widget).startswith(str(field) + "."):
+                    return True
+            except tk.TclError:
+                continue
+        return False
 
     def bind_shortcuts(self, window, plot=None):
         """The keyboard commands of the File menu, on every window."""
@@ -10573,8 +12107,11 @@ class App:
             window.destroy()
         self.plot_windows = []
         for state in document.get("plots") or []:
-            # a saved project brings its own curves: the whole table is used
-            window = PlotWindow(self.root, self.df.copy(), self.settings, app=self)
+            # a saved project brings its own curves: the whole table is used,
+            # and its own style - a histogram reads the columns differently
+            window = PlotWindow(
+                self.root, self.df.copy(), self.settings, app=self,
+                plot_style=str(state.get("plot_style") or "line_symbol"))
             if not window.winfo_exists():
                 continue
             window.apply_state(state)
@@ -10608,8 +12145,23 @@ class App:
         self.table.set_dataframe(pd.DataFrame(data), check_all=True)
 
     # -- table operations --------------------------------------------------
-    def add_row(self):
-        self.table.add_row(focus=True)
+    def add_row(self, where=None):
+        """One empty row around the selected cell (or at the end).
+
+        `where` is `"above"`, `"below"` or `"end"`; without it the place
+        the split button shows is used.
+        """
+        where = where or self.row_place
+        rows = self.table.selected_rows()
+        row = (min(rows) if where == "above" else max(rows)) if rows \
+            else (self.table.cursor[0] if self.table.cursor else 0)
+        if where == "end":
+            at = None
+        elif where == "above":
+            at = row
+        else:
+            at = row + 1
+        return self.table.insert_row(at)
 
     def delete_row(self):
         """Delete every row the highlighted block touches."""
@@ -10645,43 +12197,80 @@ class App:
         if not self.table.paste_block():
             messagebox.showinfo("Information", "There is nothing to paste.")
 
-    def add_column(self):
-        name = simpledialog.askstring("Add column", "Name of the new column:",
-                                      parent=self.root)
+    def add_column(self, where=None, at_column=None):
+        """One empty column around the selected cell (or at the right end).
+
+        `where` is `"before"`, `"after"` or `"end"`; `at_column` is the
+        column it is measured from, the selected one by default.
+        """
+        where = where or self.column_place
+        name = simpledialog.askstring(
+            "Add column", "Name of the new column:", parent=self.root,
+            initialvalue=self.table.next_column_name())
         if not name:
-            return
-        if not self.table.add_column(name):
+            return False
+        if at_column is None:
+            bounds = self.table.block_bounds()
+            if bounds is None:
+                at_column = self.table.cursor[1] if self.table.cursor else 0
+            else:
+                at_column = bounds[1] if where == "before" else bounds[3]
+        if where == "end":
+            at = None
+        elif where == "before":
+            at = at_column
+        else:
+            at = at_column + 1
+        if not self.table.insert_column(name, at):
             messagebox.showerror("Error", "This column already exists.")
+            return False
+        return True
 
     def _column_renamed(self, old, new, index):
         """A heading was edited: follow it in the open diagrams."""
         for window in self.open_windows():
             window.rename_series(old, new, is_x_column=(index == 0))
 
-    def delete_column(self):
-        name = self.table.current_column
-        if name not in list(self.df.columns):
+    def delete_column(self, name=None):
+        """Delete the column of the selected cell, with its data."""
+        columns = [str(one) for one in self.df.columns]
+        if name is None:
+            cursor = self.table.cursor[1] if self.table.cursor else None
+            if cursor is not None and 0 <= cursor < len(columns):
+                name = columns[cursor]
+            else:
+                name = self.table.current_column
+        if name not in columns:
             name = self._ask_column("Delete column")
         if name is None:
-            return
-        if len(self.df.columns) <= 1:
+            return False
+        if len(columns) <= 1:
             messagebox.showinfo("Information", "The last column cannot be deleted.")
-            return
+            return False
         if not messagebox.askyesno("Delete column",
                                    f"Delete the column '{name}' with its data?",
                                    parent=self.root):
-            return
-        self.table.current_column = None
-        self.table.set_dataframe(self.df.drop(columns=[name]))
+            return False
+        return self.table.remove_column(name)
 
     # -- plotting ----------------------------------------------------------
-    def _plottable(self):
+    def _plottable(self, style=None):
+        """Is there enough data for a diagram of this style?
+
+        A histogram makes its own statistics out of one column of values,
+        so a single column is enough for it; every other style needs an X
+        column and at least one Y column.
+        """
         self.table._commit_edit()  # do not lose the cell being edited
-        if self.df is None or self.df.empty or len(self.df.columns) < 2:
+        style = style or getattr(self, "current_plot_style", "line_symbol")
+        least = self.least_columns(style)
+        if self.df is None or self.df.empty or len(self.df.columns) < least:
             messagebox.showerror(
-                "Error", "At least two columns are needed (X and Y axes).")
+                "Error", "At least one column of values is needed."
+                if least < 2 else
+                "At least two columns are needed (X and Y axes).")
             return False
-        if len(self.table.plot_columns()) < 2:
+        if len(self.table.plot_columns()) < least:
             messagebox.showinfo(
                 "Information",
                 "No column is ticked for plotting.\n"
@@ -10689,9 +12278,15 @@ class App:
             return False
         return True
 
-    def plot_data(self):
+    @staticmethod
+    def least_columns(style):
+        """How many columns a diagram of this style needs."""
+        return 1 if style == "histogram" else 2
+
+    def plot_data(self, style=None):
         """The data that goes to the diagrams: the ticked columns only."""
-        return self.table.plot_dataframe()
+        style = style or getattr(self, "current_plot_style", "line_symbol")
+        return self.table.plot_dataframe(self.least_columns(style))
 
     def plot_layout(self):
         """Which axis every ticked column belongs to."""
@@ -10705,11 +12300,12 @@ class App:
 
     def open_plot(self, plot_style=None):
         """Open a new diagram of the ticked columns, with the specified or default style."""
-        if not self._plottable():
-            return None
         style = plot_style or getattr(self, "current_plot_style", "line_symbol")
-        window = PlotWindow(self.root, self.plot_data(), self.settings, app=self,
-                            layout=self.plot_layout(), plot_style=style)
+        if not self._plottable(style):
+            return None
+        window = PlotWindow(self.root, self.plot_data(style), self.settings,
+                            app=self, layout=self.plot_layout(),
+                            plot_style=style)
         if window.winfo_exists():
             self.plot_windows.append(window)
             return window
@@ -10717,16 +12313,21 @@ class App:
 
     def update_plot(self):
         """Send the edited data to the open diagrams without touching style."""
-        if not self._plottable():
-            return
         windows = self.open_windows()
+        # every open diagram gets what its own style needs: a histogram is
+        # happy with one column, a curve wants two
+        least = min([self.least_columns(window.plot_style)
+                     for window in windows] or [self.least_columns(None)])
+        if not self._plottable("histogram" if least < 2 else None):
+            return
         if not windows:
             self.open_plot()  # nothing to update yet: open the first diagram
             return
-        data = self.plot_data()
         layout = self.plot_layout()
         for window in windows:
-            window.update_data(data.copy(), layout=layout)
+            data = self.table.plot_dataframe(
+                self.least_columns(window.plot_style))
+            window.update_data(data, layout=layout)
             window.lift()
 
 

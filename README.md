@@ -22,7 +22,9 @@ scientific (advanced) plots quickly (agile).
 
 The main window holds the data table.  The first column is always the
 independent variable (the X axis); every further column is drawn as a
-separate curve.
+separate curve.  The one exception is the **histogram**, which needs no X
+axis: there every column is a sample of raw values that the diagram counts
+by itself.
 
 ### Toolbar
 
@@ -30,15 +32,61 @@ separate curve.
 | --- | --- |
 | Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 6 styles. |
 | Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
-| Add row | Appends an empty row and starts editing it. |
-| Delete row | Deletes every row the highlighted block touches. |
-| Add column | Asks for a name and appends an empty column. |
-| Delete column | Deletes the column you last clicked in (after a confirmation). |
+| Add row (icon, split button) | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
+| Delete row (icon) | Deletes every row the highlighted block touches. |
+| Add column (icon, split button) | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
+| Delete column (icon) | Deletes the column of the selected cell (after a confirmation). |
 | Settings... | Opens the settings editor (see section 4). |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
 `File` menu.
+
+### The row and column icons
+
+The four row and column tools are **coloured icons**, drawn in the same
+style as the `T`, shape and arrow buttons of the diagram window.  Each one
+is a tiny picture of a sheet of three bands - lying down for the rows,
+standing up for the columns - and the band that is painted shows exactly
+what will happen:
+
+* **Blue adds.**  The blue band is the new row or column, drawn where it
+  will appear: at the top or the bottom of the little sheet for a row,
+  at the left or the right for a column.  A band standing **apart** from
+  the other two means the far end of the whole sheet.  A blue `⊕` marks
+  the button as one that adds something.
+* **Red deletes.**  The red band in the middle is the row or column that
+  goes away, and the red `⊗` says that something is removed.
+
+Resting the pointer on any of them brings a **popup text** that spells the
+operation out in words - *"Add row: inserts an empty row below the selected
+cell (the arrow chooses the place)"*, *"Delete column: removes the column of
+the selected cell, with its data"*, and so on.  The text follows the place
+that is chosen, so the button always says what it is about to do.
+
+**Adding around the selected cell.**  The two adding icons are **split
+buttons**, like `Plot`:
+
+* **Clicking the icon** inserts the row or column at the place the icon
+  shows, measured from the **selected cell** (or from the highlighted
+  block).  A new row pushes the rows below it down, a new column pushes
+  the columns on its right to the right, and the formulas stored in those
+  cells move with them.
+* **Clicking the arrow** opens the three places.  Choosing one does it
+  right away **and** becomes the new default of the icon, so the next
+  click repeats it.
+
+| Place | Where the new row / column goes |
+| --- | --- |
+| Above / Before | Directly above the selected row, or directly to the left of the selected column. |
+| Below / After | Directly below the selected row, or directly to the right of the selected column (the default). |
+| At the end | The bottom of the sheet, or its right hand end - the old behaviour. |
+
+A column inserted **before the first one** becomes the new X column: the
+`x_B` / `x_T` check buttons move to it and the old first column becomes a
+curve.  The same tools sit in the right click menus as well: `Insert Row
+Above` / `Insert Row Below` on a cell, and `Insert Column Before...` /
+`Insert Column After...` on a column heading.
 
 ### Plotting styles (Plot Split Button)
 
@@ -62,8 +110,10 @@ an immediate action with a style menu:
     Error bounds can be calculated automatically (as a percentage, a fixed
     value, or standard deviation) or driven directly from a separate column in
     the spreadsheet table.
-  * **Histogram**: Frequency distribution representation of continuous data,
-    grouping values into configurable bins.
+  * **Histogram**: The distribution of a column of raw values, counted by
+    the diagram itself into a given number of bins (20 by default, set per
+    curve in `Curve properties`). Every column is a sample of its own, and
+    one single column is enough.
 
 Selecting a style updates the button icon and immediately opens a diagram
 rendered in that style. Any curve's style can also be switched individually at
@@ -82,12 +132,39 @@ capabilities similar to Excel:
   with `=`) or the plain text value of the active cell.
 * **Commit (`✓`) button**: Confirms and saves the formula or value (`Enter`).
 * **Cancel (`✕`) button**: Discards edits and restores previous content (`Esc`).
-* **Fill Down (`Ctrl/Cmd+D`) button**: Copies the top cell's formula or value down
-  across the selected block of rows, automatically adjusting relative row
-  references (e.g. `=A1+B1` becomes `=A2+B2`, `=A3+B3`) while preserving
-  absolute references (e.g. `$A$1`).
-* **Column Math... button**: Opens the Column Math dialog to calculate entire
-  columns at once using presets or mathematical formulas.
+
+The bar carries nothing else: **filling down** and the **column operations**
+live where they are needed and do not take room above the sheet.
+
+* **Fill down**: `Ctrl/Cmd+D`, the black fill handle of the selection, or
+  `Fill Down` in the right click menu of a cell or a heading.  It copies the
+  top cell's formula or value down across the selected block of rows,
+  automatically adjusting relative row references (e.g. `=A1+B1` becomes
+  `=A2+B2`, `=A3+B3`) while preserving absolute references (e.g. `$A$1`).
+* **Column Math**: `Column Math...` in the right click menu of a cell, or
+  `Calculate Column '<name>'...` in the right click menu of a heading.  It
+  calculates entire columns at once using presets or mathematical formulas.
+
+### Excel-style cell fill handle and row/column numbering
+
+* **Interactive Fill Handle (black square)**:
+  * When any cell or block of cells is selected, a solid black square handle appears at the bottom-right corner of the selection outline.
+  * **Click and Drag Down**: Pulling the black square down replicates the formula or value across the rows below, adjusting cell coordinates relatively row by row (e.g. `=A1+B1` becomes `=A2+B2`, `=A3+B3`), and immediately computes the results with real-time drag feedback outline.
+  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel.
+  * The handle is always **on top of the cell editor**, so it can be grabbed
+    at once - also right after walking to the cell with the arrow keys,
+    while the cell is still open for typing.
+* **Column Letters (A, B, C, ..., AA, AB, ...)**:
+  * Displayed directly below the axis selection checkboxes in the axis check bar.
+  * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
+* **Row Line Numbers (1, 2, 3, ...)**:
+  * Displayed in a fixed left-side header column, painted with the very
+    background of the table itself, so the strip of numbers never stands
+    out against the cells (the themes of the systems differ - the one of
+    macOS is a dark grey).
+  * Stays pinned on the left when scrolling horizontally, while scrolling vertically in lockstep with the spreadsheet table data.
+  * Clicking or dragging along row numbers selects full rows.
+  * Clicking the top-left corner indicator (`◢`) selects all cells in the spreadsheet.
 
 #### Formula syntax and functions
 
@@ -103,6 +180,11 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
   `LOG10(x)`, `MOD(n, d)`.
 * **Trigonometry**: `SIN(x)`, `COS(x)`, `TAN(x)`, `ASIN(x)`, `ACOS(x)`,
   `ATAN(x)`, `DEGREES(rad)`, `RADIANS(deg)`, `PI()`.
+* **Constants**: `pi`, `e` and `tau` are numbers on their own, so they can be
+  written straight into an expression - `=sin((B1+C1)+pi/6)`, `=2*pi*A1`,
+  `=B1/e`. `PI()` and `E()` still work as functions as well. A column that
+  really carries one of these names (or, for `e`, a sheet wide enough for a
+  column `E`) keeps its own meaning: the column always wins over the constant.
 * **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2)`,
   `OR(c1, c2)`, `NOT(c)`.
 
@@ -130,15 +212,17 @@ cells:
 #### Right-click context menus
 
 Right-clicking inside the table opens a context menu:
-* On any **cell**: `Cut`, `Copy`, `Paste`, `Clear Cells`, `Fill Down`, `Column Math...`,
-  `Insert Row`, `Delete Row`.
-* On any **column header**: `Rename Column...`, `Column Math...`, `Insert Column`,
-  `Delete Column`, `Fill Down`.
+* On any **cell**: `Cut`, `Copy`, `Paste`, `Clear Cells`, `Fill Down`,
+  `Column Math...`, `Insert Row Above`, `Insert Row Below`, `Delete Row(s)`.
+* On any **column header**: `Calculate Column '<name>'...`, `Sort Ascending`,
+  `Sort Descending`, `Fill Down`, `Insert Column Before...`,
+  `Insert Column After...`, `Rename '<name>'...`, `Delete Column '<name>'`.
 
 ### Column Math dialog
 
-The **Column Math** dialog (`Column Math...` button in the formula bar, or
-right-click a column header) lets you compute entire columns quickly without
+The **Column Math** dialog (`Column Math...` in the right click menu of a
+cell, or `Calculate Column '<name>'...` on a column heading) lets you
+compute entire columns quickly without
 having to drag formulas across every row:
 
 * **Target column**: Choose an existing column to overwrite, or select `[New Column]`
@@ -157,6 +241,53 @@ having to drag formulas across every row:
 * **Custom Expressions**: Write any algebraic expression referencing column
   names or letters directly (e.g., `A * 2 + B` or `col('Y1') / 1000`).
 
+### What the columns mean
+
+**Every** diagram reads the table the same way: the **first column is the X
+axis** and the **second one is the value** of the first curve.  What follows
+depends on the kind of diagram:
+
+| Diagram | The columns |
+| --- | --- |
+| Line + Symbol, Line, Scatter, Bar Chart | `x`, `y1`, `y2`, `y3`, ... - one curve per column |
+| Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
+| Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
+
+An **error bar** diagram therefore reads the columns two by two: the third
+column is the length of the error bar of the second one, the fifth belongs
+to the fourth, and so on.  Five columns give **two** curves with their own
+error bars, seven columns give three, and so on.  The `std` columns are used
+up as the errors and are not drawn as curves of their own, so every one of
+them has to stay ticked in the strip above the table.  A last `mean` column
+with no `std` beside it still gets a curve (with a 5 % error, which can be
+changed in `Curve properties`).
+
+A **histogram** is the one diagram that does not read the first column as an
+X axis, because it does not need one.  Each column is a **sample of raw
+measurements** and the diagram makes the statistics itself, exactly as
+`ax.hist` does: the range the values of that column cover is cut into
+**bins** of equal width and the values are counted.  The X axis is then the
+value of the measurement and the Y axis is how many of them fell into each
+bin.
+
+* **One column is enough.**  A thousand numbers in the first column alone
+  give a histogram straight away - no second column, no counting by hand.
+* **Every filled column gets its own histogram**, the first one included,
+  and each of them is counted separately over its own range.  A column that
+  is empty (or ticked off in the strip above the table) is simply left out.
+* **The number of bins is 20 by default** and belongs to the curve: open
+  `Curve properties` (double click the bars) and set `Bins` in the
+  **Histogram properties** section.  The sample is counted again at once and
+  the range follows.  Every histogram can have a different number of bins.
+* Empty cells and text are not measurements, so they are left out of the
+  counting: only the numbers are counted.
+* The bars are exactly as wide as a bin, so they stand side by side with no
+  gap, and the counts start at zero.
+
+Bins that are already counted in the table (one row per bar, `x` = the
+position of the bar and `y` = its height) are a **bar chart**, not a
+histogram - that is what the `Bar Chart` style is for.
+
 ### Which columns are plotted, and against which axis
 
 Above the column headings there is a strip with **two check buttons for
@@ -172,8 +303,8 @@ Resting the pointer on any of them pops up its full name - `Bottom x-axis`,
 to be guessed.  A column is never made **narrower than its two check
 buttons**: pulling the window in stops there and the horizontal scroll bar
 takes over, so neither the switches nor the numbers under them can be
-squeezed out of sight.  `Settings > Table > Column width` sets the starting
-width; anything smaller than that minimum is raised to it.
+squeezed out of sight.  `Settings > Spreadsheet > Column width` sets the
+starting width; anything smaller than that minimum is raised to it.
 
 The rules are simple:
 
@@ -182,7 +313,10 @@ The rules are simple:
 * the **first column** always feeds one of the two X axes: `x_B` is ticked
   when the data arrives, and clicking `x_T` moves the whole X scale - its
   numbers and its label - **above** the plot area.  Clicking the ticked box
-  does not switch it off; the data has to have an X axis.
+  does not switch it off; the data has to have an X axis.  In a
+  **histogram** that column is a sample like any other and is counted as
+  well, while its `x_B` / `x_T` tick still decides whether the value scale
+  is drawn below or above the bars.
 * every **other column** may have **both boxes empty**: then that column is
   simply not plotted.  The data stays in the table, it is only left out of
   the diagram.
@@ -196,7 +330,8 @@ The rules are simple:
   to the other scale** while it keeps its colour, its line style and its
   legend box.
 * with nothing ticked the program says so instead of drawing an empty
-  diagram.
+  diagram.  A curve needs an X column and at least one Y column; a
+  **histogram** is content with one single column of values.
 * the ticks are kept while the table is edited (adding rows, renaming a
   column, adding a column - a new column starts on `y_L`) and are reset to
   the first axis of every column whenever new data is loaded.
@@ -208,6 +343,26 @@ left.
 A saved `.aplt` file always contains the **whole** table, and the diagrams
 in it keep exactly the curves they had when they were saved, each one on
 the axis it was drawn against.
+
+### How many columns there are
+
+The **blank sheet the program starts with** is filled with as many columns
+as the window can show: the names from
+`Settings > Spreadsheet > Column names` come first (`X`, `Y1`, ...) and the
+rest are added as `Y2`, `Y3`, ... until the width of the window is used up.
+
+* **Widening the window brings more columns**, one for every column width
+  that fits.
+* **Narrowing it keeps every column** that is there and lets the horizontal
+  scroll bar take over, so nothing can be lost by making the window small.
+* As soon as **one value is typed** into the sheet - or a data file is
+  loaded - the columns stop appearing by themselves: from then on the table
+  is your data and only `Add column` changes its shape.
+* A sheet that is emptied again (a fresh start) fills the window again.
+
+`Add column` and `Delete column` work at any time, and a column that is
+empty from top to bottom is simply not plotted, so a few spare columns cost
+nothing.
 
 ### Editing cells
 
@@ -262,6 +417,13 @@ leaves its row quiet.
 | `Ctrl/Cmd+Space` | The whole columns the block touches. |
 | `Ctrl/Cmd+A` | The whole table. |
 | `Enter` or `F2` | Opens the cell under the cursor for editing. |
+
+The open cell always carries a **blinking blue cursor** and always has the
+keyboard, even when a diagram window was the one in front a moment before
+(after a graph was opened, for instance): the cell takes the keyboard back
+for itself, and a diagram window never takes it away from a cell that is
+being edited.  Clicking in the diagram, as always, gives the keyboard back
+to the diagram.
 
 The block is what the data operations work on:
 
@@ -765,15 +927,34 @@ lines up cleanly.
 * **Marker**: `Hollow (no fill)` at the top of the section - an outlined
   marker has no fill colour at all - then `Style` (12 shapes), `Size` with
   `Fill colour` next to it, and `Edge width` with `Edge colour` next to it.
+The **legend** of every kind of diagram shows what that diagram really
+looks like in front of the text: a line with its marker for a curve, a
+**coloured bar** for a bar chart and a histogram, and a marker with an
+**error bar** through it for an error bar plot.
+
 * **Bar properties** (visible for Bar Charts):
   * `Width`: the width of the bars in X-axis data units.
-  * `Alpha`: transparency of the bar fill (from 0.0 transparent to 1.0 opaque).
-  * `Edge line width`: thickness of the bar outline.
-  * `Fill colour` and `Edge colour`: independently selectable colours for the
+  * `Opacity (0-1)`: transparency of the bar fill (0.0 transparent, 1.0 opaque).
+  * `Edge width`: thickness of the bar outline.
+  * `Bar colour` and `Edge colour`: independently selectable colours for the
     bar body and border.
   * *Tip:* Clicking any bar directly inside the diagram window opens this dialog.
+* **Histogram properties** (the same section, for Histograms): the bars of a
+  histogram touch, so there is no width to set - the **number of bins** takes
+  its place.
+  * `Bins`: how many equal parts the range of the sample is cut into, `20`
+    to begin with and anything from 1 to 1000.  Changing it counts the
+    column again at once and the range follows the new counts.  Every
+    histogram carries its own number of bins, and it is written into the
+    `.aplt` file with the rest of the curve.
+  * `Opacity (0-1)`, `Edge width`, `Bar colour` and `Edge colour` work
+    exactly as they do for a bar chart (the edges start out white, which is
+    what separates bars that touch).
 * **Error Bar properties** (visible for Error Bars):
   * `Source`: determines how error bars are calculated:
+    * `Next column (x, mean, std)` **(default)**: the column standing right
+      after this one holds the length of the error bars - see
+      `What the columns mean` above.
     * `Percentage`: symmetric error computed as a percentage of the Y value (e.g. ±5%).
     * `Fixed value`: constant symmetric error across all points (e.g. ±0.5).
     * `Standard deviation`: column standard deviation used as uniform error bounds.
@@ -958,8 +1139,8 @@ and the name of the file is shown in the title bar of the table window.
 
 **Nothing is lost by accident.**  The program knows whether anything has
 been changed since the last save (moving or resizing a window does not
-count).  If it has, then closing the diagram, opening another graph or
-leaving the program asks first:
+count).  If it has, then closing the diagram or leaving the program asks
+first:
 
 > This graph has been edited and not saved.  Save it now?
 
@@ -967,6 +1148,16 @@ leaving the program asks first:
 changes away, `Cancel` leaves everything as it is.  With several diagrams
 open, closing one of them does not ask - only the **last** one carries the
 whole graph.
+
+**Opening a file never asks.**  `Open graph`, `Open data file` and the
+random data of the `Data` menu simply replace what is on the screen: the
+question about unsaved work belongs to **leaving** the program (and to
+closing the last diagram), where something really can be lost.
+
+**Closing a window is not an edit.**  A graph that is in step with its file
+stays in step when its diagram window is closed, so closing the diagram and
+then the spreadsheet does not ask twice - and does not ask at all when
+nothing was changed since the last save.
 
 ### Exporting the diagram
 
