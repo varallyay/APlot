@@ -15,6 +15,8 @@ Spreadsheet window
   (a newly opened file starts with all of them ticked)
 * a highlighted block of cells: click and drag, Shift+click, Shift+arrows,
   Shift+Space (rows), Ctrl/Cmd+Space (columns), Ctrl/Cmd+A (everything)
+* a click on a column letter (A, B, C, ...) takes the whole column, a click
+  on a row number (1, 2, 3, ...) the whole row, the corner the whole table
 * the block is copied (Ctrl/Cmd+C), pasted (Ctrl/Cmd+V), cut (Ctrl/Cmd+X),
   emptied (Delete) and its rows deleted with one button
 * empty cells break the curves instead of connecting over them, so a range
@@ -275,12 +277,16 @@ TOOLTIP_BACKGROUND = "#ffffe0"
 AXIS_CHECK_FONT = 10       # the x_B / x_T / y_L / y_R labels
 # the column letters (A, B, C, ...) and the row numbers share it
 HEADER_COLOR = "#1a5fb4"
+# the letter of a column, and the number of a row, the block touches
+HEADER_ACTIVE = "#d0e2fb"
+LETTER_WIDTH = 56          # the clickable strip under the check buttons
 # a table column is never narrower than its two check buttons
 MIN_COLUMN_WIDTH = 104
 FILL_HANDLE_SIZE = 6       # the black square that pulls a selection down
 MAX_AUTO_COLUMNS = 64      # a blank sheet never grows past this
 HISTOGRAM_BINS = 20        # a histogram counts into this many bins by default
 MAX_HISTOGRAM_BINS = 1000  # ... and never into more than this
+ROW_AXIS_LABEL = "Row"     # the X axis when the row number is the X value
 CLIPBOARD_DPI = 200        # the picture put on the clipboard is a good one
 SCRIPT_SUFFIX = ".py"      # the diagram exported as a matplotlib program
 SPIN_WIDTH = 4             # characters in the little number boxes
@@ -3553,7 +3559,9 @@ class DataTable(ttk.Frame):
         self._fill_auto_scroll_timer = None
         self._row_selecting = False
         self._row_press = None
-        self._col_labels: dict = {}     # column name -> ttk.Label for column letter (A, B, C...)
+        self._letter_selecting = False  # a range of columns is being dragged
+        self._letter_press = None       # the column the drag started on
+        self._col_labels: dict = {}     # column name -> the label of its letter
         self._selecting = False         # a block is being dragged out
         self._press = None              # (x, cell) of the press that started it
         self._text_dragging = False     # the pointer is selecting cell text
@@ -3583,7 +3591,8 @@ class DataTable(ttk.Frame):
         self.row_tree.heading("#", text="#", anchor="center", command=self.select_all_cells)
         self.row_tree.column("#", width=ROW_HEADER_WIDTH, minwidth=ROW_HEADER_WIDTH,
                              stretch=False, anchor="center")
-        self.row_tree.tag_configure("active_row", background="#d0e2fb", foreground="#000000")
+        self.row_tree.tag_configure("active_row", background=HEADER_ACTIVE,
+                                    foreground="#000000")
 
         self.row_tree.bind("<Button-1>", self._on_row_tree_click)
         self.row_tree.bind("<B1-Motion>", self._on_row_tree_drag)
@@ -3687,12 +3696,34 @@ class DataTable(ttk.Frame):
             self.axis_vars[name] = variables
             self._checks[name] = widgets
 
+            # the letter of the column: clicking it selects the whole column,
+            # exactly as the number beside a row selects the whole row
             c_letter = col_to_letter(index)
-            lbl = ttk.Label(self.check_bar, text=c_letter,
-                            font=("TkDefaultFont", 10, "bold"),
-                            foreground=HEADER_COLOR)
+            lbl = tk.Label(self.check_bar, text=c_letter,
+                           font=("TkDefaultFont", 10, "bold"),
+                           foreground=HEADER_COLOR,
+                           background=self.header_background(),
+                           cursor="hand2")
+            lbl.bind("<Button-1>", lambda e, i=index: self._on_letter_click(i, e))
+            lbl.bind("<Shift-Button-1>",
+                     lambda e, i=index: self._on_letter_shift_click(i, e))
+            lbl.bind("<B1-Motion>", self._on_letter_drag)
+            lbl.bind("<ButtonRelease-1>", self._on_letter_release)
+            lbl.bind("<Button-3>",
+                     lambda e, i=index: self._show_header_context_menu(i, e))
+            lbl.bind("<Button-2>",
+                     lambda e, i=index: self._show_header_context_menu(i, e))
+            lbl.tooltip = Tooltip(
+                lbl, f"Column {c_letter}: click to select the whole column")
             self._col_labels[name] = lbl
         self._place_checks()
+
+    def header_background(self):
+        """The colour of the strip the check buttons and letters sit on."""
+        try:
+            return str(self.check_bar.cget("background"))
+        except (tk.TclError, AttributeError):
+            return "#f0f0f0"
 
     def _axis_clicked(self, name, code):
         """One axis per column: ticking one check button clears the other."""
@@ -3746,7 +3777,10 @@ class DataTable(ttk.Frame):
             pair[0].place(x=int(x) - 2, y=12, anchor="e")
             pair[1].place(x=int(x) + 2, y=12, anchor="w")
             if lbl:
-                lbl.place(x=int(x), y=32, anchor="center")
+                # a strip as wide as the letter needs to be easy to hit
+                strip = max(24, min(int(box[2]) - 8, LETTER_WIDTH))
+                lbl.place(x=int(x), y=32, anchor="center",
+                          width=strip, height=17)
 
     def _column_span(self, index):
         """(x, y, width, height) of one column when no row is visible."""
@@ -3817,12 +3851,12 @@ class DataTable(ttk.Frame):
                 sides[name] = Y_SIDES[code]
         return {"x": x_name, "x_side": x_side, "y": sides}
 
-    def plot_dataframe(self, least=2):
+    def plot_dataframe(self, least=1):
         """The data of the ticked columns only.
 
-        `least` is how many columns the diagram needs: two for a curve (X
-        and Y), but only one for a histogram, which counts a single column
-        of raw values by itself.
+        `least` is how many columns the diagram needs.  One is enough for
+        every style now: a histogram counts a single column of raw values,
+        and every other diagram draws it against the row numbers.
         """
         columns = self.plot_columns()
         if len(columns) < max(1, int(least)):
@@ -4016,6 +4050,13 @@ class DataTable(ttk.Frame):
             return False
         return bounds[1] == 0 and bounds[3] == len(self.df.columns) - 1
 
+    def covers_whole_columns(self):
+        """True when the block reaches from the first to the last row."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return False
+        return bounds[0] == 0 and bounds[2] == len(self.df) - 1
+
     def _refresh_block(self):
         """Show the block: whole rows are tinted, a part of a row outlined.
 
@@ -4041,7 +4082,29 @@ class DataTable(ttk.Frame):
                 if tuple(self.row_tree.item(item, "tags")) != wanted:
                     self.row_tree.item(item, tags=wanted)
 
+        self._refresh_letters(bounds)
         self._refresh_outline()
+
+    def _refresh_letters(self, bounds=None):
+        """Tint the letter of every column the block touches."""
+        labels = getattr(self, "_col_labels", None)
+        if not labels:
+            return
+        if bounds is None:
+            bounds = self.block_bounds()
+        active = set(range(bounds[1], bounds[3] + 1)) if bounds is not None \
+            else set()
+        quiet = self.header_background()
+        for index, name in enumerate(str(one) for one in self.df.columns):
+            label = labels.get(name)
+            if label is None:
+                continue
+            wanted = HEADER_ACTIVE if index in active else quiet
+            try:
+                if str(label.cget("background")) != wanted:
+                    label.configure(background=wanted)
+            except tk.TclError:
+                continue
 
     def _outline_frames(self):
         if not self._outline:
@@ -4372,6 +4435,90 @@ class DataTable(ttk.Frame):
 
     def _on_row_tree_release(self, _event=None):
         self._row_selecting = False
+        return "break"
+
+    # -- clicking a column letter selects the whole column ------------------
+    def _column_at_root(self, x_root):
+        """Which column is under this screen position (the nearest one)."""
+        columns = self.tree["columns"]
+        if not columns:
+            return None
+        try:
+            x = int(x_root - self.tree.winfo_rootx())
+            width = int(self.tree.winfo_width())
+        except tk.TclError:
+            return None
+        x = max(0, min(x, max(0, width - 1)))     # past the edge: stay inside
+        column_id = self.tree.identify_column(x)
+        try:
+            index = int(str(column_id)[1:]) - 1
+        except (TypeError, ValueError):
+            return None
+        if 0 <= index < len(self.df.columns):
+            return index
+        return None
+
+    def select_whole_columns(self, c0, c1=None, anchor_col=None):
+        """Highlight one column - or a range of them - from top to bottom."""
+        rows, columns = self._shape()
+        if not rows or not columns:
+            return False
+        c0 = max(0, min(columns - 1, int(c0)))
+        c1 = c0 if c1 is None else max(0, min(columns - 1, int(c1)))
+        start = c0 if anchor_col is None else max(0, min(columns - 1,
+                                                         int(anchor_col)))
+        self.select_block(0, c0, rows - 1, c1,
+                          anchor=(0, start), cursor=(rows - 1, c1))
+        return True
+
+    def _hide_letter_tooltip(self, index):
+        """A press on the letter puts its own hint away."""
+        names = [str(one) for one in self.df.columns]
+        label = (getattr(self, "_col_labels", {}) or {}).get(
+            names[index] if 0 <= index < len(names) else None)
+        tooltip = getattr(label, "tooltip", None)
+        if tooltip is not None:
+            tooltip._left()
+
+    def _on_letter_click(self, index, _event=None):
+        """A click on A, B, C, ... takes the whole column."""
+        self._hide_letter_tooltip(index)
+        if not len(self.df.columns) or not len(self.df):
+            return "break"
+        self._commit_edit()
+        self.current_column = str(self.df.columns[index]) \
+            if index < len(self.df.columns) else self.current_column
+        self.select_whole_columns(index)
+        self._letter_selecting = True
+        self._letter_press = index
+        self.tree.focus_set()
+        return "break"
+
+    def _on_letter_shift_click(self, index, _event=None):
+        """Shift+click on a letter stretches the block of columns."""
+        self._hide_letter_tooltip(index)
+        if not len(self.df.columns) or not len(self.df):
+            return "break"
+        self._commit_edit()
+        start = self.anchor[1] if self.anchor else index
+        self.select_whole_columns(start, index, anchor_col=start)
+        self._letter_selecting = True
+        self._letter_press = start
+        self.tree.focus_set()
+        return "break"
+
+    def _on_letter_drag(self, event):
+        """Dragging along the letters selects a range of columns."""
+        if not getattr(self, "_letter_selecting", False):
+            return "break"
+        index = self._column_at_root(event.x_root)
+        if index is not None:
+            start = getattr(self, "_letter_press", index)
+            self.select_whole_columns(start, index, anchor_col=start)
+        return "break"
+
+    def _on_letter_release(self, _event=None):
+        self._letter_selecting = False
         return "break"
 
     # -- scrolling keeps the outline in place ------------------------------
@@ -5671,6 +5818,7 @@ class PlotWindow(tk.Toplevel):
         self.lines: list[Line2D] = []
         self.series: dict = {}          # Y column name -> curve
         self.x_col = str(df.columns[0]) if len(df.columns) else ""
+        self._auto_x_label = self.x_col   # the label as long as it is not renamed
         self.legends: dict = {}         # Y column name -> its own legend box
         # which axis every column belongs to: the single X column feeds the
         # bottom or the top X axis, every curve the left or the right Y axis
@@ -6503,17 +6651,62 @@ class PlotWindow(tk.Toplevel):
         centers = (edges[:-1] + edges[1:]) / 2.0
         return centers, counts.astype(float)
 
+    # -- one single column: the X axis is the row number --------------------
+    @staticmethod
+    def has_numbers(df, column):
+        """True when that column holds at least one number."""
+        return bool(len(PlotWindow.sample_values(df, column)))
+
+    def row_numbers_mode(self, df=None):
+        """True while the first column is the only column with numbers.
+
+        One column of values is a series of measurements, not an X axis: it
+        becomes the first curve and the **row number** of the table becomes
+        the X axis, exactly as the numbers at the left of the spreadsheet
+        show them.  A histogram never needs this - it counts every column
+        of its own accord.
+        """
+        if self.plot_style == "histogram":
+            return False
+        frame = self.df if df is None else df
+        if frame is None or not len(frame.columns):
+            return False
+        columns = [str(one) for one in frame.columns]
+        if not self.has_numbers(frame, columns[0]):
+            return False
+        return not any(self.has_numbers(frame, name) for name in columns[1:])
+
+    @staticmethod
+    def row_number_points(df, column):
+        """The values of one column against the row numbers of the table.
+
+        The first row is 1, so the X value of a point is the number that
+        stands beside it in the spreadsheet.  Empty cells stay gaps.
+        """
+        values = pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=float)
+        return (np.arange(1, len(values) + 1, dtype=float), values)
+
+    def x_axis_name(self):
+        """What the X axis carries: the first column, or the row number."""
+        if self.row_numbers_mode():
+            return ROW_AXIS_LABEL
+        return str(self.df.columns[0]) if len(self.df.columns) else ""
+
     def series_points(self, df, x_col, y_col, style=None):
         """The X/Y pairs one curve is drawn from.
 
         Every style reads the first column as X and the column itself as Y.
-        A **histogram** is the exception: the column holds raw values and
-        the diagram counts them, so the pairs are the bin centres and the
-        counts of that one column alone.
+        There are two exceptions: a **histogram** counts the raw values of
+        the column itself, so the pairs are its bin centres and counts;
+        and a table whose **first column is the only filled one** has no X
+        column at all, so that column is drawn against the row numbers.
         """
         style = style or self.series_style.get(y_col, self.plot_style)
         if style == "histogram":
             return self.histogram_points(df, y_col)
+        columns = [str(one) for one in df.columns]
+        if columns and str(y_col) == columns[0] and self.row_numbers_mode(df):
+            return self.row_number_points(df, y_col)
         return self._series_data(df, x_col, y_col)
 
     def refresh_histogram(self, column):
@@ -6691,9 +6884,14 @@ class PlotWindow(tk.Toplevel):
             if self.ax.get_xlabel() == old:
                 self.ax.set_xlabel(new)
                 self.ax.xaxis.label.set_picker(True)
+            if getattr(self, "_auto_x_label", None) == old:
+                self._auto_x_label = str(new)
             self.x_col = new
-            self.draw()
-            return
+            if old not in self.series:
+                self.draw()          # that column is only an X axis
+                return
+            # a histogram, or a single filled column, draws it as a curve
+            # as well: it has to be renamed like any other curve
         line = self.series.get(old)
         if line is None:
             return
@@ -6718,6 +6916,14 @@ class PlotWindow(tk.Toplevel):
             self.histogram_cfg[new] = self.histogram_cfg.pop(old)
         if old in self.bar_containers:
             self.bar_containers[new] = self.bar_containers.pop(old)
+        if f"hist_{old}" in self.bar_containers:
+            self.bar_containers[f"hist_{new}"] = \
+                self.bar_containers.pop(f"hist_{old}")
+        if old in self.histogram_edges:
+            self.histogram_edges[new] = self.histogram_edges.pop(old)
+        if old in self.histogram_drawn:
+            self.histogram_drawn.discard(old)
+            self.histogram_drawn.add(new)
         if old in self.errorbar_containers:
             self.errorbar_containers[new] = self.errorbar_containers.pop(old)
         if line.get_label() == getattr(line, "aplot_series", None):
@@ -6740,10 +6946,16 @@ class PlotWindow(tk.Toplevel):
         A **histogram** is the exception: it counts the values of a column
         by itself and needs nothing else, so *every* column - the first one
         included - is a sample and a curve of its own.
+
+        A table whose **first column is the only filled one** is the other
+        exception: there is no X column to read, so that column is the one
+        and only curve and the X axis becomes the row number.
         """
         columns = [str(one) for one in columns]
         if self.plot_style == "histogram":
             return columns, {}
+        if self.row_numbers_mode():
+            return columns[:1], {}
         if len(columns) < 2:
             return [], {}
         rest = columns[1:]
@@ -6812,8 +7024,9 @@ class PlotWindow(tk.Toplevel):
         from `y_L` to `y_R` in the table moves that curve to the other side.
         """
         columns = list(df.columns)
-        # a histogram counts one column on its own: it needs no second one
-        if len(columns) < (1 if self.plot_style == "histogram" else 2):
+        # one column on its own is enough: a histogram counts it, and every
+        # other diagram draws it against the row numbers
+        if not columns:
             return False
         self.df = df
         x_col = columns[0]
@@ -6830,7 +7043,9 @@ class PlotWindow(tk.Toplevel):
             side = sides.get(str(y_col), self.series_side(y_col))
             line = self.series.get(y_col)
             if line is None:
-                if len(x):
+                # an empty column gets no curve (and no legend box) yet -
+                # it becomes one as soon as a value is typed into it
+                if len(x) and bool(np.isfinite(y).any()):
                     self._create_line(x, y, y_col, x_col, side)
             else:
                 line.set_data(x, y)
@@ -6847,11 +7062,31 @@ class PlotWindow(tk.Toplevel):
         self.series_axis = {name: self.series_axis[name] for name in order
                             if name in self.series_axis}
 
+        self._refresh_x_label()  # a second filled column ends the row numbers
         self._rescale()          # manual ranges are left untouched
         self.apply_frame(self.frame_cfg, redraw=False)
         self.refresh_fills()
         self.refresh_legend()
         self.draw()
+        return True
+
+    def _refresh_x_label(self):
+        """Follow what the X axis carries, as long as it was never renamed.
+
+        The name of the first column and the word "Row" swap places when a
+        second column is filled (or emptied).  A label the user has written
+        himself is never touched.
+        """
+        wanted = self.x_axis_name()
+        remembered = getattr(self, "_auto_x_label", wanted)
+        if wanted == remembered:
+            return False
+        automatic = str(self.axis_label("x")) == remembered
+        self._auto_x_label = wanted
+        if not automatic:
+            return False            # it carries a text of its own now
+        self.apply_axis("x", {**self.axis_cfg["x"], "label": wanted},
+                        redraw=False)
         return True
 
     # -- the diagram as a matplotlib program -------------------------------
@@ -6892,6 +7127,12 @@ class PlotWindow(tk.Toplevel):
                                 for one in values)
             lines.append(f"    {name!r}: [{numbers}],")
         lines.append("}")
+        if self.row_numbers_mode() and columns:
+            # the only filled column is drawn against the row numbers
+            lines.append("")
+            lines.append("# the X values: the row numbers of the table")
+            lines.append("ROWS = np.arange(1, len(DATA[%r]) + 1, dtype=float)"
+                         % str(columns[0]))
         return lines
 
     def to_script(self):
@@ -7076,6 +7317,9 @@ class PlotWindow(tk.Toplevel):
         lit = self._literal
         out = ["", "# ---------------------------------------------- the curves",
                "curves = {}"]
+        # with only the first column filled the X values are the row numbers
+        x_data = ("ROWS" if self.row_numbers_mode()
+                  else f"DATA[{lit(str(self.x_col))}]")
         for number, (column, line) in enumerate(self.series.items(), start=1):
             target = "ax2" if self.series_side(column) == "right" else "ax"
             st = self.series_style.get(column, self.plot_style)
@@ -7090,7 +7334,7 @@ class PlotWindow(tk.Toplevel):
                 bec = store_color(b_cfg.get("edgecolor", line.get_color()))
                 bew = float(b_cfg.get("edgewidth", 1.0))
                 out.append(
-                    f"bars_{tag} = {target}.bar(DATA[{lit(str(self.x_col))}], "
+                    f"bars_{tag} = {target}.bar({x_data}, "
                     f"DATA[{lit(str(column))}], "
                     f"width={bw}, color={lit(bc)}, edgecolor={lit(bec)}, "
                     f"linewidth={bew}, alpha={ba}, "
@@ -7126,7 +7370,7 @@ class PlotWindow(tk.Toplevel):
                     out.append(f"yerr_{tag} = np.abs({values} * 0.05)")
                 out.append(
                     f"bars_{tag} = {target}.errorbar("
-                    f"DATA[{lit(str(self.x_col))}], DATA[{lit(str(column))}], "
+                    f"{x_data}, DATA[{lit(str(column))}], "
                     f"yerr=yerr_{tag}, "
                     f"color={lit(ec)}, fmt={lit(str(line.get_marker()))}, "
                     f"markersize={float(line.get_markersize())}, "
@@ -7157,9 +7401,9 @@ class PlotWindow(tk.Toplevel):
                 out.append(f"curves[{lit(str(column))}] = bars_{tag}[0]")
             else:
                 out.append(
-                    "curves[%s], = %s.plot(DATA[%s], DATA[%s], linestyle=%s, "
+                    "curves[%s], = %s.plot(%s, DATA[%s], linestyle=%s, "
                     "linewidth=%s, color=%s, marker=%s, markersize=%s,"
-                    % (lit(str(column)), target, lit(str(self.x_col)),
+                    % (lit(str(column)), target, x_data,
                        lit(str(column)), lit(str(line.get_linestyle())),
                        lit(float(line.get_linewidth())),
                        lit(store_color(line.get_color())),
@@ -7181,10 +7425,10 @@ class PlotWindow(tk.Toplevel):
                 base = ("0.0" if fill.get("base", "zero") == "zero"
                         else f"{target}.get_ylim()[0]")
                 out.append(
-                    "%s.fill_between(DATA[%s], DATA[%s], %s, facecolor=%s, "
+                    "%s.fill_between(%s, DATA[%s], %s, facecolor=%s, "
                     "alpha=%s, hatch=%s, edgecolor=%s, linewidth=0.0, "
                     "label='_nolegend_', zorder=%s)"
-                    % (target, lit(str(self.x_col)), lit(str(column)), base,
+                    % (target, x_data, lit(str(column)), base,
                        lit(color), lit(float(fill.get("alpha", 0.35))),
                        lit(fill.get("hatch") or None),
                        lit(color if fill.get("hatch") else "none"),
@@ -7571,7 +7815,10 @@ class PlotWindow(tk.Toplevel):
         self.draw()
 
     def _init_axes(self, plot_cfg):
-        x_col = str(self.df.columns[0])
+        # what the X axis really carries: the first column, or - when that
+        # column is the only filled one - the row number of the table
+        x_col = self.x_axis_name()
+        self._auto_x_label = x_col
         try:
             title = str(plot_cfg["title_template"]).format(x=x_col)
         except (KeyError, IndexError, ValueError):
@@ -10147,11 +10394,11 @@ scientific (advanced) plots quickly (agile).
 
 ## 1. The spreadsheet window
 
-The main window holds the data table.  The first column is always the
+The main window holds the data table.  The first column is normally the
 independent variable (the X axis); every further column is drawn as a
-separate curve.  The one exception is the **histogram**, which needs no X
-axis: there every column is a sample of raw values that the diagram counts
-by itself.
+separate curve.  Two cases do without an X column: a **histogram** counts
+every column as a sample of raw values, and a sheet whose **first column is
+the only filled one** draws that column against the **row numbers**.
 
 ### Toolbar
 
@@ -10284,6 +10531,8 @@ live where they are needed and do not take room above the sheet.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
+  * **Clicking a letter selects that whole column**, exactly the way clicking
+    a row number selects the whole row - see below.
 * **Row Line Numbers (1, 2, 3, ...)**:
   * Displayed in a fixed left-side header column, painted with the very
     background of the table itself, so the strip of numbers never stands
@@ -10292,6 +10541,33 @@ live where they are needed and do not take room above the sheet.
   * Stays pinned on the left when scrolling horizontally, while scrolling vertically in lockstep with the spreadsheet table data.
   * Clicking or dragging along row numbers selects full rows.
   * Clicking the top-left corner indicator (`◢`) selects all cells in the spreadsheet.
+
+#### Selecting a whole column or a whole row from its heading
+
+The letters above the columns and the numbers beside the rows work the same
+way, so a whole line of the table is always one click away:
+
+| Click | What is selected |
+| --- | --- |
+| a column letter (`A`, `B`, `C`, ...) | that **whole column**, from the first row to the last |
+| a row number (`1`, `2`, `3`, ...) | that **whole row**, from the first column to the last |
+| the corner (`◢`) | the **whole table** |
+
+* **Dragging** along the letters (or along the numbers) takes a **range** of
+  columns (or rows), and it may be dragged in either direction.
+* **`Shift`+clicking** another letter stretches the block from the one that
+  was clicked first to that one.
+* The letter of every column the block touches is **tinted**, just as the
+  numbers of the rows it touches are - so it is always visible what the
+  block covers, even where it has scrolled out of sight.
+* What is selected is an ordinary block, so everything works on it:
+  `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D` fills it
+  down, and the arrow keys walk on from the cell the click left the cursor
+  in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
+* **Right clicking** a letter opens the menu of that column -
+  `Calculate Column...`, `Sort`, `Insert Column Before / After...`,
+  `Rename...`, `Delete Column` - the same menu as a right click on the
+  column heading itself.
 
 #### Formula syntax and functions
 
@@ -10379,6 +10655,7 @@ depends on the kind of diagram:
 | Line + Symbol, Line, Scatter, Bar Chart | `x`, `y1`, `y2`, `y3`, ... - one curve per column |
 | Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
 | Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
+| Only the first column filled | that column is the **curve** and the X axis is the **row number** |
 
 An **error bar** diagram therefore reads the columns two by two: the third
 column is the length of the error bar of the second one, the fifth belongs
@@ -10414,6 +10691,29 @@ bin.
 Bins that are already counted in the table (one row per bar, `x` = the
 position of the bar and `y` = its height) are a **bar chart**, not a
 histogram - that is what the `Bar Chart` style is for.
+
+### One single column: the row number is the X axis
+
+A column of numbers on its own is a **series of measurements**, not an X
+axis, so it does not need a second column to be plotted:
+
+* Type (or load) values into the **first column only** and press `Plot`:
+  that column becomes the curve and the X axis becomes the **row number of
+  the table** - `1` for the first row, `2` for the second, exactly the
+  numbers standing beside the cells.  The X axis is called `Row`.
+* It works for **every style**: line, line with symbols, scatter, bar chart
+  and error bar all draw the values against the row numbers.  (A histogram
+  needs no X axis at all: it counts that column, see above.)
+* The other columns of the sheet may be there as long as they are **empty** -
+  the blank columns a fresh sheet fills the window with change nothing.
+* As soon as a **second column is filled**, the first one goes back to being
+  the X axis and the diagram is drawn against it - and the label of the X
+  axis follows, unless a text was written into it by hand.
+* Empty cells stay **gaps**: the row numbering keeps counting, and the curve
+  is simply broken at the missing point.
+* This is a fallback for a sheet that has nothing else, not a way around the
+  check buttons: if a filled column was **switched off** on purpose, the
+  program asks for a tick instead of quietly drawing the first column alone.
 
 ### Which columns are plotted, and against which axis
 
@@ -10457,8 +10757,9 @@ The rules are simple:
   to the other scale** while it keeps its colour, its line style and its
   legend box.
 * with nothing ticked the program says so instead of drawing an empty
-  diagram.  A curve needs an X column and at least one Y column; a
-  **histogram** is content with one single column of values.
+  diagram - as long as there really is a filled column that was switched
+  off.  **One single filled column** needs no tick of its own: it is drawn
+  against the row numbers (or counted, in a histogram).
 * the ticks are kept while the table is edited (adding rows, renaming a
   column, adding a column - a new column starts on `y_L`) and are reset to
   the first axis of every column whenever new data is loaded.
@@ -10537,6 +10838,9 @@ leaves its row quiet.
 | Click a cell | That cell alone is the block, and it is opened for editing. |
 | Drag with the pointer | Inside the pressed cell it highlights its text; leaving that cell it selects the block between the pressed and the released cell.  Dragging to the edge of the table **scrolls it on** as long as the pointer stays there, so rows and columns below or beside the window can be selected as well. |
 | `Shift`+click a cell | Stretches the block from where it started to that cell. |
+| Click a column letter (`A`, `B`, ...) | Selects that **whole column**; dragging along the letters takes a range of them, and `Shift`+click stretches the block. |
+| Click a row number (`1`, `2`, ...) | Selects that **whole row**; dragging along the numbers takes a range of them. |
+| Click the corner (`◢`) | The whole table. |
 | `Shift`+click a heading | Selects that whole column. |
 | `Shift`+arrow keys | One row or column more (or less) in the block - this also works while a cell is being edited, where `Shift+Up/Down` leaves the editor at once and `Shift+Left/Right` first select the text of the cell. |
 | Arrow keys (no Shift) | Walk from cell to cell; the block collapses to that one cell. |
@@ -10594,7 +10898,9 @@ Click a column heading to edit its name.  The name is used
 
 Renaming a column later also renames the legend entry and the X axis label
 of every open diagram - unless you gave them your own text, which is never
-overwritten.
+overwritten.  When the first column is drawn as a curve of its own (a
+histogram, or a single filled column against the row numbers), renaming it
+renames that curve and its legend box as well.
 
 
 ## 2. The diagram window
@@ -12255,38 +12561,44 @@ class App:
 
     # -- plotting ----------------------------------------------------------
     def _plottable(self, style=None):
-        """Is there enough data for a diagram of this style?
+        """Is there anything to draw?
 
-        A histogram makes its own statistics out of one column of values,
-        so a single column is enough for it; every other style needs an X
-        column and at least one Y column.
+        **One column of numbers is enough** for every kind of diagram: a
+        histogram counts it, and every other style draws it against the row
+        numbers of the table.  So the question is not how many columns
+        there are, but whether the ticked ones hold numbers at all.
+
+        Columns that were switched **off** are still respected: when the
+        only thing left is the X column while other columns do carry data,
+        the ticks are what the program talks about instead of quietly
+        drawing that one column.
         """
         self.table._commit_edit()  # do not lose the cell being edited
         style = style or getattr(self, "current_plot_style", "line_symbol")
-        least = self.least_columns(style)
-        if self.df is None or self.df.empty or len(self.df.columns) < least:
+        if self.df is None or self.df.empty or not len(self.df.columns):
+            messagebox.showerror("Error", "There is no data to plot yet.")
+            return False
+        columns = self.table.plot_columns()
+        if not any(PlotWindow.has_numbers(self.df, name) for name in columns):
             messagebox.showerror(
-                "Error", "At least one column of values is needed."
-                if least < 2 else
-                "At least two columns are needed (X and Y axes).")
+                "Error",
+                "The ticked columns hold no numbers to plot.\n"
+                "Type some values into the table first.")
             return False
-        if len(self.table.plot_columns()) < least:
-            messagebox.showinfo(
-                "Information",
-                "No column is ticked for plotting.\n"
-                "Tick 'y_L' or 'y_R' above at least one column.")
-            return False
+        if style != "histogram" and len(columns) < 2:
+            switched_off = [name for name in list(self.df.columns)[1:]
+                            if PlotWindow.has_numbers(self.df, name)]
+            if switched_off:
+                messagebox.showinfo(
+                    "Information",
+                    "No column is ticked for plotting.\n"
+                    "Tick 'y_L' or 'y_R' above at least one column.")
+                return False
         return True
 
-    @staticmethod
-    def least_columns(style):
-        """How many columns a diagram of this style needs."""
-        return 1 if style == "histogram" else 2
-
-    def plot_data(self, style=None):
+    def plot_data(self, _style=None):
         """The data that goes to the diagrams: the ticked columns only."""
-        style = style or getattr(self, "current_plot_style", "line_symbol")
-        return self.table.plot_dataframe(self.least_columns(style))
+        return self.table.plot_dataframe(1)
 
     def plot_layout(self):
         """Which axis every ticked column belongs to."""
@@ -12303,7 +12615,7 @@ class App:
         style = plot_style or getattr(self, "current_plot_style", "line_symbol")
         if not self._plottable(style):
             return None
-        window = PlotWindow(self.root, self.plot_data(style), self.settings,
+        window = PlotWindow(self.root, self.plot_data(), self.settings,
                             app=self, layout=self.plot_layout(),
                             plot_style=style)
         if window.winfo_exists():
@@ -12314,20 +12626,17 @@ class App:
     def update_plot(self):
         """Send the edited data to the open diagrams without touching style."""
         windows = self.open_windows()
-        # every open diagram gets what its own style needs: a histogram is
-        # happy with one column, a curve wants two
-        least = min([self.least_columns(window.plot_style)
-                     for window in windows] or [self.least_columns(None)])
-        if not self._plottable("histogram" if least < 2 else None):
+        styles = {window.plot_style for window in windows}
+        # while every open diagram counts its own columns, no Y tick is needed
+        if not self._plottable("histogram" if styles == {"histogram"} else None):
             return
         if not windows:
             self.open_plot()  # nothing to update yet: open the first diagram
             return
+        data = self.plot_data()
         layout = self.plot_layout()
         for window in windows:
-            data = self.table.plot_dataframe(
-                self.least_columns(window.plot_style))
-            window.update_data(data, layout=layout)
+            window.update_data(data.copy(), layout=layout)
             window.lift()
 
 

@@ -20,11 +20,11 @@ scientific (advanced) plots quickly (agile).
 
 ## 1. The spreadsheet window
 
-The main window holds the data table.  The first column is always the
+The main window holds the data table.  The first column is normally the
 independent variable (the X axis); every further column is drawn as a
-separate curve.  The one exception is the **histogram**, which needs no X
-axis: there every column is a sample of raw values that the diagram counts
-by itself.
+separate curve.  Two cases do without an X column: a **histogram** counts
+every column as a sample of raw values, and a sheet whose **first column is
+the only filled one** draws that column against the **row numbers**.
 
 ### Toolbar
 
@@ -157,6 +157,8 @@ live where they are needed and do not take room above the sheet.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
+  * **Clicking a letter selects that whole column**, exactly the way clicking
+    a row number selects the whole row - see below.
 * **Row Line Numbers (1, 2, 3, ...)**:
   * Displayed in a fixed left-side header column, painted with the very
     background of the table itself, so the strip of numbers never stands
@@ -165,6 +167,33 @@ live where they are needed and do not take room above the sheet.
   * Stays pinned on the left when scrolling horizontally, while scrolling vertically in lockstep with the spreadsheet table data.
   * Clicking or dragging along row numbers selects full rows.
   * Clicking the top-left corner indicator (`◢`) selects all cells in the spreadsheet.
+
+#### Selecting a whole column or a whole row from its heading
+
+The letters above the columns and the numbers beside the rows work the same
+way, so a whole line of the table is always one click away:
+
+| Click | What is selected |
+| --- | --- |
+| a column letter (`A`, `B`, `C`, ...) | that **whole column**, from the first row to the last |
+| a row number (`1`, `2`, `3`, ...) | that **whole row**, from the first column to the last |
+| the corner (`◢`) | the **whole table** |
+
+* **Dragging** along the letters (or along the numbers) takes a **range** of
+  columns (or rows), and it may be dragged in either direction.
+* **`Shift`+clicking** another letter stretches the block from the one that
+  was clicked first to that one.
+* The letter of every column the block touches is **tinted**, just as the
+  numbers of the rows it touches are - so it is always visible what the
+  block covers, even where it has scrolled out of sight.
+* What is selected is an ordinary block, so everything works on it:
+  `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D` fills it
+  down, and the arrow keys walk on from the cell the click left the cursor
+  in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
+* **Right clicking** a letter opens the menu of that column -
+  `Calculate Column...`, `Sort`, `Insert Column Before / After...`,
+  `Rename...`, `Delete Column` - the same menu as a right click on the
+  column heading itself.
 
 #### Formula syntax and functions
 
@@ -252,6 +281,7 @@ depends on the kind of diagram:
 | Line + Symbol, Line, Scatter, Bar Chart | `x`, `y1`, `y2`, `y3`, ... - one curve per column |
 | Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
 | Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
+| Only the first column filled | that column is the **curve** and the X axis is the **row number** |
 
 An **error bar** diagram therefore reads the columns two by two: the third
 column is the length of the error bar of the second one, the fifth belongs
@@ -287,6 +317,29 @@ bin.
 Bins that are already counted in the table (one row per bar, `x` = the
 position of the bar and `y` = its height) are a **bar chart**, not a
 histogram - that is what the `Bar Chart` style is for.
+
+### One single column: the row number is the X axis
+
+A column of numbers on its own is a **series of measurements**, not an X
+axis, so it does not need a second column to be plotted:
+
+* Type (or load) values into the **first column only** and press `Plot`:
+  that column becomes the curve and the X axis becomes the **row number of
+  the table** - `1` for the first row, `2` for the second, exactly the
+  numbers standing beside the cells.  The X axis is called `Row`.
+* It works for **every style**: line, line with symbols, scatter, bar chart
+  and error bar all draw the values against the row numbers.  (A histogram
+  needs no X axis at all: it counts that column, see above.)
+* The other columns of the sheet may be there as long as they are **empty** -
+  the blank columns a fresh sheet fills the window with change nothing.
+* As soon as a **second column is filled**, the first one goes back to being
+  the X axis and the diagram is drawn against it - and the label of the X
+  axis follows, unless a text was written into it by hand.
+* Empty cells stay **gaps**: the row numbering keeps counting, and the curve
+  is simply broken at the missing point.
+* This is a fallback for a sheet that has nothing else, not a way around the
+  check buttons: if a filled column was **switched off** on purpose, the
+  program asks for a tick instead of quietly drawing the first column alone.
 
 ### Which columns are plotted, and against which axis
 
@@ -330,8 +383,9 @@ The rules are simple:
   to the other scale** while it keeps its colour, its line style and its
   legend box.
 * with nothing ticked the program says so instead of drawing an empty
-  diagram.  A curve needs an X column and at least one Y column; a
-  **histogram** is content with one single column of values.
+  diagram - as long as there really is a filled column that was switched
+  off.  **One single filled column** needs no tick of its own: it is drawn
+  against the row numbers (or counted, in a histogram).
 * the ticks are kept while the table is edited (adding rows, renaming a
   column, adding a column - a new column starts on `y_L`) and are reset to
   the first axis of every column whenever new data is loaded.
@@ -410,6 +464,9 @@ leaves its row quiet.
 | Click a cell | That cell alone is the block, and it is opened for editing. |
 | Drag with the pointer | Inside the pressed cell it highlights its text; leaving that cell it selects the block between the pressed and the released cell.  Dragging to the edge of the table **scrolls it on** as long as the pointer stays there, so rows and columns below or beside the window can be selected as well. |
 | `Shift`+click a cell | Stretches the block from where it started to that cell. |
+| Click a column letter (`A`, `B`, ...) | Selects that **whole column**; dragging along the letters takes a range of them, and `Shift`+click stretches the block. |
+| Click a row number (`1`, `2`, ...) | Selects that **whole row**; dragging along the numbers takes a range of them. |
+| Click the corner (`◢`) | The whole table. |
 | `Shift`+click a heading | Selects that whole column. |
 | `Shift`+arrow keys | One row or column more (or less) in the block - this also works while a cell is being edited, where `Shift+Up/Down` leaves the editor at once and `Shift+Left/Right` first select the text of the cell. |
 | Arrow keys (no Shift) | Walk from cell to cell; the block collapses to that one cell. |
@@ -467,7 +524,9 @@ Click a column heading to edit its name.  The name is used
 
 Renaming a column later also renames the legend entry and the X axis label
 of every open diagram - unless you gave them your own text, which is never
-overwritten.
+overwritten.  When the first column is drawn as a curve of its own (a
+histogram, or a single filled column against the row numbers), renaming it
+renames that curve and its legend box as well.
 
 
 ## 2. The diagram window
