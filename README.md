@@ -126,7 +126,9 @@ an immediate action with a style menu:
   * **Pie Chart**: The values of **one** column as slices of a circle
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
-    apart or opened into a doughnut.
+    apart or opened into a doughnut.  The names and the percentages can be
+    moved in or out, laid along their own slice and given their own font
+    size and colour, and every name can be changed on its own.
 
 Selecting a style updates the button icon and immediately opens a diagram
 rendered in that style. Any curve's style can also be switched individually at
@@ -364,6 +366,7 @@ depends on the kind of diagram:
 | Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
 | Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
 | Only the first column filled | that column is the **curve** and the X axis is the **row number** |
+| The first column holds **names** (no numbers at all) | every other column is a curve and the X axis is the **row number** |
 
 An **error bar** diagram therefore reads the columns two by two: the third
 column is the length of the error bar of the second one, the fifth belongs
@@ -422,6 +425,15 @@ axis, so it does not need a second column to be plotted:
 * This is a fallback for a sheet that has nothing else, not a way around the
   check buttons: if a filled column was **switched off** on purpose, the
   program asks for a tick instead of quietly drawing the first column alone.
+
+**A first column of names counts the rows too.**  A table like
+`Solar, Wind, Hydro | 24, 19, 15` is the natural shape of a pie or a bar
+chart, but its first column holds not a single number, so it is no X axis
+either.  Every column after it then becomes a curve drawn against the **row
+number**, and the X axis is again called `Row`.  That is what makes a pie of
+such a table switchable to a line or a bar chart and back without an empty
+frame in between.  A number typed into the first column makes it the X axis
+again at once.
 
 ### Which columns are plotted, and against which axis
 
@@ -1084,10 +1096,26 @@ the sections that style can use, and nothing else:
 The dialog sections each have **their own check button as the title**: switched
 off, that part of the curve is simply not drawn.  The settings that belong
 together share a line, and the sections share their column widths so everything
-lines up cleanly.
+lines up cleanly.  Whatever style is chosen, the **`Close` button stays at the
+bottom** of the window, under the sections that come and go with the style.
+
+Changing the style also gives the **axes** to whatever is drawn on them.  A
+pie needs no axes, so switching a curve to `Pie Chart` takes the axis labels,
+the numbers **and the axis lines** away and keeps the square the circle
+needs; switching it back to any other style gives the labels, the numbers,
+the frame (whatever style it had - two lines or a closed box) and the
+automatic range straight back, so the curve appears again exactly where it
+was.  The **values
+of the curve are worked out again** at the same time, which matters for the
+two styles that read the table differently: a histogram carries the counts of
+its bins and a pie reads no X column at all, so a curve leaving either of
+them is given its own points back.
 
 * **Legend**: the `Text` of this curve's legend box, then its `Font size`
   with the `Colour` of the text next to it.  An empty text removes the box.
+  A **pie** is the one exception: its box has one row per slice, so there is
+  no single text to type and the `Text` field is switched off (see
+  `Pie properties` below).
 * **Line**: `Style` (solid, dashed, dash-dot, dotted), then `Width` with
   the `Colour` of the line next to it.
 * **Marker**: `Hollow (no fill)` at the top of the section - an outlined
@@ -1146,6 +1174,11 @@ for a 2D histogram.
   * `Pattern`: the same choice of hatchings a filled area has.
   * `Close it down to the zero line`: an open staircase is a line and may
     hang in the air; closed, it stands on zero like a bar chart.
+  * **Empty cells.**  A step needs a place to stand, so a point whose cell
+    in the **X column** is empty is left out and the treads beside it widen
+    over it.  An empty cell in the **value** column stays a gap, exactly as
+    it breaks any other curve: the staircase - filled or not - is cut there
+    instead of dropping to zero.
 * **2D histogram properties** (visible for 2D Histograms):
   * `Bins across X` and `Bins up Y`: the grid the pairs are counted into
     (20 x 20 to begin with, up to 500 either way).
@@ -1162,17 +1195,62 @@ for a 2D histogram.
   * The **names of the slices** (a list): the text of the first column, the
     row number, or nothing at all.
   * `Start angle` (90 degrees is the top) with the `Edge colour` beside it.
-  * `Per cent` with `Decimals` beside it: the share written on every slice.
-  * `Hole (0-0.9)` turns the pie into a **doughnut**, `Text size` sets the
-    font of the names and the percentages.
+  * `Hole (0-0.9)` turns the pie into a **doughnut**, `Edge width` sets the
+    line between the slices.
   * `Pull out the first` moves the first slice out of the circle, and
-    `Edge width` sets the line between the slices.
-  * `Go round anticlockwise` reverses the direction.
+    `Turn the names` lays every name along its own slice instead of
+    standing it upright.
+  * **The names of the slices** - the texts standing around the pie - have
+    three settings of their own:
+    * `Distance`: **where they stand**.  `1.0` is the rim of the circle,
+      less puts the name on the slice, more beside the pie; they start at
+      `1.1`, just outside.
+    * `Font size` and `Colour`: their own font, independent of the numbers.
+  * **The numbers on the slices** have the same three, plus two of their
+    own:
+    * `Distance` (they start at `0.6`, inside the slice), `Font size` and
+      `Colour` - white numbers on strong slice colours read best.
+    * `Turn them` lays each number along its own slice, which is what makes
+      many thin slices readable at all.
+    * `Write them` switches the percentages off altogether, and `Decimals`
+      says how precisely they are written.
+  * `Go round anticlockwise` reverses the direction.  Changing the
+    direction - or any other setting here - never touches the **names typed
+    into the legend rows**; they belong to their slices and stay there.
   * Only **one** column can be a pie, and one pie fills the whole plot
     area: the first ticked column with numbers in it is the one that is
-    drawn.  Empty cells and zeros are not slices, and a negative number is
+    drawn.  (A pie that stands **beside an ordinary curve** - one curve
+    switched to `Pie Chart` while another stays a line - leaves the axes to
+    that curve and is drawn as a small circle around the origin instead.)  Empty cells and zeros are not slices, and a negative number is
     taken by its size.  A pie has no axes at all - no numbers, no labels,
     no frame lines - and it stays round whatever the shape of the window.
+  * **The circle is as big as the plot area.**  The range of the axes is
+    the square the pie needs, so it is drawn as large as any other diagram
+    and grows when a slice is pulled out.  A range typed into `Axes
+    properties` by hand is never overruled, so the pie can be made smaller
+    (or bigger) there if that is wanted.
+  * **The legend box starts switched off.**  A pie of five slices in one
+    colour with one name says nothing, so there is no box to begin with -
+    the names stand beside the slices instead.  Switching `Legend` on gives
+    a box that lists **every slice** with its own colour and its own name,
+    which is the useful form of a legend for a pie.
+  * **Every row of that box is a name of its own.**  Because a pie has no
+    single legend text, the `Text` field of the `Legend` section is switched
+    off for it.  To rename one slice, click its row in the box, wait a
+    moment and click it again: a little editor opens **on that row alone**,
+    and what is typed there belongs to that slice - beside the pie and in
+    the box.  An empty text gives the slice the name the table gives it
+    back.  The names that were typed in are written into the `.aplt` file
+    and into the exported program with the rest of the curve, and **no other
+    setting of the dialog takes them away** - not the direction of the
+    slices, not the colour map, nothing.
+  * The `Font size` and the `Colour` of the `Legend` section belong to the
+    **box**; the font and the colour of the texts standing around the pie
+    are set in `Pie properties`, under `The names of the slices`.
+  * **A pie is clicked like any other curve.**  It has no line to hit, so
+    the slices *and* the names and percentages written on them all open
+    `Curve properties` with a single click - which is where their font,
+    their colour and their distance are.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
   vertical, horizontal, crossed, circles, dots, stars and their dense

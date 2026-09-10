@@ -208,6 +208,8 @@ PIE_LABELS = [("The text of the first column", "column"),
 HIST2D_BINS = 20           # the grid of a 2D histogram, per axis
 MAX_HIST2D_BINS = 500
 PIE_START_ANGLE = 90.0     # the first slice starts at the top
+PIE_LABEL_DISTANCE = 1.1   # how far out the slice names stand (1 = the rim)
+PIE_PCT_DISTANCE = 0.6     # how far out the numbers stand on the slices
 
 FRAME_STYLES = [
     ("No frame (X and Y only) (default)", "none"),
@@ -1983,13 +1985,20 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         combo.pack(fill="x")
         combo.bind("<<ComboboxSelected>>", self._on_style_changed)
 
+    LEGEND_HINT = "Switch \"Legend\" off to hide this curve's box."
+    PIE_LEGEND_HINT = ("A pie's box lists every slice on its own row, so it\n"
+                       "has no single text.  The names come from the first\n"
+                       "column of the table; to change just one of them,\n"
+                       "click its row in the box, wait, and click it again.")
+
     def _build_legend_box(self):
         box = self._section("Legend", self.legend_on_var)
         self.legend_box = box
         ttk.Label(box, text="Text:").grid(row=0, column=0, sticky="w",
                                           padx=(0, 8), pady=3)
-        ttk.Entry(box, textvariable=self.label_var, width=30).grid(
-            row=0, column=1, columnspan=3, sticky="ew", pady=3)
+        self.label_entry = ttk.Entry(box, textvariable=self.label_var, width=30)
+        self.label_entry.grid(row=0, column=1, columnspan=3, sticky="ew",
+                              pady=3)
         self.label_var.trace_add("write", self._apply)
         # the size of the text and its colour stand side by side
         self.legend_color = ColorSwatch(box, self._legend_color,
@@ -2001,9 +2010,9 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                                command=self._apply),
                    "Colour:", self.legend_color)
         self.legend_size_var.trace_add("write", self._apply)
-        self._wide(ttk.Label(
-            box, text="Switch \"Legend\" off to hide this curve's box.",
-            foreground="#666"), 2, pady=(4, 0))
+        self.legend_hint = ttk.Label(
+            box, text=self.LEGEND_HINT, foreground="#666", justify="left")
+        self._wide(self.legend_hint, 2, pady=(4, 0))
 
     def _build_line_box(self, line_color):
         box = self._section("Line", self.line_on_var, pady=(10, 0))
@@ -2307,13 +2316,29 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             value=str(int(cfg.get("decimals", 1))))
         self.pie_size_var = tk.StringVar(
             value=str(int(cfg.get("label_size", 11))))
+        name_size, name_color = PlotWindow.pie_text_style(cfg, "name")
+        pct_size, pct_color = PlotWindow.pie_text_style(cfg, "pct")
+        self.pie_name_size_var = tk.StringVar(value=str(name_size))
+        self.pie_number_size_var = tk.StringVar(value=str(pct_size))
         self.pie_clock_var = tk.BooleanVar(
             value=bool(cfg.get("clockwise", True)))
         self.pie_edge_width_var = tk.StringVar(
             value=str(cfg.get("edgewidth", 1.0)))
+        self.pie_name_at_var = tk.StringVar(
+            value=str(cfg.get("labeldistance", PIE_LABEL_DISTANCE)))
+        self.pie_number_at_var = tk.StringVar(
+            value=str(cfg.get("pctdistance", PIE_PCT_DISTANCE)))
+        self.pie_turn_names_var = tk.BooleanVar(
+            value=bool(cfg.get("rotate_labels", False)))
+        self.pie_turn_numbers_var = tk.BooleanVar(
+            value=bool(cfg.get("rotate_numbers", False)))
         self.pie_edge_color = ColorSwatch(
             box, cfg.get("edgecolor", "#ffffff"),
             command=lambda _c: self._apply())
+        self.pie_name_color = ColorSwatch(box, name_color,
+                                          command=lambda _c: self._apply())
+        self.pie_number_color = ColorSwatch(box, pct_color,
+                                            command=lambda _c: self._apply())
 
         combo = ttk.Combobox(box, textvariable=self.pie_cmap_var,
                              state="readonly", values=names(COLOR_MAPS),
@@ -2336,7 +2361,71 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.pie_start_var.trace_add("write", self._apply)
 
         self._pair(box, 3,
-                   "Per cent:",
+                   "Hole (0-0.9):",
+                   ttk.Spinbox(box, from_=0, to=0.9, increment=0.05,
+                               width=SPIN_WIDTH, textvariable=self.pie_hole_var,
+                               command=self._apply),
+                   "Edge width:",
+                   ttk.Spinbox(box, from_=0, to=10, increment=0.5,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_edge_width_var,
+                               command=self._apply))
+        self.pie_hole_var.trace_add("write", self._apply)
+        self.pie_edge_width_var.trace_add("write", self._apply)
+
+        self._pair(box, 4,
+                   "Pull out the first:",
+                   ttk.Spinbox(box, from_=0, to=0.5, increment=0.05,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_explode_var,
+                               command=self._apply),
+                   "Turn the names:",
+                   ttk.Checkbutton(box, variable=self.pie_turn_names_var,
+                                   command=self._apply))
+        self.pie_explode_var.trace_add("write", self._apply)
+
+        # the names beside the slices: how far out, how big, what colour
+        self._wide(ttk.Label(box, text="The names of the slices:"),
+                   5, pady=(8, 2))
+        self._pair(box, 6,
+                   "Distance:",
+                   ttk.Spinbox(box, from_=0, to=2.5, increment=0.05,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_name_at_var,
+                               command=self._apply),
+                   "Font size:",
+                   ttk.Spinbox(box, from_=4, to=48, increment=1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_name_size_var,
+                               command=self._apply))
+        self.pie_name_at_var.trace_add("write", self._apply)
+        self.pie_name_size_var.trace_add("write", self._apply)
+        self._pair(box, 7, "Colour:", self.pie_name_color,
+                   "", ttk.Label(box, text=""))
+
+        # the numbers written on the slices, with their own font and colour
+        self._wide(ttk.Label(box, text="The numbers on the slices:"),
+                   8, pady=(8, 2))
+        self._pair(box, 9,
+                   "Distance:",
+                   ttk.Spinbox(box, from_=0, to=2.5, increment=0.05,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_number_at_var,
+                               command=self._apply),
+                   "Font size:",
+                   ttk.Spinbox(box, from_=4, to=48, increment=1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.pie_number_size_var,
+                               command=self._apply))
+        self.pie_number_at_var.trace_add("write", self._apply)
+        self.pie_number_size_var.trace_add("write", self._apply)
+        self._pair(box, 10,
+                   "Colour:", self.pie_number_color,
+                   "Turn them:",
+                   ttk.Checkbutton(box, variable=self.pie_turn_numbers_var,
+                                   command=self._apply))
+        self._pair(box, 11,
+                   "Write them:",
                    ttk.Checkbutton(box, variable=self.pie_percent_var,
                                    command=self._apply),
                    "Decimals:",
@@ -2345,36 +2434,19 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                                textvariable=self.pie_decimals_var,
                                command=self._apply))
         self.pie_decimals_var.trace_add("write", self._apply)
+        self._wide(ttk.Label(box, foreground="#666",
+                             text="The number written on a slice is its "
+                                  "per cent of the whole."), 12, pady=(2, 0))
 
-        self._pair(box, 4,
-                   "Hole (0-0.9):",
-                   ttk.Spinbox(box, from_=0, to=0.9, increment=0.05,
-                               width=SPIN_WIDTH, textvariable=self.pie_hole_var,
-                               command=self._apply),
-                   "Text size:",
-                   ttk.Spinbox(box, from_=4, to=48, increment=1,
-                               width=SPIN_WIDTH, textvariable=self.pie_size_var,
-                               command=self._apply))
-        self.pie_hole_var.trace_add("write", self._apply)
-        self.pie_size_var.trace_add("write", self._apply)
-
-        self._pair(box, 5,
-                   "Pull out the first:",
-                   ttk.Spinbox(box, from_=0, to=0.5, increment=0.05,
-                               width=SPIN_WIDTH,
-                               textvariable=self.pie_explode_var,
-                               command=self._apply),
-                   "Edge width:",
-                   ttk.Spinbox(box, from_=0, to=10, increment=0.5,
-                               width=SPIN_WIDTH,
-                               textvariable=self.pie_edge_width_var,
-                               command=self._apply))
-        self.pie_explode_var.trace_add("write", self._apply)
-        self.pie_edge_width_var.trace_add("write", self._apply)
+        self._wide(ttk.Label(
+            box, foreground="#666", justify="left",
+            text="A distance of 1.0 is the rim of the pie: below it the text\n"
+                 "sits on the slice, above it beside the pie.  Turning lays\n"
+                 "a text along its own slice."), 13, pady=(6, 0))
 
         self._wide(ttk.Checkbutton(box, text="Go round anticlockwise",
                                    variable=self.pie_clock_var,
-                                   command=self._apply), 6, pady=(4, 0))
+                                   command=self._apply), 14, pady=(4, 0))
 
     def _on_err_type_changed(self, _event=None):
         src = code_of(ERROR_SOURCES, self.err_type_var.get(), "pair")
@@ -2432,6 +2504,11 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             self._show_bar_fields(st == "histogram")
         for name in self.SECTIONS.get(st, self.SECTIONS["line_symbol"]):
             getattr(self, name).pack(fill="x", pady=(10, 0))
+        # a pie has one legend row per slice: a single text would be a lie
+        pie = st == "pie"
+        self.label_entry.configure(state="disabled" if pie else "normal")
+        self.legend_hint.configure(text=self.PIE_LEGEND_HINT if pie
+                                   else self.LEGEND_HINT)
 
     def _on_style_changed(self, _event=None):
         st = self.style_code()
@@ -2490,8 +2567,11 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             text="Switched off, the area is filled down to the axis."), 4)
 
     def _build_buttons(self):
+        # pinned to the bottom of the window: the sections that appear and
+        # disappear with the plot style are packed above it, never below
         bar = ttk.Frame(self.body)
-        bar.pack(fill="x", pady=(12, 0))
+        bar.pack(side="bottom", fill="x", pady=(12, 0))
+        self.button_bar = bar
         ttk.Button(bar, text="Marker colour = line colour",
                    command=self._sync_colors).pack(side="left")
         ttk.Button(bar, text="Close", command=self.close).pack(side="right")
@@ -2606,6 +2686,16 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                 "clockwise": bool(self.pie_clock_var.get()),
                 "edgecolor": self.pie_edge_color.color,
                 "edgewidth": to_float(self.pie_edge_width_var.get(), 1.0),
+                "labeldistance": max(0.0, to_float(self.pie_name_at_var.get(),
+                                                   PIE_LABEL_DISTANCE)),
+                "pctdistance": max(0.0, to_float(self.pie_number_at_var.get(),
+                                                 PIE_PCT_DISTANCE)),
+                "rotate_labels": bool(self.pie_turn_names_var.get()),
+                "rotate_numbers": bool(self.pie_turn_numbers_var.get()),
+                "name_size": max(1, to_int(self.pie_name_size_var.get(), 11)),
+                "name_color": self.pie_name_color.color,
+                "pct_size": max(1, to_int(self.pie_number_size_var.get(), 11)),
+                "pct_color": self.pie_number_color.color,
             })
         if self.on_error_cfg:
             self.on_error_cfg({
@@ -6741,6 +6831,67 @@ class PlotWindow(tk.Toplevel):
         """True while at least one curve belongs to the left Y axis."""
         return any(side == "left" for side in self.series_axis.values())
 
+    def only_pies(self):
+        """True while every curve of this diagram is a pie.
+
+        A pie needs no axes at all, but one pie beside a curve still does -
+        so it is the whole diagram that decides, not one series.
+        """
+        return self.styles_in_use() == {"pie"}
+
+    def apply_style_axes(self, redraw=False):
+        """Give the axes to the styles that are drawn on them.
+
+        A **pie** has no axes: no label, no numbers, no frame line, and a
+        square range with an equal aspect.  Every other style needs all of
+        that back, so switching a curve away from a pie has to undo it -
+        otherwise the curve is drawn far outside the little square the pie
+        left behind and nothing at all appears.
+        """
+        pie = self.only_pies()
+        if pie == getattr(self, "_pie_axes", None):
+            return False                   # the axes already fit the styles
+        if pie:
+            # what the axes carried before, to be given back later on
+            self._axis_memory = {
+                which: {"label": self.axis_label(which),
+                        "label_on": bool(self.axis_cfg[which].get("label_on",
+                                                                  True)),
+                        "ticks_on": bool(self.axis_cfg[which].get("ticks_on",
+                                                                  True))}
+                for which in ("x", "y")}
+            for which in ("x", "y"):
+                self.apply_axis(which, {**self.axis_cfg[which], "label": "",
+                                        "label_on": False, "ticks_on": False},
+                                redraw=False)
+            # the square itself is not touched here: the pie may already be
+            # drawn (a window that opens as a pie draws it first of all)
+        else:
+            memory = getattr(self, "_axis_memory", None) or {}
+            plot_cfg = self.settings.section("plot")
+            fallback = {"x": self.x_axis_name(),
+                        "y": str(plot_cfg.get("y_label", ""))}
+            self.ax.set_aspect("auto")
+            for which in ("x", "y"):
+                saved = memory.get(which) or {}
+                # the square of a pie is no range for a curve: the automatic
+                # one is worked out again from the data
+                self.apply_axis(which, {
+                    **self.axis_cfg[which],
+                    "label": saved.get("label", fallback[which]),
+                    "label_on": saved.get("label_on", True),
+                    "ticks_on": saved.get("ticks_on", True),
+                    "auto": True, "min": None, "max": None}, redraw=False)
+            self._axis_memory = None
+            self._pie_span = None
+        self._pie_axes = pie
+        self.apply_frame(self.frame_cfg, redraw=False)
+        self._rescale()
+        self.apply_text_offsets()
+        if redraw:
+            self.draw()
+        return True
+
     def used_sides(self):
         """The sides of the plot area that really carry an axis.
 
@@ -6749,7 +6900,7 @@ class PlotWindow(tk.Toplevel):
         Y axes - the curves are drawn against.  So a diagram of a top X axis
         and a right Y axis shows those two lines and nothing else.
         """
-        if self.plot_style == "pie":
+        if self.only_pies():
             return []                  # a pie stands on no axis
         sides = ["top" if self.x_side == "top" else "bottom"]
         right = self.right_axis_active()
@@ -6906,9 +7057,7 @@ class PlotWindow(tk.Toplevel):
 
     def _rescale(self):
         """Let the automatic ranges follow the data of both Y axes."""
-        if self.plot_style == "pie" and not [
-                name for name, style in self.series_style.items()
-                if style != "pie"]:
+        if self.only_pies():
             return                     # a pie has no range to follow
         auto_x = self.axis_cfg["x"]["auto"]
         auto_y = self.axis_cfg["y"]["auto"]
@@ -6958,6 +7107,9 @@ class PlotWindow(tk.Toplevel):
         series_st = style or self.plot_style
         self.series_style[y_col] = series_st
 
+        # a pie writes the names beside its slices: a box with one single
+        # colour in it says nothing, so it starts switched off
+        pie_label = "_nolegend_" if series_st == "pie" else str(y_col)
         if series_st == "line":
             l_style = code_of(LINE_STYLES, plot_cfg["line_style"], "-")
             if l_style.lower() == "none":
@@ -6991,7 +7143,7 @@ class PlotWindow(tk.Toplevel):
             marker=m_style,
             markersize=float(plot_cfg["marker_size"]),
             markeredgewidth=float(plot_cfg["marker_edge_width"]),
-            label=str(y_col))          # the column name is the legend text
+            label=pie_label)           # the column name is the legend text
         if plot_cfg["hollow_markers"]:
             line.set_markerfacecolor("none")
             line.set_markeredgecolor(line.get_color())
@@ -7232,6 +7384,22 @@ class PlotWindow(tk.Toplevel):
         """True when that column holds at least one number."""
         return bool(len(PlotWindow.sample_values(df, column)))
 
+    def styles_in_use(self):
+        """The plot styles this diagram really draws right now."""
+        return ({self.series_style.get(name, self.plot_style)
+                 for name in self.series} or {self.plot_style})
+
+    def needs_x_axis(self):
+        """True while at least one thing drawn here reads an X column.
+
+        A histogram counts a column of its own accord and a pie has no axes
+        at all, so a diagram made only of those needs no X values.  The
+        styles of the **curves** decide it, not the style the window was
+        opened with: one curve switched from a pie to a bar chart wants its
+        X axis back at once.
+        """
+        return bool(self.styles_in_use() - {"histogram", "pie"})
+
     def row_numbers_mode(self, df=None):
         """True while the first column is the only column with numbers.
 
@@ -7241,8 +7409,8 @@ class PlotWindow(tk.Toplevel):
         show them.  A histogram never needs this - it counts every column
         of its own accord.
         """
-        if self.plot_style in ("histogram", "pie"):
-            return False               # neither of them reads an X axis
+        if not self.needs_x_axis():
+            return False               # nothing drawn here reads an X axis
         frame = self.df if df is None else df
         if frame is None or not len(frame.columns):
             return False
@@ -7250,6 +7418,29 @@ class PlotWindow(tk.Toplevel):
         if not self.has_numbers(frame, columns[0]):
             return False
         return not any(self.has_numbers(frame, name) for name in columns[1:])
+
+    def text_x_mode(self, df=None):
+        """True while the first column holds names instead of numbers.
+
+        A table of `Solar, Wind, Hydro | 24, 19, 15` is the natural shape of
+        a pie or a bar chart, but its first column is no X axis: there is
+        not a single number in it.  Every other diagram then draws its
+        curves against the **row number**, so switching such a curve away
+        from a pie really shows something instead of an empty frame.
+        """
+        if not self.needs_x_axis():
+            return False               # nothing drawn here reads an X axis
+        frame = self.df if df is None else df
+        if frame is None or len(frame.columns) < 2:
+            return False
+        columns = [str(one) for one in frame.columns]
+        if self.has_numbers(frame, columns[0]):
+            return False
+        return any(self.has_numbers(frame, name) for name in columns[1:])
+
+    def x_is_rows(self, df=None):
+        """True while the X axis carries the row number of the table."""
+        return self.row_numbers_mode(df) or self.text_x_mode(df)
 
     @staticmethod
     def row_number_points(df, column):
@@ -7263,7 +7454,7 @@ class PlotWindow(tk.Toplevel):
 
     def x_axis_name(self):
         """What the X axis carries: the first column, or the row number."""
-        if self.row_numbers_mode():
+        if self.x_is_rows():
             return ROW_AXIS_LABEL
         return str(self.df.columns[0]) if len(self.df.columns) else ""
 
@@ -7281,6 +7472,9 @@ class PlotWindow(tk.Toplevel):
             return self.histogram_points(df, y_col)
         columns = [str(one) for one in df.columns]
         if columns and str(y_col) == columns[0] and self.row_numbers_mode(df):
+            return self.row_number_points(df, y_col)
+        if self.text_x_mode(df):
+            # the first column names the rows: there is no X value to read
             return self.row_number_points(df, y_col)
         return self._series_data(df, x_col, y_col)
 
@@ -7326,11 +7520,13 @@ class PlotWindow(tk.Toplevel):
         return container
 
     def restore_series_data(self, column):
-        """Put the values of a column back on its curve after a histogram.
+        """Put the values of a column back on its curve, whatever it drew.
 
         While a curve is drawn as a histogram it carries the counts of the
-        bins, not the data of the table.  Switching that curve to another
-        style has to give it its own values against the X column again.
+        bins, not the data of the table, and a style change may also change
+        what the X axis carries (a pie reads no X column at all, so leaving
+        one gives the curve its X values back).  So the points are worked
+        out again from the table for the style the curve has now.
         """
         self.histogram_drawn.discard(column)
         self.histogram_edges.pop(column, None)
@@ -7339,7 +7535,7 @@ class PlotWindow(tk.Toplevel):
             return False
         x_name = self.x_col if self.x_col in self.df.columns else \
             str(self.df.columns[0])
-        line.set_data(*self._series_data(self.df, x_name, column))
+        line.set_data(*self.series_points(self.df, x_name, column))
         return True
 
     # -- a stepped outline: ax.stairs ---------------------------------------
@@ -7360,21 +7556,32 @@ class PlotWindow(tk.Toplevel):
                 "hatch": ""}
 
     @staticmethod
+    def _step_of(distance):
+        """A usable width: never zero, never "not a number"."""
+        value = float(distance)
+        return 1.0 if (not np.isfinite(value) or value == 0.0) else value
+
+    @staticmethod
     def stairs_edges(x_data, mode="mid"):
         """The `N + 1` edges of `N` values: where the steps stand.
 
         `mid` puts the step halfway between two X values (every value is
         valid around its own X), `post` at the X value itself and `pre`
         just before it.
+
+        The X values must be **numbers**: matplotlib refuses an edge that
+        is "not a number", so a point with an empty X cell is left out by
+        `stairs_points` before the edges are worked out.
         """
         x_arr = np.asarray(x_data, dtype=float)
+        x_arr = x_arr[np.isfinite(x_arr)]      # a missing X is no edge
         count = len(x_arr)
         if count == 0:
             return np.array([0.0, 1.0])
         if count == 1:
             return np.array([x_arr[0] - 0.5, x_arr[0] + 0.5])
-        first_step = x_arr[1] - x_arr[0] or 1.0
-        last_step = x_arr[-1] - x_arr[-2] or 1.0
+        first_step = PlotWindow._step_of(x_arr[1] - x_arr[0])
+        last_step = PlotWindow._step_of(x_arr[-1] - x_arr[-2])
         if str(mode) == "post":
             return np.concatenate([x_arr, [x_arr[-1] + last_step]])
         if str(mode) == "pre":
@@ -7382,6 +7589,25 @@ class PlotWindow(tk.Toplevel):
         middles = (x_arr[:-1] + x_arr[1:]) / 2.0
         return np.concatenate([[x_arr[0] - first_step / 2.0], middles,
                                [x_arr[-1] + last_step / 2.0]])
+
+    def stairs_points(self, column):
+        """The points a staircase can stand on: those that have an X value.
+
+        An empty cell in the **X** column leaves its point without a place
+        on the axis, and an edge that is "not a number" is refused by
+        matplotlib, so such a point is left out.  An empty cell in the
+        **value** column is kept as it is: it becomes a gap in the
+        staircase, exactly as it breaks any other curve.
+        """
+        line = self.series.get(column)
+        if line is None:
+            return np.array([], dtype=float), np.array([], dtype=float)
+        x_arr = np.asarray(line.get_xdata(), dtype=float)
+        y_arr = np.asarray(line.get_ydata(), dtype=float)
+        standing = np.isfinite(x_arr)
+        if len(y_arr) != len(x_arr):           # never, but never crash either
+            return np.array([], dtype=float), np.array([], dtype=float)
+        return x_arr[standing], y_arr[standing]
 
     def refresh_stairs(self, column):
         """Draw the values of one column as a staircase."""
@@ -7394,17 +7620,19 @@ class PlotWindow(tk.Toplevel):
                                          self.default_stairs_cfg(line))
         for key, value in self.default_stairs_cfg(line).items():
             cfg.setdefault(key, value)
-        y_arr = np.asarray(line.get_ydata(), dtype=float)
+        x_arr, y_arr = self.stairs_points(column)
         if not len(y_arr) or not bool(np.isfinite(y_arr).any()):
             return None
-        edges = self.stairs_edges(line.get_xdata(), cfg.get("edges", "mid"))
+        edges = self.stairs_edges(x_arr, cfg.get("edges", "mid"))
+        if len(edges) != len(y_arr) + 1 or not np.isfinite(edges).all():
+            return None                # nothing sensible to stand the steps on
         target = line.axes if line.axes is not None else self.ax
         filled = bool(cfg.get("fill"))
         # a filled staircase needs a floor to stand on; an open one is a
         # line and may hang in the air
         baseline = 0.0 if (filled or cfg.get("baseline")) else None
         patch = target.stairs(
-            np.nan_to_num(y_arr, nan=0.0), edges, baseline=baseline,
+            y_arr, edges, baseline=baseline,
             fill=filled, color=cfg.get("color", line.get_color()),
             linewidth=float(cfg.get("width", 1.8)),
             alpha=(float(cfg.get("alpha", 0.35)) if filled else None),
@@ -7524,7 +7752,26 @@ class PlotWindow(tk.Toplevel):
         return {"start": PIE_START_ANGLE, "percent": True, "decimals": 1,
                 "hole": 0.0, "labels": "column", "cmap": "tab10",
                 "edgecolor": "#ffffff", "edgewidth": 1.0, "explode": 0.0,
-                "clockwise": True, "label_size": 11}
+                "clockwise": True, "label_size": 11,
+                "labeldistance": PIE_LABEL_DISTANCE,
+                "pctdistance": PIE_PCT_DISTANCE,
+                "rotate_labels": False, "rotate_numbers": False,
+                "name_size": 11, "name_color": "#000000",
+                "pct_size": 11, "pct_color": "#000000",
+                "names": []}
+
+    @staticmethod
+    def pie_text_style(cfg, which):
+        """Font size and colour of the names or of the numbers of a pie.
+
+        `label_size` was the one size of both texts before they could be
+        set apart, so a diagram saved then keeps its font.
+        """
+        old = cfg.get("label_size", 11)
+        size = cfg.get("name_size" if which == "name" else "pct_size", old)
+        color = cfg.get("name_color" if which == "name" else "pct_color",
+                        "#000000")
+        return max(1, to_int(size, 11)), safe_hex(color, "#000000")
 
     def pie_values(self, column):
         """The slices of a pie: the numbers of one column and their names."""
@@ -7540,10 +7787,45 @@ class PlotWindow(tk.Toplevel):
         if wanted == "none":
             return values, []
         if wanted == "row" or names[0] == str(column):
-            return values, [str(int(one) + 1) for one in rows]
-        source = self.df[names[0]]
-        return values, [("" if pd.isna(source.iat[int(one)])
-                         else str(source.iat[int(one)])) for one in rows]
+            labels = [str(int(one) + 1) for one in rows]
+        else:
+            source = self.df[names[0]]
+            labels = [("" if pd.isna(source.iat[int(one)])
+                       else str(source.iat[int(one)])) for one in rows]
+        return values, self.pie_names(column, labels)
+
+    def pie_names(self, column, automatic):
+        """The slice names, with the ones written by hand on top of them.
+
+        Every legend row of a pie can be renamed on its own (a slow second
+        click on it).  What was typed in is kept per slice; a slice that was
+        never touched keeps the name the table gives it.
+        """
+        automatic = list(automatic)
+        if not automatic:
+            return []
+        chosen = (self.pie_cfg.get(column) or {}).get("names") or []
+        for index, text in enumerate(list(chosen)[:len(automatic)]):
+            if str(text).strip():
+                automatic[index] = str(text)
+        return automatic
+
+    def pie_slice_names(self, column, count):
+        """One name per slice, even when the pie writes none beside them."""
+        _values, drawn = self.pie_values(column)
+        automatic = (list(drawn) if len(drawn) == count
+                     else [str(index + 1) for index in range(count)])
+        return self.pie_names(column, automatic)
+
+    def set_pie_name(self, column, index, text):
+        """Give one slice of a pie a name of its own ("" = the table's)."""
+        cfg = self.pie_cfg.setdefault(column, self.default_pie_cfg())
+        stored = list(cfg.get("names") or [])
+        while len(stored) <= int(index):
+            stored.append("")
+        stored[int(index)] = str(text)
+        cfg["names"] = stored
+        return stored
 
     def refresh_pie(self, column):
         """Draw one column as a pie: one slice per row."""
@@ -7559,6 +7841,8 @@ class PlotWindow(tk.Toplevel):
         if not len(values):
             return None
         target = line.axes if line.axes is not None else self.ax
+        # what stood on the axes before: ax.pie() sets a range of its own
+        was = (tuple(target.get_xlim()), tuple(target.get_ylim()))
         colors = self.slice_colors(cfg.get("cmap", "tab10"), len(values))
         explode = float(cfg.get("explode", 0.0) or 0.0)
         hole = max(0.0, min(float(cfg.get("hole", 0.0) or 0.0), 0.95))
@@ -7571,6 +7855,10 @@ class PlotWindow(tk.Toplevel):
                 startangle=float(cfg.get("start", PIE_START_ANGLE)),
                 counterclock=bool(cfg.get("clockwise", True)),
                 autopct=percent,
+                labeldistance=float(cfg.get("labeldistance",
+                                            PIE_LABEL_DISTANCE)),
+                pctdistance=float(cfg.get("pctdistance", PIE_PCT_DISTANCE)),
+                rotatelabels=bool(cfg.get("rotate_labels", False)),
                 explode=([explode] + [0.0] * (len(values) - 1)
                          if explode else None),
                 textprops={"fontsize": int(cfg.get("label_size", 11))},
@@ -7579,14 +7867,84 @@ class PlotWindow(tk.Toplevel):
                             "linewidth": float(cfg.get("edgewidth", 1.0))})
         except (ValueError, TypeError):
             return None
-        written = list(texts) + list(rest[0] if rest else [])
+        numbers = list(rest[0] if rest else [])
+        written = list(texts) + numbers
+        # the names and the numbers carry their own font and colour
+        for which, group in (("name", list(texts)), ("pct", numbers)):
+            size, color = self.pie_text_style(cfg, which)
+            for text in group:
+                text.set_fontsize(size)
+                text.set_color(color)
+        if cfg.get("rotate_numbers") and numbers:
+            self.turn_with_slices(numbers, wedges)
         for wedge in wedges:
             wedge.aplot_series = str(column)
             wedge.set_picker(True)
+        # the names and the numbers of the slices open the properties too:
+        # a pie has no curve to click on
+        for text in written:
+            text.aplot_series = str(column)
+            text.set_picker(True)
         self.pie_wedges[column] = list(wedges)
         self.pie_texts[column] = written
-        target.set_aspect("equal")
+        if self.only_pies():
+            self.fit_pie_area(target, explode, before=was)
+        else:
+            # a pie beside an ordinary curve: the axes belong to the curve,
+            # so the frame and the range ax.pie() has just taken are put back
+            self._pie_span = None
+            target.set_frame_on(True)
+            for setter, (low, high) in zip((target.set_xlim, target.set_ylim),
+                                           was):
+                if low is not None:
+                    setter(low, high)
         return wedges
+
+    @staticmethod
+    def turn_with_slices(texts, wedges):
+        """Lay the numbers of a pie along their own slice."""
+        for text, wedge in zip(texts, wedges):
+            middle = math.radians((float(wedge.theta1)
+                                   + float(wedge.theta2)) / 2.0)
+            outward = math.cos(middle) >= 0
+            text.set_rotation(math.degrees(middle) + (0 if outward else 180))
+            text.set_rotation_mode("anchor")
+            text.set_ha("center")
+            text.set_va("center")
+        return texts
+
+    def fit_pie_area(self, target, explode=0.0, before=None):
+        """Give the pie the whole plot area, and keep it round.
+
+        A pie is a circle of radius 1 around the origin, but the curve that
+        carries its numbers still lies in the axes - and an automatic range
+        would follow *that*, leaving the pie as a tiny dot in the corner.
+        So the range becomes the square the pie really needs, and the axes
+        keep an equal aspect, which makes the circle as tall as the plot
+        area and centres it.
+
+        `before` is the range that was on the axes before the pie was
+        drawn: while it is still the square of the pie itself, the square
+        may grow with the slices that are pulled out.  A range that was
+        typed in by hand is never overruled.
+        """
+        span = round(1.12 + max(0.0, float(explode or 0.0)), 4)
+        target.set_aspect("equal", adjustable="box", anchor="C")
+        last = getattr(self, "_pie_span", None)
+        limits = before or ((None, None), (None, None))
+        for which, (low, high) in zip(("x", "y"), limits):
+            stored = self.axis_cfg.get(which) or {}
+            setter = target.set_xlim if which == "x" else target.set_ylim
+            ours = (bool(last) and low is not None
+                    and abs(low + last) < 1e-6 and abs(high - last) < 1e-6)
+            if stored.get("auto", True) or ours:
+                self.axis_cfg[which] = {**stored, "auto": False,
+                                        "min": -span, "max": span}
+                setter(-span, span)
+            elif low is not None:
+                setter(low, high)      # set by hand: ax.pie() had moved it
+        self._pie_span = span
+        return span
 
     @staticmethod
     def slice_colors(name, count):
@@ -7624,7 +7982,9 @@ class PlotWindow(tk.Toplevel):
         st = self.series_style.get(column, self.plot_style)
         line = self.series.get(column)
         if line is not None:
-            if st != "histogram" and column in self.histogram_drawn:
+            if st != "histogram":
+                # the points follow the style: a curve that was a histogram
+                # carried counts, and one that was a pie carried no X values
                 self.restore_series_data(column)
             self.clear_extras(column, keep=st)
             if st in self.CARRIER_ONLY:
@@ -7914,6 +8274,7 @@ class PlotWindow(tk.Toplevel):
                             if name in self.series_axis}
 
         self._refresh_x_label()  # a second filled column ends the row numbers
+        self.apply_style_axes()  # the axes follow the styles that are drawn
         self._rescale()          # manual ranges are left untouched
         self.apply_frame(self.frame_cfg, redraw=False)
         self.refresh_fills()
@@ -7946,6 +8307,8 @@ class PlotWindow(tk.Toplevel):
         """One value as Python source."""
         if isinstance(value, (np.floating, float)):
             value = float(value)
+            if not math.isfinite(value):
+                return f"float({str(value)!r})"    # nan / inf / -inf
             return repr(round(value, 6))
         if isinstance(value, (np.integer, int)) and not isinstance(value, bool):
             return repr(int(value))
@@ -7965,6 +8328,12 @@ class PlotWindow(tk.Toplevel):
         for mean, std in self.error_partner.items():      # the error columns
             if std not in columns:
                 columns.append(std)
+        for name in list(self.series):     # ... the ones only implied by it
+            if self.series_style.get(name, self.plot_style) != "errorbar":
+                continue
+            partner = self.partner_column(name)
+            if partner is not None and partner not in columns:
+                columns.append(partner)
         for cfg in self.error_cfg.values():
             name = str(cfg.get("column", ""))
             if name and name not in columns:
@@ -7978,8 +8347,8 @@ class PlotWindow(tk.Toplevel):
                                 for one in values)
             lines.append(f"    {name!r}: [{numbers}],")
         lines.append("}")
-        if self.row_numbers_mode() and columns:
-            # the only filled column is drawn against the row numbers
+        if self.x_is_rows() and columns:
+            # a table with no X column is drawn against the row numbers
             lines.append("")
             lines.append("# the X values: the row numbers of the table")
             lines.append("ROWS = np.arange(1, len(DATA[%r]) + 1, dtype=float)"
@@ -7998,6 +8367,7 @@ class PlotWindow(tk.Toplevel):
             "It needs numpy and matplotlib and nothing else - the data is",
             "written into the file, so it runs anywhere.",
             '"""',
+            "import math",
             "import numpy as np",
             "import matplotlib.pyplot as plt",
             "from matplotlib.legend import Legend",
@@ -8168,8 +8538,8 @@ class PlotWindow(tk.Toplevel):
         lit = self._literal
         out = ["", "# ---------------------------------------------- the curves",
                "curves = {}"]
-        # with only the first column filled the X values are the row numbers
-        x_data = ("ROWS" if self.row_numbers_mode()
+        # with no X column of its own the X values are the row numbers
+        x_data = ("ROWS" if self.x_is_rows()
                   else f"DATA[{lit(str(self.x_col))}]")
         for number, (column, line) in enumerate(self.series.items(), start=1):
             target = "ax2" if self.series_side(column) == "right" else "ax"
@@ -8235,12 +8605,17 @@ class PlotWindow(tk.Toplevel):
                 s_filled = bool(s_cfg.get("fill"))
                 s_color = store_color(s_cfg.get("color", line.get_color()))
                 s_base = (0.0 if (s_filled or s_cfg.get("baseline")) else None)
-                edges = self.stairs_edges(line.get_xdata(),
-                                          s_cfg.get("edges", "mid"))
+                s_x, s_y = self.stairs_points(column)
+                edges = self.stairs_edges(s_x, s_cfg.get("edges", "mid"))
+                if len(edges) != len(s_y) + 1:
+                    # nothing to stand a step on: an empty staircase draws
+                    # nothing and still gives the legend its sample
+                    s_y = np.array([np.nan])
+                    edges = np.array([0.0, 1.0])
                 out.append(f"edges_{tag} = {lit(edges)}")
+                out.append(f"vals_{tag} = {lit(s_y)}")
                 out.append(
-                    f"bars_{tag} = {target}.stairs(np.nan_to_num("
-                    f"np.asarray(DATA[{lit(str(column))}], float), nan=0.0), "
+                    f"bars_{tag} = {target}.stairs(vals_{tag}, "
                     f"edges_{tag}, baseline={lit(s_base)}, fill={s_filled}, "
                     f"color={lit(s_color)}, "
                     f"linewidth={float(s_cfg.get('width', 1.8))}, "
@@ -8285,6 +8660,8 @@ class PlotWindow(tk.Toplevel):
                 explode = float(p_cfg.get("explode", 0.0) or 0.0)
                 percent = (f"%.{max(0, int(p_cfg.get('decimals', 1)))}f%%"
                            if p_cfg.get("percent") else None)
+                n_size, n_color = self.pie_text_style(p_cfg, "name")
+                p_size, p_color = self.pie_text_style(p_cfg, "pct")
                 out.append(f"vals_{tag} = {lit(values)}")
                 out.append(
                     f"bars_{tag} = {target}.pie(vals_{tag}, "
@@ -8292,14 +8669,44 @@ class PlotWindow(tk.Toplevel):
                     f"startangle={float(p_cfg.get('start', PIE_START_ANGLE))}, "
                     f"counterclock={bool(p_cfg.get('clockwise', True))}, "
                     f"autopct={lit(percent)}, "
+                    f"labeldistance="
+                    f"{float(p_cfg.get('labeldistance', PIE_LABEL_DISTANCE))}, "
+                    f"pctdistance="
+                    f"{float(p_cfg.get('pctdistance', PIE_PCT_DISTANCE))}, "
+                    f"rotatelabels={bool(p_cfg.get('rotate_labels', False))}, "
                     f"explode={lit(([explode] + [0.0] * (len(values) - 1)) if explode else None)}, "
-                    f"textprops={{'fontsize': "
-                    f"{int(p_cfg.get('label_size', 11))}}}, "
+                    f"textprops={{'fontsize': {n_size}}}, "
                     f"wedgeprops={{'width': {lit((1.0 - hole) if hole else None)}, "
                     f"'edgecolor': {lit(store_color(p_cfg.get('edgecolor', '#ffffff')))}, "
-                    f"'linewidth': {float(p_cfg.get('edgewidth', 1.0))}}})[0]"
+                    f"'linewidth': {float(p_cfg.get('edgewidth', 1.0))}}})"
                 )
-                out.append(f"{target}.set_aspect('equal')")
+                out.append(f"for txt_{tag} in bars_{tag}[1]:")
+                out.append(f"    txt_{tag}.set_color({lit(store_color(n_color))})")
+                if p_cfg.get("percent"):
+                    out.append(f"for txt_{tag} in bars_{tag}[2]:")
+                    out.append(f"    txt_{tag}.set_fontsize({p_size})")
+                    out.append(
+                        f"    txt_{tag}.set_color({lit(store_color(p_color))})")
+                if p_cfg.get("percent") and p_cfg.get("rotate_numbers"):
+                    out.append(
+                        f"for txt_{tag}, wdg_{tag} in zip(bars_{tag}[2], "
+                        f"bars_{tag}[0]):")
+                    out.append(
+                        f"    mid_{tag} = math.radians("
+                        f"(wdg_{tag}.theta1 + wdg_{tag}.theta2) / 2.0)")
+                    out.append(
+                        f"    txt_{tag}.set_rotation(math.degrees(mid_{tag}) "
+                        f"+ (0 if math.cos(mid_{tag}) >= 0 else 180))")
+                    out.append(f"    txt_{tag}.set_rotation_mode('anchor')")
+                    out.append(f"    txt_{tag}.set_ha('center')")
+                    out.append(f"    txt_{tag}.set_va('center')")
+                out.append(f"bars_{tag} = bars_{tag}[0]")
+                if self.only_pies():     # a pie alone owns the whole area
+                    out.append(f"{target}.set_aspect('equal')")
+                else:
+                    # ax.pie() switched the frame off: the curve beside the
+                    # pie needs its axes back
+                    out.append(f"{target}.set_frame_on(True)")
                 out.append(f"curves[{lit(str(column))}] = bars_{tag}[0]")
             elif st == "histogram":
                 h_cfg = self.histogram_cfg.get(column, {})
@@ -8365,11 +8772,22 @@ class PlotWindow(tk.Toplevel):
                     continue
                 edge = state.get("edge", "none")
                 face = state.get("face", "none")
+                if self.series_style.get(column,
+                                         self.plot_style) == "pie":
+                    # a pie box lists every slice, so the samples are the
+                    # wedges themselves
+                    tag = f"s{list(self.series).index(column) + 1}"
+                    _handles, texts = self.legend_entries(column, line)
+                    samples = f"list(bars_{tag})"
+                    names = lit([str(one) for one in texts])
+                else:
+                    samples = "[curves[%s]]" % lit(str(column))
+                    names = "[%s]" % lit(str(line.get_label()))
                 out.append(
-                    "legend = Legend(ax, [curves[%s]], [%s], loc=%s, "
+                    "legend = Legend(ax, %s, %s, loc=%s, "
                     "bbox_to_anchor=%s, bbox_transform=ax.transAxes, "
                     "prop={'size': %s}, framealpha=1.0)"
-                    % (lit(str(column)), lit(str(line.get_label())),
+                    % (samples, names,
                        lit(state.get("loc", "upper right")),
                        lit([float(one) for one in state.get("pos", (0.5, 0.5))]),
                        lit(int(state.get("size", 10)))))
@@ -8671,6 +9089,9 @@ class PlotWindow(tk.Toplevel):
             line.set_visible(entry.get("visible", True))
             self.refresh_series_visuals(column)
 
+        # the styles of the file decide whether the axes are drawn at all
+        self.apply_style_axes()
+
         # a histogram counted its bins again just now: the automatic range
         # follows those counts (a range that was set by hand is restored
         # below and wins over this)
@@ -8750,16 +9171,6 @@ class PlotWindow(tk.Toplevel):
         # column is the only filled one - the row number of the table
         x_col = self.x_axis_name()
         self._auto_x_label = x_col
-        if self.plot_style == "pie":
-            # a pie has no axes: no label, no numbers, no frame lines, and
-            # it must stay round whatever the shape of the window
-            x_col = ""
-            self._auto_x_label = ""
-            for which in ("x", "y"):
-                self.axis_cfg[which] = {**self.axis_cfg[which], "label": "",
-                                        "label_on": False, "ticks_on": False}
-            plot_cfg = {**plot_cfg, "y_label": ""}
-            self.ax.set_aspect("equal")
         try:
             title = str(plot_cfg["title_template"]).format(x=x_col)
         except (KeyError, IndexError, ValueError):
@@ -8788,6 +9199,8 @@ class PlotWindow(tk.Toplevel):
                 if right:
                     self.apply_axis("y2", {**self.axis_cfg["y2"],
                                            "label": str(right[0])}, redraw=False)
+        self._pie_axes = None       # nothing was decided about the axes yet
+        self.apply_style_axes()     # a pie window opens without axes
         self._rescale()
 
     def _reapply_distances(self):
@@ -8890,6 +9303,22 @@ class PlotWindow(tk.Toplevel):
         patches = list(getattr(container, "patches", ()) or ())
         return patches[0] if patches else line
 
+    def legend_entries(self, column, line):
+        """The samples and the texts of one legend box.
+
+        Every kind of diagram has **one** sample in front of **one** text -
+        except a pie, where one colour would say nothing: there the box
+        lists **every slice** with the name that belongs to it.
+        """
+        label = str(line.get_label())
+        if self.series_style.get(column, self.plot_style) != "pie":
+            return [self.legend_handle(column, line)], [label]
+        wedges = list(self.pie_wedges.get(column) or ())
+        if not wedges:
+            return [self.legend_handle(column, line)], [label]
+        return wedges, [str(one) for one
+                        in self.pie_slice_names(column, len(wedges))]
+
     def refresh_legend(self):
         """One legend box per curve, each at its own (movable) position."""
         for legend in self.legends.values():
@@ -8908,8 +9337,8 @@ class PlotWindow(tk.Toplevel):
             if state is None:
                 state = self.default_legend_state(index)
                 self.legend_state[y_col] = state
-            handle = self.legend_handle(y_col, line)
-            legend = Legend(self.ax, [handle], [label], loc=state["loc"],
+            handles, texts = self.legend_entries(y_col, line)
+            legend = Legend(self.ax, handles, texts, loc=state["loc"],
                             bbox_to_anchor=state["pos"],
                             bbox_transform=self.ax.transAxes,
                             prop={"size": state["size"]}, framealpha=1.0,
@@ -9479,7 +9908,14 @@ class PlotWindow(tk.Toplevel):
             return self.ax.get_title() if key == "title" else self.axis_label(key)
         if kind == "legend":
             line = self.series.get(key)
-            label = "" if line is None else str(line.get_label())
+            if line is None:
+                return ""
+            if self.series_style.get(key, self.plot_style) == "pie":
+                wedges = self.pie_wedges.get(key) or []
+                names = self.pie_slice_names(key, len(wedges))
+                row = self.legend_row(key)
+                return str(names[row]) if 0 <= row < len(names) else ""
+            label = str(line.get_label())
             return "" if not label or label.startswith("_") else label
         return ""
 
@@ -9512,9 +9948,18 @@ class PlotWindow(tk.Toplevel):
             line = self.series.get(key)
             if line is None:
                 return None
-            line.set_label(text.strip() if text.strip() else "_nolegend_")
-            self._marked = None
-            self.refresh_legend()
+            if self.series_style.get(key, self.plot_style) == "pie":
+                # every row of a pie box belongs to one slice: the name goes
+                # to that slice and the box is not switched off by an empty
+                # text (the slice would have no name at all)
+                self.set_pie_name(key, self.legend_row(key), text.strip())
+                self._marked = None
+                self.refresh_series_visuals(key)
+                self.refresh_legend()
+            else:
+                line.set_label(text.strip() if text.strip() else "_nolegend_")
+                self._marked = None
+                self.refresh_legend()
         else:
             return None
         self._refresh_highlight()
@@ -9531,7 +9976,34 @@ class PlotWindow(tk.Toplevel):
             if legend is None:
                 return None
             texts = list(legend.get_texts())
-            return texts[0] if texts else None
+            if not texts:
+                return None
+            # a pie box has one row per slice: the one that was clicked is
+            # the one that is written on, so every name stands on its own
+            row = self.legend_row(key)
+            return texts[row] if 0 <= row < len(texts) else texts[0]
+        return None
+
+    def legend_row(self, column):
+        """Which row of a legend box was clicked last (0 when unknown)."""
+        rows = getattr(self, "_legend_row", None) or {}
+        try:
+            return int(rows.get(str(column), 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def legend_row_at(self, legend, x, y):
+        """The index of the legend row under the pointer, or None."""
+        if legend is None or x is None or y is None:
+            return None
+        renderer = self._renderer()
+        for index, text in enumerate(legend.get_texts()):
+            try:
+                box = text.get_window_extent(renderer)
+            except (RuntimeError, ValueError, AttributeError):
+                continue
+            if box.expanded(1.25, 1.6).contains(x, y):
+                return index
         return None
 
     def is_editing_inline(self):
@@ -10701,10 +11173,15 @@ class PlotWindow(tk.Toplevel):
         closed = style != "none"
 
         used = self.used_sides()
+        # ax.pie() switches the whole frame of the axes off, which takes the
+        # spines with it however they are set - so it is put back here for
+        # every other style, and only a pie is left standing on nothing
+        pie = self.only_pies()
+        self.ax.set_frame_on(not pie)
         for name, spine in self.ax.spines.items():
             # a closed frame draws all four sides, "no frame" only the lines
             # the axes in use actually sit on
-            spine.set_visible(closed or name in used)
+            spine.set_visible(not pie and (closed or name in used))
             spine.set_linewidth(width)
             spine.set_picker(6)          # clicking the frame opens this dialog
 
@@ -11046,6 +11523,10 @@ class PlotWindow(tk.Toplevel):
             return
         y_col, legend = self.legend_at(event.x, event.y)
         if legend is not None:            # select a legend box and drag it
+            row = self.legend_row_at(legend, event.x, event.y)
+            if not hasattr(self, "_legend_row"):
+                self._legend_row = {}
+            self._legend_row[str(y_col)] = 0 if row is None else int(row)
             self._arm_inline_edit("legend", y_col, event)
             self.select_object("legend", y_col)
             self.announce_selection()
@@ -11206,9 +11687,17 @@ class PlotWindow(tk.Toplevel):
         def set_plot_style(st):
             if column is not None:
                 self.series_style[column] = st
+                # a pie owns the whole area: the axes step aside for it and
+                # come back the moment a curve needs them again
+                self.apply_style_axes()
                 self.refresh_series_visuals(column)
+                # a pie reads no X column, so leaving it may bring the row
+                # numbers (or the first column) back to the X axis
+                self._refresh_x_label()
                 # a histogram carries its own counts: the range follows
                 self._rescale()
+                self.refresh_legend()
+                self.draw()
 
         def set_bar_cfg(cfg):
             if column is not None:
@@ -11237,8 +11726,14 @@ class PlotWindow(tk.Toplevel):
 
         def set_pie_cfg(cfg):
             if column is not None:
-                self.pie_cfg[column] = cfg
+                # merged, not replaced: the names typed into the legend rows
+                # are not settings of the dialog and must survive every
+                # other change made there
+                self.pie_cfg[column] = {**(self.pie_cfg.get(column) or {}),
+                                        **cfg}
                 self.refresh_series_visuals(column)
+                self.refresh_legend()
+                self.draw()
 
         def set_error_cfg(cfg):
             if column is not None:
@@ -11476,7 +11971,9 @@ an immediate action with a style menu:
   * **Pie Chart**: The values of **one** column as slices of a circle
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
-    apart or opened into a doughnut.
+    apart or opened into a doughnut.  The names and the percentages can be
+    moved in or out, laid along their own slice and given their own font
+    size and colour, and every name can be changed on its own.
 
 Selecting a style updates the button icon and immediately opens a diagram
 rendered in that style. Any curve's style can also be switched individually at
@@ -11714,6 +12211,7 @@ depends on the kind of diagram:
 | Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
 | Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
 | Only the first column filled | that column is the **curve** and the X axis is the **row number** |
+| The first column holds **names** (no numbers at all) | every other column is a curve and the X axis is the **row number** |
 
 An **error bar** diagram therefore reads the columns two by two: the third
 column is the length of the error bar of the second one, the fifth belongs
@@ -11772,6 +12270,15 @@ axis, so it does not need a second column to be plotted:
 * This is a fallback for a sheet that has nothing else, not a way around the
   check buttons: if a filled column was **switched off** on purpose, the
   program asks for a tick instead of quietly drawing the first column alone.
+
+**A first column of names counts the rows too.**  A table like
+`Solar, Wind, Hydro | 24, 19, 15` is the natural shape of a pie or a bar
+chart, but its first column holds not a single number, so it is no X axis
+either.  Every column after it then becomes a curve drawn against the **row
+number**, and the X axis is again called `Row`.  That is what makes a pie of
+such a table switchable to a line or a bar chart and back without an empty
+frame in between.  A number typed into the first column makes it the X axis
+again at once.
 
 ### Which columns are plotted, and against which axis
 
@@ -12434,10 +12941,26 @@ the sections that style can use, and nothing else:
 The dialog sections each have **their own check button as the title**: switched
 off, that part of the curve is simply not drawn.  The settings that belong
 together share a line, and the sections share their column widths so everything
-lines up cleanly.
+lines up cleanly.  Whatever style is chosen, the **`Close` button stays at the
+bottom** of the window, under the sections that come and go with the style.
+
+Changing the style also gives the **axes** to whatever is drawn on them.  A
+pie needs no axes, so switching a curve to `Pie Chart` takes the axis labels,
+the numbers **and the axis lines** away and keeps the square the circle
+needs; switching it back to any other style gives the labels, the numbers,
+the frame (whatever style it had - two lines or a closed box) and the
+automatic range straight back, so the curve appears again exactly where it
+was.  The **values
+of the curve are worked out again** at the same time, which matters for the
+two styles that read the table differently: a histogram carries the counts of
+its bins and a pie reads no X column at all, so a curve leaving either of
+them is given its own points back.
 
 * **Legend**: the `Text` of this curve's legend box, then its `Font size`
   with the `Colour` of the text next to it.  An empty text removes the box.
+  A **pie** is the one exception: its box has one row per slice, so there is
+  no single text to type and the `Text` field is switched off (see
+  `Pie properties` below).
 * **Line**: `Style` (solid, dashed, dash-dot, dotted), then `Width` with
   the `Colour` of the line next to it.
 * **Marker**: `Hollow (no fill)` at the top of the section - an outlined
@@ -12496,6 +13019,11 @@ for a 2D histogram.
   * `Pattern`: the same choice of hatchings a filled area has.
   * `Close it down to the zero line`: an open staircase is a line and may
     hang in the air; closed, it stands on zero like a bar chart.
+  * **Empty cells.**  A step needs a place to stand, so a point whose cell
+    in the **X column** is empty is left out and the treads beside it widen
+    over it.  An empty cell in the **value** column stays a gap, exactly as
+    it breaks any other curve: the staircase - filled or not - is cut there
+    instead of dropping to zero.
 * **2D histogram properties** (visible for 2D Histograms):
   * `Bins across X` and `Bins up Y`: the grid the pairs are counted into
     (20 x 20 to begin with, up to 500 either way).
@@ -12512,17 +13040,62 @@ for a 2D histogram.
   * The **names of the slices** (a list): the text of the first column, the
     row number, or nothing at all.
   * `Start angle` (90 degrees is the top) with the `Edge colour` beside it.
-  * `Per cent` with `Decimals` beside it: the share written on every slice.
-  * `Hole (0-0.9)` turns the pie into a **doughnut**, `Text size` sets the
-    font of the names and the percentages.
+  * `Hole (0-0.9)` turns the pie into a **doughnut**, `Edge width` sets the
+    line between the slices.
   * `Pull out the first` moves the first slice out of the circle, and
-    `Edge width` sets the line between the slices.
-  * `Go round anticlockwise` reverses the direction.
+    `Turn the names` lays every name along its own slice instead of
+    standing it upright.
+  * **The names of the slices** - the texts standing around the pie - have
+    three settings of their own:
+    * `Distance`: **where they stand**.  `1.0` is the rim of the circle,
+      less puts the name on the slice, more beside the pie; they start at
+      `1.1`, just outside.
+    * `Font size` and `Colour`: their own font, independent of the numbers.
+  * **The numbers on the slices** have the same three, plus two of their
+    own:
+    * `Distance` (they start at `0.6`, inside the slice), `Font size` and
+      `Colour` - white numbers on strong slice colours read best.
+    * `Turn them` lays each number along its own slice, which is what makes
+      many thin slices readable at all.
+    * `Write them` switches the percentages off altogether, and `Decimals`
+      says how precisely they are written.
+  * `Go round anticlockwise` reverses the direction.  Changing the
+    direction - or any other setting here - never touches the **names typed
+    into the legend rows**; they belong to their slices and stay there.
   * Only **one** column can be a pie, and one pie fills the whole plot
     area: the first ticked column with numbers in it is the one that is
-    drawn.  Empty cells and zeros are not slices, and a negative number is
+    drawn.  (A pie that stands **beside an ordinary curve** - one curve
+    switched to `Pie Chart` while another stays a line - leaves the axes to
+    that curve and is drawn as a small circle around the origin instead.)  Empty cells and zeros are not slices, and a negative number is
     taken by its size.  A pie has no axes at all - no numbers, no labels,
     no frame lines - and it stays round whatever the shape of the window.
+  * **The circle is as big as the plot area.**  The range of the axes is
+    the square the pie needs, so it is drawn as large as any other diagram
+    and grows when a slice is pulled out.  A range typed into `Axes
+    properties` by hand is never overruled, so the pie can be made smaller
+    (or bigger) there if that is wanted.
+  * **The legend box starts switched off.**  A pie of five slices in one
+    colour with one name says nothing, so there is no box to begin with -
+    the names stand beside the slices instead.  Switching `Legend` on gives
+    a box that lists **every slice** with its own colour and its own name,
+    which is the useful form of a legend for a pie.
+  * **Every row of that box is a name of its own.**  Because a pie has no
+    single legend text, the `Text` field of the `Legend` section is switched
+    off for it.  To rename one slice, click its row in the box, wait a
+    moment and click it again: a little editor opens **on that row alone**,
+    and what is typed there belongs to that slice - beside the pie and in
+    the box.  An empty text gives the slice the name the table gives it
+    back.  The names that were typed in are written into the `.aplt` file
+    and into the exported program with the rest of the curve, and **no other
+    setting of the dialog takes them away** - not the direction of the
+    slices, not the colour map, nothing.
+  * The `Font size` and the `Colour` of the `Legend` section belong to the
+    **box**; the font and the colour of the texts standing around the pie
+    are set in `Pie properties`, under `The names of the slices`.
+  * **A pie is clicked like any other curve.**  It has no line to hit, so
+    the slices *and* the names and percentages written on them all open
+    `Curve properties` with a single click - which is where their font,
+    their colour and their distance are.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
   vertical, horizontal, crossed, circles, dots, stars and their dense
