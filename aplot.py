@@ -203,7 +203,7 @@ COLOR_MAPS = [
 
 # what is written beside the slices of a pie
 PIE_LABELS = [("The text of the first column", "column"),
-              ("The row number", "row"), ("Nothing", "none")]
+              ("The row number", "row")]
 
 HIST2D_BINS = 20           # the grid of a 2D histogram, per axis
 MAX_HIST2D_BINS = 500
@@ -2312,6 +2312,9 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.pie_explode_var = tk.StringVar(value=str(cfg.get("explode", 0.0)))
         self.pie_percent_var = tk.BooleanVar(
             value=bool(cfg.get("percent", True)))
+        self.pie_names_on_var = tk.BooleanVar(
+            value=(bool(cfg.get("names_on", True))
+                   and str(cfg.get("labels", "column")) != "none"))
         self.pie_decimals_var = tk.StringVar(
             value=str(int(cfg.get("decimals", 1))))
         self.pie_size_var = tk.StringVar(
@@ -2346,13 +2349,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.field(box, 0, "Slice colours:", combo)
         combo.bind("<<ComboboxSelected>>", self._apply)
 
-        names_combo = ttk.Combobox(box, textvariable=self.pie_labels_var,
-                                   state="readonly", values=names(PIE_LABELS),
-                                   width=26)
-        self._wide(names_combo, 1, pady=(4, 4))
-        names_combo.bind("<<ComboboxSelected>>", self._apply)
-
-        self._pair(box, 2,
+        self._pair(box, 1,
                    "Start angle:",
                    ttk.Spinbox(box, from_=-360, to=360, increment=15,
                                width=SPIN_WIDTH, textvariable=self.pie_start_var,
@@ -2360,7 +2357,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                    "Edge colour:", self.pie_edge_color)
         self.pie_start_var.trace_add("write", self._apply)
 
-        self._pair(box, 3,
+        self._pair(box, 2,
                    "Hole (0-0.9):",
                    ttk.Spinbox(box, from_=0, to=0.9, increment=0.05,
                                width=SPIN_WIDTH, textvariable=self.pie_hole_var,
@@ -2373,20 +2370,24 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         self.pie_hole_var.trace_add("write", self._apply)
         self.pie_edge_width_var.trace_add("write", self._apply)
 
-        self._pair(box, 4,
-                   "Pull out the first:",
+        self.field(box, 3, "Pull out the first:",
                    ttk.Spinbox(box, from_=0, to=0.5, increment=0.05,
                                width=SPIN_WIDTH,
                                textvariable=self.pie_explode_var,
-                               command=self._apply),
-                   "Turn the names:",
-                   ttk.Checkbutton(box, variable=self.pie_turn_names_var,
-                                   command=self._apply))
+                               command=self._apply))
         self.pie_explode_var.trace_add("write", self._apply)
 
-        # the names beside the slices: how far out, how big, what colour
-        self._wide(ttk.Label(box, text="The names of the slices:"),
-                   5, pady=(8, 2))
+        # the names standing around the pie: switched off with the check
+        # button of their own little group
+        self.pie_names_group = ttk.Checkbutton(
+            box, text="The names of the slices:",
+            variable=self.pie_names_on_var, command=self._apply)
+        self._wide(self.pie_names_group, 4, pady=(10, 2))
+        names_combo = ttk.Combobox(box, textvariable=self.pie_labels_var,
+                                   state="readonly", values=names(PIE_LABELS),
+                                   width=26)
+        self._wide(names_combo, 5, pady=(0, 4))
+        names_combo.bind("<<ComboboxSelected>>", self._apply)
         self._pair(box, 6,
                    "Distance:",
                    ttk.Spinbox(box, from_=0, to=2.5, increment=0.05,
@@ -2400,12 +2401,17 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                                command=self._apply))
         self.pie_name_at_var.trace_add("write", self._apply)
         self.pie_name_size_var.trace_add("write", self._apply)
-        self._pair(box, 7, "Colour:", self.pie_name_color,
-                   "", ttk.Label(box, text=""))
+        self._pair(box, 7,
+                   "Colour:", self.pie_name_color,
+                   "Turn them:",
+                   ttk.Checkbutton(box, variable=self.pie_turn_names_var,
+                                   command=self._apply))
 
-        # the numbers written on the slices, with their own font and colour
-        self._wide(ttk.Label(box, text="The numbers on the slices:"),
-                   8, pady=(8, 2))
+        # ... and the numbers written on the slices, the same way
+        self.pie_numbers_group = ttk.Checkbutton(
+            box, text="The numbers on the slices:",
+            variable=self.pie_percent_var, command=self._apply)
+        self._wide(self.pie_numbers_group, 8, pady=(10, 2))
         self._pair(box, 9,
                    "Distance:",
                    ttk.Spinbox(box, from_=0, to=2.5, increment=0.05,
@@ -2424,29 +2430,20 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                    "Turn them:",
                    ttk.Checkbutton(box, variable=self.pie_turn_numbers_var,
                                    command=self._apply))
-        self._pair(box, 11,
-                   "Write them:",
-                   ttk.Checkbutton(box, variable=self.pie_percent_var,
-                                   command=self._apply),
-                   "Decimals:",
+        self.field(box, 11, "Decimals:",
                    ttk.Spinbox(box, from_=0, to=4, increment=1,
                                width=SPIN_WIDTH,
                                textvariable=self.pie_decimals_var,
                                command=self._apply))
         self.pie_decimals_var.trace_add("write", self._apply)
-        self._wide(ttk.Label(box, foreground="#666",
-                             text="The number written on a slice is its "
-                                  "per cent of the whole."), 12, pady=(2, 0))
 
-        self._wide(ttk.Label(
-            box, foreground="#666", justify="left",
-            text="A distance of 1.0 is the rim of the pie: below it the text\n"
-                 "sits on the slice, above it beside the pie.  Turning lays\n"
-                 "a text along its own slice."), 13, pady=(6, 0))
+        self._wide(ttk.Label(box, foreground="#666",
+                             text="A distance of 1.0 is the rim of the pie."),
+                   12, pady=(8, 0))
 
         self._wide(ttk.Checkbutton(box, text="Go round anticlockwise",
                                    variable=self.pie_clock_var,
-                                   command=self._apply), 14, pady=(4, 0))
+                                   command=self._apply), 13, pady=(4, 0))
 
     def _on_err_type_changed(self, _event=None):
         src = code_of(ERROR_SOURCES, self.err_type_var.get(), "pair")
@@ -2677,6 +2674,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             self.on_pie_cfg({
                 "cmap": code_of(COLOR_MAPS, self.pie_cmap_var.get(), "tab10"),
                 "labels": code_of(PIE_LABELS, self.pie_labels_var.get(), "column"),
+                "names_on": bool(self.pie_names_on_var.get()),
                 "start": to_float(self.pie_start_var.get(), PIE_START_ANGLE),
                 "percent": bool(self.pie_percent_var.get()),
                 "decimals": max(0, to_int(self.pie_decimals_var.get(), 1)),
@@ -7756,6 +7754,7 @@ class PlotWindow(tk.Toplevel):
                 "labeldistance": PIE_LABEL_DISTANCE,
                 "pctdistance": PIE_PCT_DISTANCE,
                 "rotate_labels": False, "rotate_numbers": False,
+                "names_on": True,
                 "name_size": 11, "name_color": "#000000",
                 "pct_size": 11, "pct_color": "#000000",
                 "names": []}
@@ -7773,26 +7772,52 @@ class PlotWindow(tk.Toplevel):
                         "#000000")
         return max(1, to_int(size, 11)), safe_hex(color, "#000000")
 
-    def pie_values(self, column):
-        """The slices of a pie: the numbers of one column and their names."""
+    def pie_slice_data(self, column):
+        """The value of every slice of a pie and the row it comes from.
+
+        Empty cells and zeros are no slices, and a negative number is taken
+        by its size.
+        """
         names = [str(one) for one in self.df.columns]
         if str(column) not in names:
-            return np.array([], dtype=float), []
+            return np.array([], dtype=float), np.array([], dtype=int)
         raw = pd.to_numeric(self.df[column], errors="coerce").to_numpy(float)
         good = np.isfinite(raw) & (np.abs(raw) > 0)
-        values = np.abs(raw[good])              # a slice has no sign
+        return np.abs(raw[good]), np.nonzero(good)[0]
+
+    def pie_source_names(self, column):
+        """The name the table gives every slice, drawn or not.
+
+        The legend box lists the slices by these names even while the texts
+        around the pie itself are switched off.
+        """
+        names = [str(one) for one in self.df.columns]
+        _values, rows = self.pie_slice_data(column)
         cfg = self.pie_cfg.get(column) or {}
         wanted = str(cfg.get("labels", "column"))
-        rows = np.nonzero(good)[0]
-        if wanted == "none":
+        if wanted == "row" or not names or names[0] == str(column):
+            return [str(int(one) + 1) for one in rows]
+        source = self.df[names[0]]
+        return [("" if pd.isna(source.iat[int(one)])
+                 else str(source.iat[int(one)])) for one in rows]
+
+    def pie_names_on(self, column):
+        """True while the names are written around the pie."""
+        cfg = self.pie_cfg.get(column) or {}
+        if str(cfg.get("labels", "column")) == "none":
+            return False           # a file saved before the check button
+        return bool(cfg.get("names_on", True))
+
+    def pie_values(self, column):
+        """The slices of a pie and the names written beside them.
+
+        The names are an empty list while they are switched off - that is
+        what `ax.pie` wants for a pie with no text around it.
+        """
+        values, _rows = self.pie_slice_data(column)
+        if not len(values) or not self.pie_names_on(column):
             return values, []
-        if wanted == "row" or names[0] == str(column):
-            labels = [str(int(one) + 1) for one in rows]
-        else:
-            source = self.df[names[0]]
-            labels = [("" if pd.isna(source.iat[int(one)])
-                       else str(source.iat[int(one)])) for one in rows]
-        return values, self.pie_names(column, labels)
+        return values, self.pie_names(column, self.pie_source_names(column))
 
     def pie_names(self, column, automatic):
         """The slice names, with the ones written by hand on top of them.
@@ -7812,8 +7837,8 @@ class PlotWindow(tk.Toplevel):
 
     def pie_slice_names(self, column, count):
         """One name per slice, even when the pie writes none beside them."""
-        _values, drawn = self.pie_values(column)
-        automatic = (list(drawn) if len(drawn) == count
+        source = self.pie_source_names(column)
+        automatic = (list(source) if len(source) == count
                      else [str(index + 1) for index in range(count)])
         return self.pie_names(column, automatic)
 
@@ -11972,8 +11997,9 @@ an immediate action with a style menu:
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
     apart or opened into a doughnut.  The names and the percentages can be
-    moved in or out, laid along their own slice and given their own font
-    size and colour, and every name can be changed on its own.
+    switched off, moved in or out, laid along their own slice and given
+    their own font size and colour, and every name can be changed on its
+    own.
 
 Selecting a style updates the button icon and immediately opens a diagram
 rendered in that style. Any curve's style can also be switched individually at
@@ -13037,28 +13063,30 @@ for a 2D histogram.
 * **Pie properties** (visible for Pie Charts):
   * `Slice colours`: the colour map the slices are taken from - `Tab10` and
     `Tab20` give distinct colours, the others a smooth scale.
-  * The **names of the slices** (a list): the text of the first column, the
-    row number, or nothing at all.
   * `Start angle` (90 degrees is the top) with the `Edge colour` beside it.
   * `Hole (0-0.9)` turns the pie into a **doughnut**, `Edge width` sets the
     line between the slices.
-  * `Pull out the first` moves the first slice out of the circle, and
-    `Turn the names` lays every name along its own slice instead of
-    standing it upright.
-  * **The names of the slices** - the texts standing around the pie - have
-    three settings of their own:
+  * `Pull out the first` moves the first slice out of the circle.
+  * The two texts of a slice - its **name** and its **number** - form two
+    little groups of their own, and **the title of each group is a check
+    button**: switched off, that text is not written at all.  A pie with no
+    text around it (names off) or a plain pie of bare slices (both off) is
+    one click away, and the slices themselves are of course untouched.
+  * **The names of the slices** (the texts standing around the pie):
+    * A list says **where the names come from**: the text of the first
+      column of the table, or the row number.
     * `Distance`: **where they stand**.  `1.0` is the rim of the circle,
       less puts the name on the slice, more beside the pie; they start at
       `1.1`, just outside.
     * `Font size` and `Colour`: their own font, independent of the numbers.
-  * **The numbers on the slices** have the same three, plus two of their
-    own:
+    * `Turn them` lays every name along its own slice instead of standing
+      it upright.
+  * **The numbers on the slices** (the percentages) have the same:
     * `Distance` (they start at `0.6`, inside the slice), `Font size` and
       `Colour` - white numbers on strong slice colours read best.
     * `Turn them` lays each number along its own slice, which is what makes
       many thin slices readable at all.
-    * `Write them` switches the percentages off altogether, and `Decimals`
-      says how precisely they are written.
+    * `Decimals` says how precisely the percentage is written.
   * `Go round anticlockwise` reverses the direction.  Changing the
     direction - or any other setting here - never touches the **names typed
     into the legend rows**; they belong to their slices and stay there.
@@ -13076,7 +13104,9 @@ for a 2D histogram.
     (or bigger) there if that is wanted.
   * **The legend box starts switched off.**  A pie of five slices in one
     colour with one name says nothing, so there is no box to begin with -
-    the names stand beside the slices instead.  Switching `Legend` on gives
+    the names stand beside the slices instead.  Switching the names off and
+    the box on moves them from around the pie into the box, which is what a
+    crowded pie of thin slices wants.  Switching `Legend` on gives
     a box that lists **every slice** with its own colour and its own name,
     which is the useful form of a legend for a pie.
   * **Every row of that box is a name of its own.**  Because a pie has no

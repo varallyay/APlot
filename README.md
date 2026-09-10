@@ -127,8 +127,9 @@ an immediate action with a style menu:
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
     apart or opened into a doughnut.  The names and the percentages can be
-    moved in or out, laid along their own slice and given their own font
-    size and colour, and every name can be changed on its own.
+    switched off, moved in or out, laid along their own slice and given
+    their own font size and colour, and every name can be changed on its
+    own.
 
 Selecting a style updates the button icon and immediately opens a diagram
 rendered in that style. Any curve's style can also be switched individually at
@@ -1192,28 +1193,30 @@ for a 2D histogram.
 * **Pie properties** (visible for Pie Charts):
   * `Slice colours`: the colour map the slices are taken from - `Tab10` and
     `Tab20` give distinct colours, the others a smooth scale.
-  * The **names of the slices** (a list): the text of the first column, the
-    row number, or nothing at all.
   * `Start angle` (90 degrees is the top) with the `Edge colour` beside it.
   * `Hole (0-0.9)` turns the pie into a **doughnut**, `Edge width` sets the
     line between the slices.
-  * `Pull out the first` moves the first slice out of the circle, and
-    `Turn the names` lays every name along its own slice instead of
-    standing it upright.
-  * **The names of the slices** - the texts standing around the pie - have
-    three settings of their own:
+  * `Pull out the first` moves the first slice out of the circle.
+  * The two texts of a slice - its **name** and its **number** - form two
+    little groups of their own, and **the title of each group is a check
+    button**: switched off, that text is not written at all.  A pie with no
+    text around it (names off) or a plain pie of bare slices (both off) is
+    one click away, and the slices themselves are of course untouched.
+  * **The names of the slices** (the texts standing around the pie):
+    * A list says **where the names come from**: the text of the first
+      column of the table, or the row number.
     * `Distance`: **where they stand**.  `1.0` is the rim of the circle,
       less puts the name on the slice, more beside the pie; they start at
       `1.1`, just outside.
     * `Font size` and `Colour`: their own font, independent of the numbers.
-  * **The numbers on the slices** have the same three, plus two of their
-    own:
+    * `Turn them` lays every name along its own slice instead of standing
+      it upright.
+  * **The numbers on the slices** (the percentages) have the same:
     * `Distance` (they start at `0.6`, inside the slice), `Font size` and
       `Colour` - white numbers on strong slice colours read best.
     * `Turn them` lays each number along its own slice, which is what makes
       many thin slices readable at all.
-    * `Write them` switches the percentages off altogether, and `Decimals`
-      says how precisely they are written.
+    * `Decimals` says how precisely the percentage is written.
   * `Go round anticlockwise` reverses the direction.  Changing the
     direction - or any other setting here - never touches the **names typed
     into the legend rows**; they belong to their slices and stay there.
@@ -1231,7 +1234,9 @@ for a 2D histogram.
     (or bigger) there if that is wanted.
   * **The legend box starts switched off.**  A pie of five slices in one
     colour with one name says nothing, so there is no box to begin with -
-    the names stand beside the slices instead.  Switching `Legend` on gives
+    the names stand beside the slices instead.  Switching the names off and
+    the box on moves them from around the pie into the box, which is what a
+    crowded pie of thin slices wants.  Switching `Legend` on gives
     a box that lists **every slice** with its own colour and its own name,
     which is the useful form of a legend for a pie.
   * **Every row of that box is a name of its own.**  Because a pie has no
