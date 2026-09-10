@@ -4009,6 +4009,7 @@ class DataTable(ttk.Frame):
         self._editor = None
         self._heading_editor = None
         self.cell_formulas: dict = {}   # (row, col) -> formula string (e.g. "=A1+B1")
+        self.plot_with_previous_var = tk.BooleanVar(value=False)
         # the highlighted block of cells: (row0, col0, row1, col1)
         self.block = None
         self.anchor = (0, 0)            # where Shift+arrows measure from
@@ -13529,14 +13530,24 @@ class App:
         self._was_saved = False         # ... or nothing had been edited at all
 
         self._build_toolbar()
-        self.table = DataTable(self.root, self.settings,
-                               on_rename=self._column_renamed,
-                               on_add_column=self.add_column,
-                               on_delete_column=self.delete_column)
-        self.table.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        # the starting sheet is blank: it fills the window with columns
-        self.table.set_dataframe(self._empty_frame(), check_all=True,
-                                 blank=True)
+        
+        style = ttk.Style()
+        style.configure('Bottom.TNotebook', tabposition='sw')
+        self.notebook = ttk.Notebook(self.root, style='Bottom.TNotebook')
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        
+        self.tables = []
+        self.tab_images = {}
+        
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self.notebook.bind("<Button-2>", self._show_tab_context_menu)
+        self.notebook.bind("<Button-3>", self._show_tab_context_menu)
+        
+        self.plus_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.plus_frame, text=" + ")
+        
+        self.add_tab("Data 1", blank=True)
+        self.notebook.select(0)
 
         self._build_menu()
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
@@ -13553,7 +13564,101 @@ class App:
 
     @property
     def df(self):
+        if not self.table:
+            return pd.DataFrame()
         return self.table.df
+
+    @property
+    def active_tab_index(self):
+        try:
+            return self.notebook.index("current")
+        except tk.TclError:
+            return 0
+            
+    @property
+    def table(self):
+        idx = self.active_tab_index
+        if idx < len(self.tables):
+            return self.tables[idx]
+        return self.tables[0] if self.tables else None
+
+    def add_tab(self, name, blank=False):
+        frame = ttk.Frame(self.notebook)
+        table = DataTable(frame, self.settings,
+                          on_rename=self._column_renamed,
+                          on_add_column=self.add_column,
+                          on_delete_column=self.delete_column)
+        table.pack(fill="both", expand=True)
+        if blank:
+            table.set_dataframe(self._empty_frame(), check_all=True, blank=True)
+            
+        self.tables.append(table)
+        if hasattr(self, "plus_frame") and str(self.plus_frame) in self.notebook.tabs():
+            idx = self.notebook.index(self.plus_frame)
+            self.notebook.insert(idx, frame, text=name)
+        else:
+            self.notebook.add(frame, text=name)
+            
+    def _on_tab_changed(self, event):
+        idx = self.notebook.index("current")
+        if hasattr(self, "plus_frame") and idx == self.notebook.index(self.plus_frame):
+            name = f"Data {len(self.tables) + 1}"
+            self.add_tab(name, blank=True)
+            self.notebook.select(len(self.tables) - 1)
+            idx = len(self.tables) - 1
+            
+        if idx > 0 and idx < len(self.tables):
+            self.plot_with_previous_cb.configure(variable=self.tables[idx].plot_with_previous_var)
+            self.plot_with_previous_cb.pack(side="left", padx=(20, 0))
+        else:
+            self.plot_with_previous_cb.pack_forget()
+
+    def _show_tab_context_menu(self, event):
+        try:
+            tab_id = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)
+            if not tab_id and tab_id != 0:
+                return
+            idx = int(tab_id)
+        except (tk.TclError, ValueError, TypeError):
+            return
+            
+        if hasattr(self, "plus_frame") and idx == self.notebook.index(self.plus_frame):
+            return # Don't show menu for the "+" tab
+            
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Rename tab", command=lambda: self.rename_tab(idx))
+        menu.add_command(label="Tab colour", command=lambda: self.color_tab(idx))
+        menu.add_command(label="Delete tab", command=lambda: self.delete_tab(idx))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def rename_tab(self, idx):
+        current_name = self.notebook.tab(idx, "text")
+        new_name = simpledialog.askstring("Rename Tab", "New tab name:", initialvalue=current_name, parent=self.root)
+        if new_name:
+            self.notebook.tab(idx, text=new_name)
+            
+    def color_tab(self, idx):
+        _, hex_value = colorchooser.askcolor(title="Choose Tab Colour", parent=self.root)
+        if hex_value:
+            img = tk.PhotoImage(width=14, height=14)
+            img.put(hex_value, to=(0, 0, 14, 14))
+            self.tab_images[idx] = img
+            self.notebook.tab(idx, image=img, compound="left")
+
+    def delete_tab(self, idx):
+        if len(self.tables) <= 1:
+            messagebox.showinfo("Information", "Cannot delete the last tab.")
+            return
+            
+        current_name = self.notebook.tab(idx, "text")
+        if messagebox.askyesno("Delete Tab", f"Delete tab '{current_name}' with its data?", parent=self.root):
+            table = self.tables.pop(idx)
+            self.notebook.forget(idx)
+            table.master.destroy() # Destroy the frame holding the table
+            self.tab_images.pop(idx, None)
+            
+            if self.active_tab_index >= len(self.tables):
+                self.notebook.select(len(self.tables) - 1)
 
     def _focus(self):
         self.root.lift()
@@ -13593,6 +13698,10 @@ class App:
         self.delete_column_btn = TableToolButton(
             bar, kind="column", action="delete", command=self.delete_column)
         self.delete_column_btn.pack(side="left", padx=(6, 0))
+        
+        self.plot_with_previous_cb = ttk.Checkbutton(bar, text="Plot with previous tab")
+        # this will be packed and configured in _on_tab_changed
+        
         ttk.Button(bar, text="Settings...", command=self.open_settings).pack(side="right")
 
     # -- where a new row or column goes -------------------------------------
@@ -13762,7 +13871,8 @@ class App:
         SettingsDialog(self.root, self.settings, on_saved=self._settings_saved)
 
     def _settings_saved(self):
-        self.table.apply_config()
+        for table in self.tables:
+            table.apply_config()
         self.root.geometry(f"{self.settings.get('window', 'main_width')}x"
                            f"{self.settings.get('window', 'main_height')}")
         messagebox.showinfo(
@@ -13821,6 +13931,12 @@ class App:
                             f"{info['rows']} rows x {info['columns']} columns]")
         else:
             self.root.title(f"{APP_NAME} - {name}")
+            
+        # Update tab name
+        try:
+            self.notebook.tab(self.active_tab_index, text=name)
+        except tk.TclError:
+            pass
 
     def save_csv(self):
         if self.df.empty:
@@ -14124,6 +14240,14 @@ class App:
         if not columns:
             messagebox.showerror("Error", "The file contains no data.")
             return False
+            
+        for table in self.tables:
+            self.notebook.forget(table.master)
+            table.master.destroy()
+        self.tables = []
+        self.add_tab("Data 1")
+        self.notebook.select(0)
+            
         frame = pd.DataFrame(rows, columns=columns)
         frame = frame.where(frame.notna(), "")   # JSON null -> empty cell
         self.table.set_dataframe(frame, check_all=True)
@@ -14327,11 +14451,59 @@ class App:
 
     def plot_data(self, _style=None):
         """The data that goes to the diagrams: the ticked columns only."""
-        return self.table.plot_dataframe(1)
+        idx = self.active_tab_index
+        df = self.table.plot_dataframe(1).copy()
+        
+        if idx > 0 and self.table.plot_with_previous_var.get():
+            prev_table = self.tables[idx - 1]
+            prev_df = prev_table.plot_dataframe(1).copy()
+            
+            prev_layout = prev_table.plot_layout()
+            curr_layout = self.table.plot_layout()
+            
+            prev_x = prev_layout["x"]
+            curr_x = curr_layout["x"]
+            
+            if prev_x and curr_x and not prev_df.empty and not df.empty:
+                if prev_x != curr_x:
+                    df = df.rename(columns={curr_x: prev_x})
+                
+                prev_name = self.notebook.tab(idx - 1, "text")
+                curr_name = self.notebook.tab(idx, "text")
+                
+                prev_y = [c for c in prev_df.columns if c != prev_x]
+                curr_y = [c for c in df.columns if c != prev_x]
+                
+                prev_df = prev_df.rename(columns={c: f"{c} ({prev_name})" for c in prev_y})
+                df = df.rename(columns={c: f"{c} ({curr_name})" for c in curr_y})
+                
+                merged = pd.merge(prev_df, df, on=prev_x, how="outer")
+                return merged
+                
+        return df
 
     def plot_layout(self):
         """Which axis every ticked column belongs to."""
-        return self.table.plot_layout()
+        idx = self.active_tab_index
+        layout = self.table.plot_layout()
+        
+        if idx > 0 and self.table.plot_with_previous_var.get():
+            prev_layout = self.tables[idx - 1].plot_layout()
+            
+            prev_name = self.notebook.tab(idx - 1, "text")
+            curr_name = self.notebook.tab(idx, "text")
+            
+            merged_layout = {"x": prev_layout["x"], "x_side": prev_layout["x_side"], "y": {}}
+            
+            for y, side in prev_layout.get("y", {}).items():
+                merged_layout["y"][f"{y} ({prev_name})"] = side
+                
+            for y, side in layout.get("y", {}).items():
+                merged_layout["y"][f"{y} ({curr_name})"] = side
+                
+            return merged_layout
+            
+        return layout
 
     def open_windows(self):
         """The diagrams that are still open."""
