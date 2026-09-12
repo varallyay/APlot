@@ -26,43 +26,166 @@ separate curve.  Two cases do without an X column: a **histogram** counts
 every column as a sample of raw values, and a sheet whose **first column is
 the only filled one** draws that column against the **row numbers**.
 
+The table is not one sheet but as many as are needed: the **tabs** along its
+bottom edge each hold a table of their own (section 1.1).
+
 ### Toolbar
 
-| Button | What it does |
-| --- | --- |
-| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 9 styles. |
-| Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
-| Add row (icon, split button) | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
-| Delete row (icon) | Deletes every row the highlighted block touches. |
-| Add column (icon, split button) | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
-| Delete column (icon) | Deletes the column of the selected cell (after a confirmation). |
-| Settings... | Opens the settings editor (see section 4). |
+The toolbar has **two rows**.  The first one carries everything that acts on
+the table, the second one the regression and the check button that draws two
+sheets together:
+
+| Button | Row | What it does |
+| --- | --- | --- |
+| Plot (split button) | first | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the arrow opens the style menu to choose among 9 styles. |
+| Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
+| Open / Save data file (icons) | first | The same as the two `File` menu commands. |
+| (the Plot icon) | first | A picture of the style that will be drawn - it changes with the style chosen from the arrow. |
+| Add row (icon, split button) | first | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
+| Delete row (icon) | first | Deletes every row the highlighted block touches. |
+| Add column (icon, split button) | first | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
+| Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
+| Settings... | first | Opens the settings editor (see section 4). |
+| **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
+| **Plot with previous tab** | second | Draws this sheet **and the one before it** in the same diagram.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
 `File` menu.
 
-### The row and column icons
+### 1.1 Sheets (tabs)
 
-The four row and column tools are **coloured icons**, drawn in the same
-style as the `T`, shape and arrow buttons of the diagram window.  Each one
-is a tiny picture of a sheet of three bands - lying down for the rows,
-standing up for the columns - and the band that is painted shows exactly
-what will happen:
+Along the bottom of the table there is a **tab for every sheet** and a `+`
+that makes a new one.  Each sheet is a full table of its own: its own
+columns, its own values, its own formulas and its own check buttons.  The
+sheet in front is the one every command of the toolbar and of the menus
+works on.
 
-* **Blue adds.**  The blue band is the new row or column, drawn where it
-  will appear: at the top or the bottom of the little sheet for a row,
-  at the left or the right for a column.  A band standing **apart** from
-  the other two means the far end of the whole sheet.  A blue `⊕` marks
-  the button as one that adds something.
-* **Red deletes.**  The red band in the middle is the row or column that
-  goes away, and the red `⊗` says that something is removed.
+* **A new sheet**: click `+`.  It opens empty and is called `Data 2`,
+  `Data 3`, and so on.
+* **Renaming, colouring, deleting**: right click (or Ctrl-click) a tab.
+  The name of a sheet matters: it is what a curve of that sheet is called
+  in a diagram that draws several sheets at once.  The last sheet is never
+  deleted.
+* **Every sheet is written into the `.aplt` file** with its name, its data,
+  its formulas, which of its columns are ticked, and whether it is drawn
+  with the one before it.  A file written by an older version - one single
+  table - opens as a single sheet.
+
+**Two sheets in one diagram.**  Two data files loaded into two sheets are
+often two measurements of the same thing.  Ticking **`Plot with previous
+tab`** on the second sheet draws the two together: the X columns are matched
+up, and every curve is named `column (sheet)` - `Signal (Monday)`,
+`Signal (Tuesday)` - so the legend says which measurement it came from.  The
+chain goes on: a third sheet with the box ticked joins the two before it.
+
+Every diagram remembers **which sheet it was opened from**, so `Update`
+brings each of them up to date from its own sheet and a second sheet never
+overwrites the diagram of the first one.
+
+### 1.2 Regression: fitting a curve to the data
+
+The `Regression` button of the second toolbar row opens a window that fits a
+curve to the columns of the sheet in front.  The **methods stand on the
+left**; choosing one shows on the right exactly what it needs.
+
+Eight methods are offered, and every one of them works out its own starting
+values, so all of them fit **out of the box** - there is nothing to set up
+before pressing `Fit`:
+
+| Method | The curve | Its parameters |
+| --- | --- | --- |
+| Straight line | `y = a*x + b` | slope, intercept |
+| Polynomial | `y = c0 + c1*x + c2*x^2 + ...` | the coefficients (the **order** is a setting) |
+| Exponential growth | `y = Y0 * exp(k*x)` | Y0, rate (and the doubling time) |
+| One phase decay | `y = (Y0 - Plateau)*exp(-K*x) + Plateau` | Y0, plateau, rate (and the half life) |
+| Two phase decay | `y = Plateau + Fast*exp(-Kf*x) + Slow*exp(-Ks*x)` | plateau, two spans, two rates (and both half lives) |
+| Logistic curve | `y = Bottom + (Top-Bottom)/(1 + exp(-k*(x-x50)))` | bottom, top, midpoint, steepness |
+| Gaussian distribution | `y = Base + A*exp(-(x-Mean)^2/(2*SD^2))` | baseline, amplitude, mean, width (and the FWHM and the area) |
+| Moving average | the running mean of n points | the window (a setting, not a fitted number) |
+
+Everything but the moving average is fitted by **least squares**: the sum of
+the squared distances between the data and the curve is made as small as it
+goes.  The straight line and the polynomial are solved exactly; the four
+curved ones are fitted with the **Levenberg-Marquardt** method, written into
+the program itself, so nothing beyond numpy is needed.
+
+**What the right hand side offers**
+
+* **Settings** of the method that has them: the `Order` of a polynomial
+  (1 to 10), the `Window` of a moving average.
+* **Columns to fit**: every column after the first one.  The ones that are
+  ticked for plotting are chosen to begin with; click, `Shift`-click or
+  `Ctrl/Cmd`-click to choose others.  The **first column holds the X
+  values** (a first column of names counts the rows instead).
+* **Parameters**: one line for every parameter of the method.  Leaving the
+  `Start value` empty lets the program work it out from the data, which is
+  what usually happens.  Typing one in says where the fit should set out
+  from - useful when a difficult fit runs away - and ticking `Hold` beside
+  it **keeps that parameter fixed** at the value typed in while the others
+  are fitted (a plateau that is known, a baseline that is zero).
+* **The curve that is written**: how many `Points` it is drawn with (100)
+  and how far `Past the data` it reaches (5 per cent of the range at both
+  ends).  A moving average says nothing outside the measurements, so it is
+  never drawn past them.
+
+**What `Fit` does**
+
+1. Every chosen column is fitted, and a **new sheet** appears right after
+   the sheet that was fitted, called `Fit` (`Fit 2`, `Fit 3`, ...).
+2. That sheet holds the **X values** of the curve in its first column and
+   the fitted curve of every column beside it (`A fit`, `B fit`, ...) - 100
+   points over the range of the data, widened by 5 per cent.
+3. Then **one column is left empty**, and after it come the **parameters**:
+   a column of names (`Parameter`) and one column of values for every curve
+   that was fitted.  Under the parameters stand what follows from them (a
+   half life, the FWHM...), then `R squared`, `RMSE`, the number of points
+   fitted and the name of the method.
+4. The parameter columns are **not data to draw**: their `y_L` / `y_R` check
+   buttons are switched off, so they never become curves.
+5. The new sheet has **`Plot with previous tab` ticked**, and the diagram is
+   refreshed at once: the measurements keep their markers and the fitted
+   curve is drawn over them as a **smooth line**.
+
+Everything in the new sheet is an ordinary sheet: the numbers can be edited,
+copied, saved with the graph and plotted in any style.
+
+### The toolbar icons
+
+Every icon of the toolbar is **drawn by the program itself** - there are no
+picture files to carry around.  Each one is painted four times as large as
+it is shown and then shrunk, which is what gives it smooth edges, and they
+are all kept in the same **pastel and grey** shades so the toolbar stays
+quiet beside the table.
+
+The **Plot** button carries a little picture of the style it will draw, and
+that picture **follows the style**: a line, a line with markers, scattered
+points, bars, error bars, a histogram, a staircase, a grid of counts or a
+pie.  Choosing another style from its arrow menu changes the icon at once,
+so the button always shows what clicking it will open.
+
+The four row and column tools are a tiny picture of a **sheet of three
+bands** - lying down for the rows, standing up for the columns - with a
+small badge in the corner:
+
+* **Pastel blue and a `+` add.**  The blue band is the new row or column,
+  and it is drawn **where it will appear**: at the near end for
+  *above* / *before*, at the far end for *below* / *after*, and standing
+  **apart** from the other two for *at the end of the sheet*.
+* **Pastel rose and a `-` delete.**  The rose band in the middle is the row
+  or column that goes away.
+
+The two file tools beside them - an open folder and a disk - are drawn in
+the same shades.
 
 Resting the pointer on any of them brings a **popup text** that spells the
-operation out in words - *"Add row: inserts an empty row below the selected
-cell (the arrow chooses the place)"*, *"Delete column: removes the column of
-the selected cell, with its data"*, and so on.  The text follows the place
-that is chosen, so the button always says what it is about to do.
+operation out in words - *"Insert row below (click arrow for options)"*,
+*"Delete column"*, and so on.  The text follows the place that is chosen, so
+the button always says what it is about to do.
+
+The icons need **Pillow** (`pip install pillow`), which is used to paint
+them.  Without it every button simply carries its name in words and
+everything else works exactly the same.
 
 **Adding around the selected cell.**  The two adding icons are **split
 buttons**, like `Plot`:

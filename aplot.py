@@ -114,6 +114,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, colorchooser, messagebox, simpledialog
 from tkinter import font as tkfont
+try:                       # the toolbar icons are painted with it
+    from PIL import Image, ImageDraw, ImageTk
+except ImportError:        # ... and the buttons keep their text without it
+    Image = ImageDraw = ImageTk = None
 
 import numpy as np
 import pandas as pd
@@ -485,7 +489,8 @@ def to_int(text, default=0):
 
 WHITESPACE_SEP = r"\s+"
 COMMENT_MARKERS = ("#", "%", "!", "//")
-DATA_PATTERNS = [("Data files", "*.csv *.txt *.dat *.tsv *.asc"),
+DATA_PATTERNS = [("Data files", "*.csv *.txt *.dat *.tsv *.asc *.xlsx"),
+                 ("Excel files", "*.xlsx"),
                  ("CSV files", "*.csv"), ("Text files", "*.txt"),
                  ("Data files", "*.dat"), ("All files", "*.*")]
 
@@ -632,7 +637,7 @@ def read_table(path, separator="auto", decimal="auto"):
 
 DEFAULTS = {
     "window": {
-        "main_width": 950, "main_height": 400,
+        "main_width": 950, "main_height": 520,
         "plot_width": 960, "plot_height": 720,
         "dialogs_on_top": False,
     },
@@ -988,6 +993,8 @@ class Tooltip:
                 return None
             x = self.widget.winfo_rootx()
             y = self.widget.winfo_rooty() + self.widget.winfo_height() + 3
+            if self._pointer_elsewhere():
+                return None          # the pointer has already moved on
             window = tk.Toplevel(self.widget)
             window.wm_overrideredirect(True)
             window.wm_geometry(f"+{x}+{y}")
@@ -997,9 +1004,44 @@ class Tooltip:
             label.pack()
             self._window = window
             self.label = label
+            self._poll_leave()
         except tk.TclError:
             self._window = None
         return self._window
+
+    def _pointer_elsewhere(self):
+        """True only while the pointer is known to be over something else.
+
+        A pointer that is not over this program at all says nothing: the
+        hint of a widget under an open menu, or of a window that does not
+        have the pointer, is left alone rather than refused.
+        """
+        try:
+            under = self.widget.winfo_containing(*self.widget.winfo_pointerxy())
+        except (tk.TclError, TypeError):
+            return False
+        if under is None:
+            return False
+        while under is not None:
+            if under is self.widget:
+                return False
+            under = getattr(under, "master", None)
+        return True
+
+    def _poll_leave(self):
+        """Hide the hint even when the <Leave> event is lost."""
+        if not self.visible():
+            return
+        try:
+            if not self.widget.winfo_exists():
+                self.hide()
+                return
+            if self._pointer_elsewhere():
+                self.hide()
+            else:
+                self.widget.after(250, self._poll_leave)
+        except tk.TclError:
+            pass
 
     def hide(self):
         window, self._window = self._window, None
@@ -1145,290 +1187,367 @@ class ShapeToolButton(tk.Canvas):
         return "break"
 
 
-class PlotSplitButton(tk.Canvas):
-    """Split button for the toolbar: icon of active plot style + 'Plot' label + dropdown arrow.
+class PlotSplitButton(ttk.Button):
+    """The Plot button: a little picture of the style it will draw.
 
-    Clicking the left side triggers plotting with the current plot style.
-    Clicking the right side opens a menu with all available plot styles.
+    The icon follows the chosen style - a line, a pie, a staircase - and the
+    arrow on its right opens the list of the nine of them.
     """
 
-    ARROW_ZONE = 18
+    ARROW = " \u23f7"           # the small triangle of the split button
 
-    def __init__(self, master, style="line_symbol", width=84, height=26,
+    def __init__(self, master, style="line_symbol", width=0, height=26,
                  background=None, on_plot=None, on_menu=None):
-        self._background = background or "#f0f0f0"
-        super().__init__(master, width=width, height=height,
-                         highlightthickness=1, highlightbackground="#b8b8b8",
-                         borderwidth=0, background=self._background, cursor="hand2")
-        self._width = width
-        self._height = height
+        super().__init__(master, text=self.ARROW, width=0, style="Toolbutton",
+                         compound="left", command=on_plot)
         self.style = style
-        self._on_plot = on_plot
-        self._on_menu = on_menu
-        self._hover_part = None
+        self.icon_img = None
+        self.on_menu = on_menu
+        self.bind("<ButtonPress-1>", self._clicked)
         self.tooltip = Tooltip(self, "")
-        self.bind("<Button-1>", self._clicked)
-        self.bind("<Motion>", self._on_motion)
-        self.bind("<Leave>", self._on_leave)
         self.set_style(style)
+
+    def _clicked(self, event):
+        # The right 20 pixels are the dropdown zone
+        if event.x > self.winfo_width() - 20:
+            if self.on_menu:
+                self.on_menu(self)
+            return "break"
 
     def set_style(self, style):
         self.style = style
+        picture = plot_style_icon(style)
+        if picture is not None:
+            self.icon_img = picture          # kept, or Tk lets it go
+            self.configure(image=picture, text=self.ARROW, compound="left")
+        else:                                # no Pillow: a plain text button
+            self.configure(text="Plot" + self.ARROW)
         style_desc = dict((code, label) for label, code, *_ in PLOT_STYLES).get(style, "Plot")
-        self.tooltip.set_text(f"Plot: {style_desc} (click to plot, click arrow to select style)")
-        self._redraw()
-
-    def _on_motion(self, event):
-        part = "right" if event.x >= self._width - self.ARROW_ZONE else "left"
-        if part != self._hover_part:
-            self._hover_part = part
-            self._redraw()
-
-    def _on_leave(self, _event=None):
-        if self._hover_part is not None:
-            self._hover_part = None
-            self._redraw()
-
-    def _clicked(self, event):
-        if event.x >= self._width - self.ARROW_ZONE:
-            if self._on_menu:
-                self._on_menu(event)
-        elif self._on_plot:
-            self._on_plot()
-        return "break"
-
-    def _redraw(self):
-        self.delete("all")
-        w, h = self._width, self._height
-        split_x = w - self.ARROW_ZONE
-
-        # Hover backgrounds
-        if self._hover_part == "left":
-            self.create_rectangle(1, 1, split_x - 1, h - 1, fill="#e5effa", outline="")
-        elif self._hover_part == "right":
-            self.create_rectangle(split_x + 1, 1, w - 1, h - 1, fill="#e5effa", outline="")
-
-        # Separator line
-        self.create_line(split_x, 3, split_x, h - 3, fill="#c0c0c0", width=1)
-
-        # Plot Icon box: x in [4, 24], y in [3, 23]
-        ix0, iy0, ix1, iy1 = 4, 3, 24, 23
-        self.create_rectangle(ix0, iy0, ix1, iy1, fill="#ffffff", outline="#b0b0b0", width=1)
-        mx = (ix0 + ix1) / 2
-        my = (iy0 + iy1) / 2
-        self.create_line(ix0, my, ix1, my, fill="#ebebeb")
-        self.create_line(mx, iy0, mx, iy1, fill="#ebebeb")
-
-        style = self.style
-        blue = "#1a5fb4"
-        if style == "line":
-            pts = [ix0 + 2, my + 4, ix0 + 7, iy0 + 3, ix0 + 13, iy1 - 3, ix1 - 2, my - 3]
-            self.create_line(pts, fill=blue, width=2, smooth=True)
-        elif style == "scatter":
-            pts = [(ix0 + 3, iy1 - 5), (ix0 + 7, iy0 + 5), (ix0 + 11, my),
-                   (ix0 + 15, iy0 + 6), (ix1 - 3, iy1 - 4)]
-            for px, py in pts:
-                self.create_line(px - 2, py - 2, px + 2, py + 2, fill=blue, width=1.5)
-                self.create_line(px - 2, py + 2, px + 2, py - 2, fill=blue, width=1.5)
-        elif style == "bar":
-            bars = [(ix0 + 2, 5), (ix0 + 6, 12), (ix0 + 11, 16), (ix0 + 15, 8)]
-            for bx, bh in bars:
-                self.create_rectangle(bx, iy1 - bh, bx + 3.5, iy1, fill="#1f77b4", outline=blue, width=1)
-        elif style == "errorbar":
-            pts = [(ix0 + 5, iy1 - 6, 4), (ix0 + 10, iy0 + 7, 5), (ix1 - 5, my, 4)]
-            for px, py, err in pts:
-                self.create_line(px, py - err, px, py + err, fill=blue, width=1.5)
-                self.create_line(px - 2.5, py - err, px + 2.5, py - err, fill=blue, width=1.5)
-                self.create_line(px - 2.5, py + err, px + 2.5, py + err, fill=blue, width=1.5)
-                self.create_oval(px - 1.8, py - 1.8, px + 1.8, py + 1.8, fill=blue, outline=blue)
-        elif style == "histogram":
-            heights = [3, 8, 15, 9, 4]
-            bw = 3.2
-            for i, bh in enumerate(heights):
-                self.create_rectangle(ix0 + 1.5 + i * bw, iy1 - bh, ix0 + 1.5 + (i + 1) * bw, iy1,
-                                      fill="#1f77b4", outline="#ffffff", width=0.8)
-        elif style == "stairs":
-            # a stepped outline: four treads going up
-            steps = [5, 9, 13, 17]
-            points = [ix0 + 2, iy1 - steps[0]]
-            for index, height in enumerate(steps):
-                x_left = ix0 + 2 + index * 4.5
-                points += [x_left, iy1 - height, x_left + 4.5, iy1 - height]
-            self.create_line(points, fill=blue, width=1.8)
-        elif style == "hist2d":
-            # a grid of squares, darker towards the middle
-            shades = [["#dce7f5", "#9ec3e8", "#dce7f5"],
-                      ["#9ec3e8", "#1f77b4", "#6aa8dc"],
-                      ["#eef4fb", "#6aa8dc", "#c3d9f1"]]
-            cell = (ix1 - ix0 - 4) / 3.0
-            for row in range(3):
-                for column in range(3):
-                    self.create_rectangle(
-                        ix0 + 2 + column * cell, iy0 + 2 + row * cell,
-                        ix0 + 2 + (column + 1) * cell, iy0 + 2 + (row + 1) * cell,
-                        fill=shades[row][column], outline="")
-        elif style == "pie":
-            # a circle with one slice taken out of it
-            pad = 2
-            self.create_arc(ix0 + pad, iy0 + pad, ix1 - pad, iy1 - pad,
-                            start=60, extent=300, fill="#1f77b4",
-                            outline=blue, width=1, style="pieslice")
-            self.create_arc(ix0 + pad + 1.5, iy0 + pad - 1.5,
-                            ix1 - pad + 1.5, iy1 - pad - 1.5,
-                            start=0, extent=60, fill="#f5a623",
-                            outline=blue, width=1, style="pieslice")
-        else:  # line_symbol (default)
-            pts = [ix0 + 2, my + 4, ix0 + 7, iy0 + 3, ix0 + 13, iy1 - 3, ix1 - 2, my - 3]
-            self.create_line(pts, fill=blue, width=1.5, smooth=True)
-            for px, py in [(ix0 + 3, my + 3), (ix0 + 10, my - 1), (ix1 - 3, my - 3)]:
-                self.create_oval(px - 2, py - 2, px + 2, py + 2, fill=blue, outline=blue)
-
-        # "Plot" text
-        self.create_text(ix1 + 18, h / 2, text="Plot", font=("TkDefaultFont", 10, "bold"), fill="#000000")
-
-        # Menu arrow ▼
-        ax = split_x + self.ARROW_ZONE / 2
-        ay = h / 2
-        self.create_polygon([ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3], fill="#000000", outline="#000000")
+        self.tooltip.set_text(f"Plot: {style_desc} (click arrow to change)")
+        return picture
 
 
-class TableToolButton(tk.Canvas):
-    """Toolbar button of the spreadsheet, drawn as a small coloured icon.
+# --------------------------------------------------------------------------
+# the little pictures on the toolbar buttons
+# --------------------------------------------------------------------------
+# They are drawn by the program itself - no picture files to carry around -
+# four times as big as they are shown and then shrunk, which is what makes
+# the edges smooth.  The colours are pastel and grey so the buttons stay
+# quiet beside the table.
 
-    `kind` is `"row"` or `"column"` and `action` is `"add"` or `"delete"`:
-    a **blue** icon adds, a **red** one deletes, and the band that is
-    painted shows *where* it happens.  When `on_menu` is given the button
-    is a **split button**: the icon does the thing its picture shows and
-    the little arrow opens the list of the places (before or after the
-    selected cell, or at the end of the sheet).
+ICON_SIZE = 20             # how big a toolbar icon is drawn, in pixels
+ICON_SCALE = 4             # ... and how much bigger it is painted first
 
-    A tooltip under the pointer always spells the operation out in words.
+ICON_PAPER = "#eceff3"     # the sheet a row / column icon stands on
+ICON_MUTED = "#c2c8d0"     # the rows and columns that stay where they are
+ICON_EDGE = "#8b93a0"      # the thin outline around everything
+ICON_ADD_COLOR = "#9dc3e6"      # pastel blue: the row or column that appears
+ICON_ADD_EDGE = "#5b8bbd"
+ICON_DELETE_COLOR = "#e6a8a8"   # pastel rose: the one that goes away
+ICON_DELETE_EDGE = "#bd6b6b"
+# the pastel shades the nine plot icons are drawn with
+ICON_INK = "#6f7887"
+ICON_STROKE = "#6f97c4"    # the pastel blue a curve is drawn with
+ICON_BLUE = "#9dc3e6"
+ICON_SAGE = "#a8ccb0"
+ICON_SAND = "#e8cfa0"
+ICON_ROSE = "#e6a8a8"
+ICON_LILAC = "#c3b3dd"
+
+
+def _icon_photo(painter, size=ICON_SIZE):
+    """Paint a small icon through `painter(draw, box)` and hand it to Tk.
+
+    `box` is the size of the big picture it is painted on; it is shrunk to
+    `size` afterwards, so everything drawn comes out with smooth edges.
+    Without Pillow there is no picture at all and the button keeps its text.
     """
+    if Image is None or ImageTk is None or ImageDraw is None:
+        return None
+    box = size * ICON_SCALE
+    picture = Image.new("RGBA", (box, box), (0, 0, 0, 0))
+    try:
+        painter(ImageDraw.Draw(picture), box)
+        picture = picture.resize((size, size), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(picture)
+        photo.source = picture          # the painting behind the Tk picture
+        return photo
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
 
-    ARROW_ZONE = 14
-    ICON_WIDTH = 38
-    HEIGHT = 26
-    ADD_COLOR = "#1a5fb4"           # blue: something is added
-    DELETE_COLOR = "#c01c28"        # red: something is removed
-    CELL_OUTLINE = "#8a8a8a"
-    CELL_FILL = "#ffffff"
-    HOVER = "#e5effa"
 
-    # which of the three bands of the icon is painted
-    TARGET_BAND = {"above": 0, "before": 0, "below": 2, "after": 2, "end": 2}
+def _bar(draw, box, x0, y0, x1, y1, fill, outline=None, width=None, radius=0):
+    """A rectangle in fractions of the icon (0 = left / top, 1 = right)."""
+    shape = [x0 * box, y0 * box, x1 * box, y1 * box]
+    line = max(1, int(round((width if width is not None else 0.035) * box)))
+    if radius:
+        draw.rounded_rectangle(shape, radius=radius * box, fill=fill,
+                               outline=outline, width=line if outline else 0)
+    else:
+        draw.rectangle(shape, fill=fill, outline=outline,
+                       width=line if outline else 0)
+    return shape
 
+
+def _path(draw, box, points, color=ICON_INK, width=0.09):
+    draw.line([(x * box, y * box) for x, y in points], fill=color,
+              width=max(1, int(round(width * box))), joint="curve")
+
+
+def _dots(draw, box, points, color=ICON_BLUE, radius=0.1, outline=ICON_INK):
+    for x, y in points:
+        r = radius * box
+        draw.ellipse([x * box - r, y * box - r, x * box + r, y * box + r],
+                     fill=color, outline=outline,
+                     width=max(1, int(round(0.022 * box))))
+
+
+# -- the nine plot styles ---------------------------------------------------
+# every one of them is a tiny picture of the diagram it draws
+_CURVE = [(0.12, 0.78), (0.34, 0.44), (0.56, 0.60), (0.80, 0.20)]
+
+
+def _paint_line(draw, box):
+    _path(draw, box, _CURVE, ICON_STROKE, 0.11)
+
+
+def _paint_line_symbol(draw, box):
+    _path(draw, box, _CURVE, ICON_STROKE, 0.085)
+    _dots(draw, box, _CURVE, ICON_BLUE, 0.11, ICON_STROKE)
+
+
+def _paint_scatter(draw, box):
+    _dots(draw, box, [(0.18, 0.74), (0.40, 0.32), (0.62, 0.64),
+                      (0.82, 0.22)], ICON_BLUE, 0.125, ICON_STROKE)
+
+
+def _paint_bar(draw, box):
+    for x, top, color in ((0.14, 0.52, ICON_BLUE), (0.40, 0.26, ICON_SAGE),
+                          (0.66, 0.62, ICON_SAND)):
+        _bar(draw, box, x, top, x + 0.20, 0.86, color, ICON_INK, 0.028)
+
+
+def _paint_histogram(draw, box):
+    for x, top, color in ((0.10, 0.60, ICON_BLUE), (0.32, 0.30, ICON_BLUE),
+                          (0.54, 0.42, ICON_BLUE), (0.76, 0.70, ICON_BLUE)):
+        _bar(draw, box, x, top, x + 0.22, 0.86, color, ICON_INK, 0.026)
+
+
+def _paint_errorbar(draw, box):
+    for x, y, span in ((0.24, 0.62, 0.22), (0.50, 0.40, 0.26),
+                       (0.76, 0.52, 0.18)):
+        _path(draw, box, [(x, y - span), (x, y + span)], ICON_INK, 0.05)
+        _path(draw, box, [(x - 0.09, y - span), (x + 0.09, y - span)],
+              ICON_INK, 0.05)
+        _path(draw, box, [(x - 0.09, y + span), (x + 0.09, y + span)],
+              ICON_INK, 0.05)
+    _dots(draw, box, [(0.24, 0.62), (0.50, 0.40), (0.76, 0.52)],
+          ICON_BLUE, 0.10)
+
+
+def _paint_stairs(draw, box):
+    _path(draw, box, [(0.10, 0.78), (0.34, 0.78), (0.34, 0.48),
+                      (0.58, 0.48), (0.58, 0.64), (0.84, 0.64),
+                      (0.84, 0.20)], ICON_STROKE, 0.105)
+
+
+def _paint_hist2d(draw, box):
+    shades = ((ICON_MUTED, ICON_BLUE, ICON_MUTED),
+              (ICON_BLUE, ICON_LILAC, ICON_SAGE),
+              (ICON_MUTED, ICON_SAGE, ICON_MUTED))
+    for row in range(3):
+        for column in range(3):
+            x = 0.14 + column * 0.245
+            y = 0.14 + row * 0.245
+            _bar(draw, box, x, y, x + 0.225, y + 0.225, shades[row][column],
+                 ICON_PAPER, 0.02)
+
+
+def _paint_pie(draw, box):
+    low, high = 0.11 * box, 0.89 * box
+    draw.pieslice([low, low, high, high], 0, 360, fill=ICON_BLUE,
+                  outline=ICON_INK, width=max(1, int(round(0.03 * box))))
+    draw.pieslice([low, low, high, high], -108, -18, fill=ICON_SAND,
+                  outline=ICON_INK, width=max(1, int(round(0.03 * box))))
+    draw.pieslice([low, low, high, high], -18, 62, fill=ICON_ROSE,
+                  outline=ICON_INK, width=max(1, int(round(0.03 * box))))
+
+
+PLOT_ICON_PAINTERS = {
+    "line_symbol": _paint_line_symbol,
+    "line": _paint_line,
+    "scatter": _paint_scatter,
+    "bar": _paint_bar,
+    "errorbar": _paint_errorbar,
+    "histogram": _paint_histogram,
+    "stairs": _paint_stairs,
+    "hist2d": _paint_hist2d,
+    "pie": _paint_pie,
+}
+
+
+def plot_style_icon(style, size=ICON_SIZE):
+    """A little picture of the diagram one plot style draws."""
+    painter = PLOT_ICON_PAINTERS.get(str(style), _paint_line_symbol)
+    return _icon_photo(painter, size)
+
+
+# -- the two file tools, in the same pastel shades --------------------------
+
+def _paint_open(draw, box):
+    """An open folder: the data file that is read."""
+    _bar(draw, box, 0.07, 0.22, 0.50, 0.34, ICON_SAND, ICON_EDGE, 0.022,
+         radius=0.05)
+    _bar(draw, box, 0.07, 0.28, 0.93, 0.82, ICON_SAND, ICON_EDGE, 0.026,
+         radius=0.06)
+    draw.polygon([(0.17 * box, 0.44 * box), (1.03 * box, 0.44 * box),
+                  (0.85 * box, 0.84 * box), (0.02 * box, 0.84 * box)],
+                 fill=ICON_PAPER, outline=ICON_EDGE,
+                 width=max(1, int(round(0.026 * box))))
+
+
+def _paint_save(draw, box):
+    """A floppy disk: the data file that is written."""
+    _bar(draw, box, 0.08, 0.08, 0.92, 0.92, ICON_BLUE, ICON_STROKE, 0.028,
+         radius=0.09)
+    _bar(draw, box, 0.28, 0.10, 0.72, 0.40, ICON_PAPER, ICON_STROKE, 0.022,
+         radius=0.03)
+    _bar(draw, box, 0.55, 0.14, 0.66, 0.34, ICON_MUTED, None, 0)
+    _bar(draw, box, 0.22, 0.54, 0.78, 0.90, ICON_PAPER, ICON_STROKE, 0.022,
+         radius=0.03)
+
+
+FILE_ICON_PAINTERS = {"open": _paint_open, "save": _paint_save}
+
+
+def file_tool_icon(name, size=ICON_SIZE):
+    """The icon of the "open data file" / "save data file" buttons."""
+    painter = FILE_ICON_PAINTERS.get(str(name))
+    return _icon_photo(painter, size) if painter else None
+
+
+# -- the four row and column tools ------------------------------------------
+
+def _badge(draw, box, action, center=(0.79, 0.79), radius=0.20):
+    """The small `+` or `-` that says whether something comes or goes."""
+    fill = ICON_ADD_COLOR if action == "add" else ICON_DELETE_COLOR
+    edge = ICON_ADD_EDGE if action == "add" else ICON_DELETE_EDGE
+    x, y = center[0] * box, center[1] * box
+    r = radius * box
+    draw.ellipse([x - r, y - r, x + r, y + r], fill=fill, outline=edge,
+                 width=max(1, int(round(0.03 * box))))
+    arm = r * 0.52
+    thick = max(1, int(round(0.045 * box)))
+    draw.line([x - arm, y, x + arm, y], fill="#ffffff", width=thick)
+    if action == "add":
+        draw.line([x, y - arm, x, y + arm], fill="#ffffff", width=thick)
+
+
+def _band_places(action, where):
+    """Which of the three bands is painted, and whether it stands apart.
+
+    The picture says where the new row or column will appear: at the near
+    end, at the far end, or - standing apart from the other two - at the
+    very end of the whole sheet.
+    """
+    if action != "add":
+        return 1, False                     # the middle one goes away
+    place = str(where or "below")
+    if place in ("above", "before"):
+        return 0, False
+    if place == "end":
+        return 2, True
+    return 2, False
+
+
+def drawn_tool_icon(kind, action, size=ICON_SIZE, where=None):
+    """A sheet of three bands: the painted one is what the button does.
+
+    Lying down for the rows, standing up for the columns.  A pastel blue
+    band is the row or column that appears, a pastel rose one is the one
+    that is taken away, and the others are grey.
+    """
+    painted, apart = _band_places(action, where)
+    color = ICON_ADD_COLOR if action == "add" else ICON_DELETE_COLOR
+    edge = ICON_ADD_EDGE if action == "add" else ICON_DELETE_EDGE
+
+    def painter(draw, box):
+        # the sheet, with its bottom right corner left free for the badge
+        _bar(draw, box, 0.04, 0.04, 0.80, 0.80, ICON_PAPER, ICON_EDGE,
+             0.026, radius=0.09)
+        thick, gap = 0.165, 0.055
+        first = 0.105
+        for index in range(3):
+            start = first + index * (thick + gap)
+            if apart and index == 2:
+                start += 0.055          # the far end of the whole sheet
+            end = start + thick
+            fill = color if index == painted else ICON_MUTED
+            line = edge if index == painted else ICON_EDGE
+            if kind == "row":
+                _bar(draw, box, 0.11, start, 0.73, end, fill, line, 0.02,
+                     radius=0.03)
+            else:
+                _bar(draw, box, start, 0.11, end, 0.73, fill, line, 0.02,
+                     radius=0.03)
+        _badge(draw, box, action, center=(0.755, 0.755), radius=0.225)
+
+    return _icon_photo(painter, size)
+
+
+class TableToolButton(ttk.Button):
+    """Toolbar button of the spreadsheet."""
     def __init__(self, master, kind="row", action="add", where=None,
                  background=None, command=None, on_menu=None):
         self.kind = kind
         self.action = action
         self.split = on_menu is not None
-        self._background = background or "#f0f0f0"
-        width = self.ICON_WIDTH + (self.ARROW_ZONE if self.split else 0)
-        super().__init__(master, width=width, height=self.HEIGHT,
-                         highlightthickness=1, highlightbackground="#b8b8b8",
-                         borderwidth=0, background=self._background,
-                         cursor="hand2")
-        self._width = width
-        self._command = command
-        self._on_menu = on_menu
-        self._hover_part = None
+        self.on_menu = on_menu
+
+        self.where = where or ("below" if kind == "row" else "after")
+        self.icon_img = drawn_tool_icon(kind, action, where=self.where)
+
+        full_text = " \u23f7" if self.split else ""
+        if self.icon_img is None:            # no Pillow: words instead
+            full_text = ("Add " if action == "add" else "Delete ") + kind \
+                + full_text
+        super().__init__(master, text=full_text, image=self.icon_img,
+                         compound="left", width=0, style="Toolbutton",
+                         command=command)
+        
+        if self.split:
+            self.bind("<ButtonPress-1>", self._clicked)
+            
         self.tooltip = Tooltip(self, "")
-        self.bind("<Button-1>", self._clicked)
-        self.bind("<Motion>", self._on_motion)
-        self.bind("<Leave>", self._on_leave)
         default = "below" if kind == "row" else "after"
         self.set_where(where or default)
 
-    # -- what the icon shows -----------------------------------------------
+    def _clicked(self, event):
+        if event.x > self.winfo_width() - 20:
+            if self.on_menu:
+                self.on_menu(self)
+            return "break"
+
     def set_where(self, where):
-        """Remember the place the icon shows and say it in the tooltip."""
+        """The place a new row or column goes - the icon shows it too."""
         self.where = where
+        picture = drawn_tool_icon(self.kind, self.action, where=where)
+        if picture is not None:
+            self.icon_img = picture
+            self.configure(image=picture)
         self.tooltip.set_text(self.describe())
-        self._redraw()
+        return picture
 
     def describe(self):
         """The words of the tooltip: what this button does."""
-        thing = "row" if self.kind == "row" else "column"
         if self.action == "delete":
-            if self.kind == "row":
-                return ("Delete row: removes every row the selected cells "
-                        "touch, with their data")
-            return ("Delete column: removes the column of the selected "
-                    "cell, with its data")
-        places = {"above": "above the selected cell",
-                  "below": "below the selected cell",
-                  "before": "before (left of) the selected cell",
-                  "after": "after (right of) the selected cell",
-                  "end": ("at the end of the sheet" if self.kind == "row"
-                          else "at the right end of the sheet")}
-        return (f"Add {thing}: inserts an empty {thing} "
-                f"{places.get(self.where, '')} "
-                f"(the arrow chooses the place)")
-
-    # -- drawing ------------------------------------------------------------
-    def _redraw(self):
-        self.delete("all")
-        height = self.HEIGHT
-        split_x = self._width - self.ARROW_ZONE if self.split else self._width
-        if self._hover_part == "left":
-            self.create_rectangle(1, 1, split_x - 1, height - 1,
-                                  fill=self.HOVER, outline="")
-        elif self._hover_part == "right":
-            self.create_rectangle(split_x + 1, 1, self._width - 1, height - 1,
-                                  fill=self.HOVER, outline="")
+            return "Delete row(s)" if self.kind == "row" else "Delete column"
+        places = {"above": "above", "below": "below", "before": "before", "after": "after", "end": "at the end"}
+        thing = "row" if self.kind == "row" else "column"
+        text = f"Insert {thing} {places.get(self.where, '')}"
         if self.split:
-            self.create_line(split_x, 4, split_x, height - 4, fill="#c0c0c0")
-            ax, ay = split_x + self.ARROW_ZONE / 2, height / 2
-            self.create_polygon([ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3],
-                                fill="#000000", outline="#000000")
-
-        colour = self.ADD_COLOR if self.action == "add" else self.DELETE_COLOR
-        low, high = 3, height - 5                 # the little table: 3 bands
-        target = 1 if self.action == "delete" else \
-            self.TARGET_BAND.get(self.where, 2)
-        gap = 1.5
-        span = (high - low - 2 * gap) / 3.0
-        starts = [low + index * (span + gap) for index in range(3)]
-        if self.action == "add" and self.where == "end":
-            # the coloured band stands apart: the far end of the whole sheet
-            span = (high - low - 4 * gap) / 3.0
-            starts = [low, low + span + gap, high - span]
-        for index in range(3):
-            start, stop = starts[index], starts[index] + span
-            fill = colour if index == target else self.CELL_FILL
-            box = ((low, start, high, stop) if self.kind == "row"
-                   else (start, low, stop, high))
-            self.create_rectangle(*box, fill=fill, outline=self.CELL_OUTLINE,
-                                  width=1, tags="icon")
-
-        glyph = "+" if self.action == "add" else "×"
-        gx, gy = self.ICON_WIDTH - 9, height / 2
-        self.create_oval(gx - 6, gy - 6, gx + 6, gy + 6, fill=self.CELL_FILL,
-                         outline=colour, width=1, tags="icon")
-        self.create_text(gx, gy, text=glyph, fill=colour,
-                         font=("TkDefaultFont", 12, "bold"), tags="icon")
-
-    # -- behaviour ----------------------------------------------------------
-    def _on_motion(self, event):
-        part = ("right" if self.split and event.x >= self._width - self.ARROW_ZONE
-                else "left")
-        if part != self._hover_part:
-            self._hover_part = part
-            self._redraw()
-
-    def _on_leave(self, _event=None):
-        if self._hover_part is not None:
-            self._hover_part = None
-            self._redraw()
-
-    def _clicked(self, event):
-        if self.split and event.x >= self._width - self.ARROW_ZONE:
-            if self._on_menu:
-                self._on_menu(event)
-        elif self._command:
-            self._command()
-        return "break"
-
+            text += " (click arrow for options)"
+        return text
 
 class ToolDialog(tk.Toplevel):
     """Base class of the small property windows.
@@ -3723,7 +3842,7 @@ class FormulaBar(ttk.Frame):
         self.name_box = ttk.Entry(self, textvariable=self.name_var, width=13, justify="center")
         self.name_box.pack(side="left", padx=(0, 4))
         self.name_box.bind("<Return>", self._jump_to_cell)
-        Tooltip(self.name_box, "Active cell (type address like B5 and press Enter to jump)")
+        Tooltip(self.name_box, "Go to cell (e.g. B5)")
 
         # fx indicator
         fx_label = tk.Label(self, text="fx", font=("TkDefaultFont", 11, "bold", "italic"),
@@ -3741,13 +3860,13 @@ class FormulaBar(ttk.Frame):
         # Buttons: Commit (✓) and Cancel (✕).  Filling down and the column
         # operations live on the keyboard (Ctrl/Cmd+D) and in the right
         # click menus of the cells and the headings, where they belong.
-        btn_commit = ttk.Button(self, text="✓", width=3, command=self._commit)
+        btn_commit = ttk.Button(self, text="✓", width=0, command=self._commit)
         btn_commit.pack(side="left", padx=(0, 2))
-        Tooltip(btn_commit, "Accept formula (Enter)")
+        Tooltip(btn_commit, "Accept (Enter)")
 
-        btn_cancel = ttk.Button(self, text="✕", width=3, command=self._cancel)
+        btn_cancel = ttk.Button(self, text="✕", width=0, command=self._cancel)
         btn_cancel.pack(side="left", padx=(0, 4))
-        Tooltip(btn_cancel, "Cancel formula (Esc)")
+        Tooltip(btn_cancel, "Cancel (Esc)")
 
     def set_cell(self, address_str, formula_or_val):
         self.name_var.set(address_str)
@@ -3989,6 +4108,897 @@ class ColumnMathDialog(ToolDialog):
 
 
 # --------------------------------------------------------------------------
+# curve fitting
+# --------------------------------------------------------------------------
+
+FIT_POINTS = 100           # how many points the fitted curve is drawn with
+FIT_MARGIN = 5.0           # ... over the range of the data, widened by this %
+MAX_FIT_POINTS = 10000
+MAX_POLY_ORDER = 10
+MOVING_WINDOW = 5          # a moving average covers this many points
+
+
+def finite_pairs(x, y):
+    """The X/Y pairs that are numbers on both sides, in the order given."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size != y.size:
+        size = min(x.size, y.size)
+        x, y = x[:size], y[:size]
+    good = np.isfinite(x) & np.isfinite(y)
+    return x[good], y[good]
+
+
+def least_squares(function, x, y, start, hold=None, max_iter=300, tol=1e-12):
+    """Levenberg-Marquardt: the parameters that fit `function` best.
+
+    Written out here so the program needs nothing but numpy: the sum of the
+    squared distances between the data and the curve is made as small as it
+    goes, starting from `start`.  A parameter whose `hold` is True is kept
+    at its starting value and is not fitted.
+
+    Returns (parameters, worked, iterations).
+    """
+    params = np.array(start, dtype=float)
+    hold = (np.zeros(params.size, dtype=bool) if hold is None
+            else np.asarray(hold, dtype=bool))
+    free = np.nonzero(~hold)[0]
+
+    def cost_of(values):
+        try:
+            model = np.asarray(function(x, values), dtype=float)
+        except (ValueError, ZeroDivisionError, FloatingPointError):
+            return None, None
+        if model.shape != y.shape or not np.all(np.isfinite(model)):
+            return None, None
+        residual = y - model
+        return residual, float(np.dot(residual, residual))
+
+    residual, cost = cost_of(params)
+    if residual is None:
+        return params, False, 0
+    if not free.size:
+        return params, True, 0
+
+    lam = 1e-3
+    done = 0
+    for done in range(1, max_iter + 1):
+        jacobian = np.zeros((x.size, free.size))
+        for column, index in enumerate(free):
+            step = 1e-7 * max(1.0, abs(float(params[index])))
+            moved = params.copy()
+            moved[index] += step
+            shifted, _ = cost_of(moved)
+            if shifted is None:
+                return params, False, done
+            jacobian[:, column] = (residual - shifted) / step
+        normal = jacobian.T @ jacobian
+        gradient = jacobian.T @ residual
+        diagonal = np.diag(np.maximum(np.diag(normal), 1e-12))
+        improved = False
+        for _ in range(30):            # bigger damping until a step helps
+            try:
+                step_values = np.linalg.solve(normal + lam * diagonal, gradient)
+            except np.linalg.LinAlgError:
+                lam *= 10.0
+                continue
+            candidate = params.copy()
+            candidate[free] += step_values
+            new_residual, new_cost = cost_of(candidate)
+            if new_residual is not None and new_cost < cost:
+                relative = (cost - new_cost) / max(cost, 1e-300)
+                params, residual, cost = candidate, new_residual, new_cost
+                lam = max(lam / 10.0, 1e-12)
+                improved = True
+                if relative < tol:
+                    return params, True, done
+                break
+            lam *= 10.0
+            if lam > 1e12:
+                break
+        if not improved:
+            return params, True, done       # nothing better to be found
+    return params, True, done
+
+
+def linear_least_squares(design, y, start=None, hold=None):
+    """The exact solution of a model that is linear in its parameters."""
+    design = np.asarray(design, dtype=float)
+    y = np.asarray(y, dtype=float)
+    count = design.shape[1]
+    params = (np.zeros(count) if start is None
+              else np.array(start, dtype=float))
+    hold = (np.zeros(count, dtype=bool) if hold is None
+            else np.asarray(hold, dtype=bool))
+    free = np.nonzero(~hold)[0]
+    if not free.size:
+        return params, True
+    target = y - design[:, hold] @ params[hold] if hold.any() else y
+    try:
+        solution, *_ = np.linalg.lstsq(design[:, free], target, rcond=None)
+    except np.linalg.LinAlgError:
+        return params, False
+    params[free] = solution
+    return params, True
+
+
+def moving_average(y, window):
+    """The running mean of `window` points, centred on every point.
+
+    The ends are averaged over what is really there, so the smoothed curve
+    is as long as the data and has no gaps at its two ends.
+    """
+    y = np.asarray(y, dtype=float)
+    window = max(1, int(window))
+    if window <= 1 or y.size == 0:
+        return y.copy()
+    half = window // 2
+    out = np.empty(y.size, dtype=float)
+    for index in range(y.size):
+        low = max(0, index - half)
+        high = min(y.size, index + half + 1)
+        piece = y[low:high]
+        piece = piece[np.isfinite(piece)]
+        out[index] = float(np.mean(piece)) if piece.size else np.nan
+    return out
+
+
+def _safe_exp(values):
+    """exp() that does not blow up while a fit is still far from home."""
+    return np.exp(np.clip(np.asarray(values, dtype=float), -700.0, 700.0))
+
+
+def _trend(x, y):
+    """(slope, intercept) of the straight line through the points."""
+    if x.size < 2 or np.ptp(x) <= 0:
+        return 0.0, (float(np.mean(y)) if y.size else 0.0)
+    design = np.column_stack([x, np.ones_like(x)])
+    params, _ok = linear_least_squares(design, y)
+    return float(params[0]), float(params[1])
+
+
+def _half_way(x, y, level):
+    """The X where the data first passes `level` (linear in between)."""
+    if x.size < 2:
+        return float(x[0]) if x.size else 0.0
+    order = np.argsort(x)
+    xs, ys = x[order], y[order]
+    for index in range(1, xs.size):
+        low, high = ys[index - 1], ys[index]
+        if (low - level) * (high - level) <= 0 and low != high:
+            part = (level - low) / (high - low)
+            return float(xs[index - 1] + part * (xs[index] - xs[index - 1]))
+    return float(np.mean(xs))
+
+
+
+FIT_NAME_COLUMN = "Parameter"   # the column of the parameter names
+FIT_BLANK_COLUMN = " "          # the empty column between curve and parameters
+FIT_TAB_PREFIX = "Fit"
+
+
+def rounded(value, digits=10):
+    """A number kept to `digits` figures, so a cell is not a wall of noise."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    if not np.isfinite(number):
+        return ""
+    return float(f"{number:.{digits}g}")
+
+
+def short_number(value, digits=6):
+    """A number written for a person: no tail of zeros, no noise."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "" if value is None else str(value)
+    if not np.isfinite(number):
+        return ""
+    return f"{number:.{digits}g}"
+
+
+class FitModel:
+    """One way of fitting a curve: its formula, its parameters and a start.
+
+    `function(x, params)` is the curve itself, `guess(x, y, options)` gives
+    the starting values the fit sets out from, and `derived(params, x, y)`
+    returns the numbers that follow from the fit (a half-life, a width...)
+    which are written under the parameters.
+    """
+
+    def __init__(self, code, label, formula, params, function, guess,
+                 about="", derived=None, linear=None, settings=(),
+                 extrapolates=True):
+        self.code = code
+        self.label = label
+        self.formula = formula
+        self.params = list(params)
+        self.function = function
+        self.guess = guess
+        self.about = about
+        self.derived = derived
+        self.linear = linear
+        self.settings = list(settings)
+        self.extrapolates = extrapolates
+
+    def parameter_names(self, options=None):
+        """The names of the parameters; a polynomial has as many as its order."""
+        if self.params and callable(self.params[0]):
+            return list(self.params[0](options or {}))
+        return list(self.params)
+
+    def fit(self, x, y, options=None, start=None, hold=None):
+        """Fit this curve to the points and say how well it did."""
+        options = dict(options or {})
+        x, y = finite_pairs(x, y)
+        names = self.parameter_names(options)
+        result = {"code": self.code, "label": self.label, "names": names,
+                  "points": int(x.size), "ok": False, "message": "",
+                  "params": [float("nan")] * len(names), "derived": [],
+                  "x": x, "y": y}
+        if x.size < max(2, len(names)):
+            result["message"] = (f"{self.label} needs at least "
+                                 f"{max(2, len(names))} points, "
+                                 f"{x.size} were found.")
+            return result
+
+        starting = list(self.guess(x, y, options))
+        if start is not None:
+            for index, value in enumerate(start[:len(starting)]):
+                if value is not None and np.isfinite(value):
+                    starting[index] = float(value)
+        held = ([bool(one) for one in (hold or ())]
+                + [False] * len(starting))[:len(starting)]
+
+        if self.linear is not None:
+            design = self.linear(x, options)
+            params, worked = linear_least_squares(
+                design, y, start=starting, hold=held)
+            rounds = 0
+        else:
+            params, worked, rounds = least_squares(
+                self.function, x, y, starting, hold=held)
+        params = np.asarray(params, dtype=float)
+        model = np.asarray(self.function(x, params), dtype=float)
+        if not worked or not np.all(np.isfinite(params)):
+            result["message"] = (f"{self.label} could not be fitted to these "
+                                 "points.  Try other starting values.")
+            return result
+
+        residual = y - model
+        sse = float(np.dot(residual, residual))
+        spread = float(np.sum((y - np.mean(y)) ** 2))
+        freedom = max(1, x.size - sum(1 for one in held if not one))
+        result.update({
+            "ok": True, "params": [float(one) for one in params],
+            "start": starting, "hold": held, "rounds": rounds,
+            "sse": sse, "rmse": float(np.sqrt(sse / freedom)),
+            "r2": (1.0 - sse / spread) if spread > 0 else float("nan"),
+            "model": model,
+        })
+        if self.derived:
+            result["derived"] = list(self.derived(params, x, y))
+        return result
+
+    def curve(self, params, grid):
+        return np.asarray(self.function(np.asarray(grid, dtype=float),
+                                        np.asarray(params, dtype=float)),
+                          dtype=float)
+
+
+# -- the models themselves -------------------------------------------------
+
+def _line_guess(x, y, _options):
+    slope, intercept = _trend(x, y)
+    return [slope, intercept]
+
+
+def _poly_names(options):
+    order = max(1, min(int(options.get("order", 2) or 2), MAX_POLY_ORDER))
+    names = ["c0 (constant)", "c1 (x)"]
+    names += [f"c{index} (x^{index})" for index in range(2, order + 1)]
+    return names[:order + 1]
+
+
+def _poly_guess(x, y, options):
+    return [0.0] * len(_poly_names(options))
+
+
+def _poly_design(x, options):
+    order = max(1, min(int(options.get("order", 2) or 2), MAX_POLY_ORDER))
+    return np.vander(x, order + 1, increasing=True)
+
+
+def _growth_guess(x, y, _options):
+    positive = y > 0
+    if positive.sum() >= 2:
+        rate, constant = _trend(x[positive], np.log(y[positive]))
+        start = float(np.exp(constant))
+        if np.isfinite(rate) and np.isfinite(start) and start > 0:
+            return [start, rate]
+    span = max(np.ptp(x), 1e-9)
+    return [max(float(y[0]), 1e-6), 1.0 / span]
+
+
+def _decay_guess(x, y, _options):
+    order = np.argsort(x)
+    xs, ys = x[order], y[order]
+    plateau = float(ys[-1])
+    start = float(ys[0])
+    level = plateau + (start - plateau) / 2.0
+    half = _half_way(xs, ys, level) - float(xs[0])
+    rate = np.log(2.0) / half if half > 0 else 1.0 / max(np.ptp(x), 1e-9)
+    return [start, plateau, float(abs(rate))]
+
+
+def _decay2_guess(x, y, options):
+    start, plateau, rate = _decay_guess(x, y, options)
+    span = start - plateau
+    return [plateau, span / 2.0, rate * 3.0, span / 2.0, rate / 3.0]
+
+
+def _logistic_guess(x, y, _options):
+    bottom, top = float(np.min(y)), float(np.max(y))
+    middle = _half_way(x, y, (bottom + top) / 2.0)
+    slope, _intercept = _trend(x, y)
+    span = max(np.ptp(x), 1e-9)
+    rate = 4.0 / span
+    return [bottom, top, middle, float(rate if slope >= 0 else -rate)]
+
+
+def _gauss_guess(x, y, _options):
+    baseline = float(np.min(y))
+    peak = int(np.argmax(y))
+    amplitude = float(y[peak] - baseline)
+    weights = np.clip(y - baseline, 0.0, None)
+    total = float(np.sum(weights))
+    mean = float(np.sum(weights * x) / total) if total > 0 else float(x[peak])
+    if total > 0:
+        variance = float(np.sum(weights * (x - mean) ** 2) / total)
+        width = np.sqrt(variance) if variance > 0 else np.ptp(x) / 6.0
+    else:
+        width = np.ptp(x) / 6.0
+    return [baseline, amplitude if amplitude else 1.0, mean,
+            float(width if width > 0 else 1.0)]
+
+
+def _moving_guess(x, y, options):
+    return [float(max(1, int(options.get("window", MOVING_WINDOW) or 1)))]
+
+
+def _half_life(rate):
+    rate = float(rate)
+    return np.log(2.0) / rate if rate not in (0.0,) and np.isfinite(rate) \
+        else float("nan")
+
+
+FIT_MODELS = [
+    FitModel(
+        "line", "Straight line", "y = a*x + b",
+        ["a (slope)", "b (intercept)"],
+        lambda x, p: p[0] * x + p[1],
+        _line_guess,
+        about="The line of least squares through the points.",
+        linear=lambda x, _o: np.column_stack([x, np.ones_like(x)]),
+        derived=lambda p, x, y: [("x where y = 0",
+                                  (-p[1] / p[0]) if p[0] else float("nan"))],
+    ),
+    FitModel(
+        "poly", "Polynomial", "y = c0 + c1*x + c2*x^2 + ...",
+        [_poly_names],
+        lambda x, p: np.polyval(list(p)[::-1], x),
+        _poly_guess,
+        about="A curve of the order you choose, fitted exactly.",
+        linear=_poly_design,
+        settings=[("order", "Order:", "int", 2, 1, MAX_POLY_ORDER)],
+    ),
+    FitModel(
+        "growth", "Exponential growth", "y = Y0 * exp(k*x)",
+        ["Y0 (at x = 0)", "k (rate)"],
+        lambda x, p: p[0] * _safe_exp(p[1] * x),
+        _growth_guess,
+        about="Something that grows by the same factor in equal steps.",
+        derived=lambda p, x, y: [("Doubling time", _half_life(p[1]))],
+    ),
+    FitModel(
+        "decay1", "One phase decay", "y = (Y0 - Plateau) * exp(-K*x) + Plateau",
+        ["Y0 (at x = 0)", "Plateau", "K (rate)"],
+        lambda x, p: (p[0] - p[1]) * _safe_exp(-p[2] * x) + p[1],
+        _decay_guess,
+        about="One process running down towards a plateau.",
+        derived=lambda p, x, y: [("Half life", _half_life(p[2])),
+                                 ("Span", float(p[0] - p[1]))],
+    ),
+    FitModel(
+        "decay2", "Two phase decay",
+        "y = Plateau + Fast*exp(-Kf*x) + Slow*exp(-Ks*x)",
+        ["Plateau", "Span fast", "Kf (fast rate)", "Span slow",
+         "Ks (slow rate)"],
+        lambda x, p: (p[0] + p[1] * _safe_exp(-p[2] * x)
+                      + p[3] * _safe_exp(-p[4] * x)),
+        _decay2_guess,
+        about="Two processes running down at once, one quick, one slow.",
+        derived=lambda p, x, y: [
+            ("Half life fast", _half_life(p[2])),
+            ("Half life slow", _half_life(p[4])),
+            ("Per cent fast", 100.0 * abs(p[1]) / max(abs(p[1]) + abs(p[3]),
+                                                      1e-300))],
+    ),
+    FitModel(
+        "logistic", "Logistic curve",
+        "y = Bottom + (Top - Bottom) / (1 + exp(-k*(x - x50)))",
+        ["Bottom", "Top", "x50 (midpoint)", "k (steepness)"],
+        lambda x, p: p[0] + (p[1] - p[0]) / (1.0 + _safe_exp(-p[3] * (x - p[2]))),
+        _logistic_guess,
+        about="An S shaped curve between two plateaus.",
+        derived=lambda p, x, y: [("Span", float(p[1] - p[0])),
+                                 ("Slope at x50",
+                                  float((p[1] - p[0]) * p[3] / 4.0))],
+    ),
+    FitModel(
+        "gauss", "Gaussian distribution",
+        "y = Base + A * exp(-(x - Mean)^2 / (2*SD^2))",
+        ["Baseline", "A (amplitude)", "Mean", "SD (width)"],
+        lambda x, p: p[0] + p[1] * _safe_exp(
+            -((x - p[2]) ** 2) / (2.0 * max(abs(p[3]), 1e-12) ** 2)),
+        _gauss_guess,
+        about="A bell shaped peak over a flat baseline.",
+        derived=lambda p, x, y: [
+            ("FWHM", float(2.0 * np.sqrt(2.0 * np.log(2.0)) * abs(p[3]))),
+            ("Area under the peak",
+             float(abs(p[1]) * abs(p[3]) * np.sqrt(2.0 * np.pi)))],
+    ),
+    FitModel(
+        "movavg", "Moving average", "the running mean of n points",
+        ["n (window)"],
+        None,                       # smoothing, not a formula with parameters
+        _moving_guess,
+        about="Smoothing: every point is the mean of its neighbours.",
+        settings=[("window", "Window (points):", "int", MOVING_WINDOW, 2, 999)],
+        extrapolates=False,
+    ),
+]
+
+FIT_BY_CODE = {model.code: model for model in FIT_MODELS}
+
+
+def fit_column(code, x, y, options=None, start=None, hold=None):
+    """Fit one column with one of the methods; a moving average is smoothed."""
+    model = FIT_BY_CODE.get(str(code))
+    if model is None:
+        return {"ok": False, "message": f"Unknown fitting method: {code}",
+                "names": [], "params": [], "derived": []}
+    options = dict(options or {})
+    if model.code == "movavg":
+        x, y = finite_pairs(x, y)
+        window = max(2, int(options.get("window", MOVING_WINDOW) or MOVING_WINDOW))
+        result = {"code": "movavg", "label": model.label, "names": ["n (window)"],
+                  "params": [float(window)], "derived": [], "x": x, "y": y,
+                  "points": int(x.size), "ok": x.size >= 2, "message": "",
+                  "hold": [True], "start": [float(window)], "rounds": 0}
+        if not result["ok"]:
+            result["message"] = "A moving average needs at least two points."
+            return result
+        order = np.argsort(x)
+        smooth = np.empty_like(y)
+        smooth[order] = moving_average(y[order], window)
+        residual = y - smooth
+        sse = float(np.dot(residual, residual))
+        spread = float(np.sum((y - np.mean(y)) ** 2))
+        result.update({"model": smooth, "sse": sse,
+                       "rmse": float(np.sqrt(sse / max(1, x.size))),
+                       "r2": (1.0 - sse / spread) if spread > 0 else float("nan")})
+        return result
+    return model.fit(x, y, options=options, start=start, hold=hold)
+
+
+def fit_grid(x, points=FIT_POINTS, margin=FIT_MARGIN):
+    """The X values the fitted curve is written with.
+
+    `points` of them, over the range of the data widened by `margin` per
+    cent at both ends, so the curve reaches a little past the measurements.
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    points = max(2, min(int(points or FIT_POINTS), MAX_FIT_POINTS))
+    if not x.size:
+        return np.linspace(0.0, 1.0, points)
+    low, high = float(np.min(x)), float(np.max(x))
+    if high <= low:
+        step = abs(low) * 0.05 or 0.5
+        low, high = low - step, high + step
+    extra = (high - low) * float(margin) / 100.0
+    return np.linspace(low - extra, high + extra, points)
+
+
+def fitted_curve(result, grid):
+    """The fitted curve on `grid`, with gaps where it says nothing."""
+    grid = np.asarray(grid, dtype=float)
+    if not result.get("ok"):
+        return np.full(grid.shape, np.nan)
+    model = FIT_BY_CODE.get(result.get("code"))
+    if model is None:
+        return np.full(grid.shape, np.nan)
+    if model.code == "movavg":
+        # a moving average says nothing outside the measurements: it is
+        # written along the data and left empty past their two ends
+        x, smooth = np.asarray(result["x"], float), np.asarray(result["model"], float)
+        order = np.argsort(x)
+        out = np.interp(grid, x[order], smooth[order], left=np.nan, right=np.nan)
+        out[(grid < np.min(x)) | (grid > np.max(x))] = np.nan
+        return out
+    try:
+        values = model.curve(result["params"], grid)
+    except (ValueError, TypeError, ZeroDivisionError):
+        return np.full(grid.shape, np.nan)
+    return np.where(np.isfinite(values), values, np.nan)
+
+
+class RegressionDialog(ToolDialog):
+    """Fit a curve to the columns of one sheet.
+
+    The methods stand on the left; choosing one shows, on the right, what
+    it needs: its own settings, the columns it will be fitted to and the
+    starting value of every parameter (which may be held fixed).  `Fit`
+    writes the answer into a new sheet: the fitted curve drawn with many
+    points, and beside it the parameters with their names.
+    """
+
+    def __init__(self, master, app, on_close=None):
+        super().__init__(master, "Regression", on_close=on_close)
+        self.app = app
+        self.model = FIT_MODELS[0]
+        self.setting_vars = {}
+        self.start_vars = []
+        self.hold_vars = []
+        self._results = []
+
+        self.points_var = tk.StringVar(value=str(FIT_POINTS))
+        self.margin_var = tk.StringVar(value=f"{FIT_MARGIN:g}")
+        self.plot_var = tk.BooleanVar(value=True)
+
+        columns = ttk.Frame(self.body)
+        columns.pack(fill="both", expand=True)
+
+        # -- the methods, on the left
+        left = ttk.LabelFrame(columns, text="Fitting method", padding=8)
+        left.pack(side="left", fill="y")
+        self.method_list = tk.Listbox(left, height=len(FIT_MODELS), width=24,
+                                      exportselection=False,
+                                      activestyle="dotbox")
+        for one in FIT_MODELS:
+            self.method_list.insert("end", one.label)
+        self.method_list.selection_set(0)
+        self.method_list.pack(fill="y")
+        self.method_list.bind("<<ListboxSelect>>", self._method_chosen)
+
+        # -- everything the chosen method needs, on the right
+        right = ttk.Frame(columns)
+        right.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        self.right = right
+
+        head = ttk.LabelFrame(right, text="What it fits", padding=8)
+        head.pack(fill="x")
+        self.formula_label = ttk.Label(head, text="", font=("TkFixedFont", 11))
+        self.formula_label.pack(anchor="w")
+        self.about_label = ttk.Label(head, text="", foreground="#666",
+                                     justify="left", wraplength=330)
+        self.about_label.pack(anchor="w", pady=(4, 0))
+
+        self.settings_box = ttk.LabelFrame(right, text="Settings", padding=8)
+        self.settings_box.pack(fill="x", pady=(10, 0))
+
+        data_box = ttk.LabelFrame(right, text="Columns to fit", padding=8)
+        self.data_box = data_box
+        data_box.pack(fill="x", pady=(10, 0))
+        self.column_list = tk.Listbox(data_box, height=4, selectmode="extended",
+                                      exportselection=False)
+        self.column_list.pack(fill="x")
+        self.x_label = ttk.Label(data_box, text="", foreground="#666")
+        self.x_label.pack(anchor="w", pady=(4, 0))
+
+        self.params_box = ttk.LabelFrame(
+            right, text="Parameters (empty = worked out from the data)",
+            padding=8)
+        self.params_box.pack(fill="x", pady=(10, 0))
+
+        curve = ttk.LabelFrame(right, text="The curve that is written",
+                               padding=8)
+        self.curve_box = curve
+        curve.pack(fill="x", pady=(10, 0))
+        ttk.Label(curve, text="Points:").grid(row=0, column=0, sticky="w",
+                                              padx=(0, 8), pady=3)
+        ttk.Spinbox(curve, from_=2, to=MAX_FIT_POINTS, increment=10, width=8,
+                    textvariable=self.points_var).grid(row=0, column=1,
+                                                       sticky="w", pady=3)
+        ttk.Label(curve, text="Past the data (%):").grid(
+            row=0, column=2, sticky="w", padx=(16, 8), pady=3)
+        ttk.Spinbox(curve, from_=0, to=100, increment=1, width=8,
+                    textvariable=self.margin_var).grid(row=0, column=3,
+                                                       sticky="w", pady=3)
+        ttk.Checkbutton(curve, variable=self.plot_var,
+                        text="Draw it with the data at once").grid(
+            row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        self.result_label = ttk.Label(right, text="", justify="left",
+                                      wraplength=330)
+        self.result_label.pack(anchor="w", pady=(10, 0))
+
+        buttons = ttk.Frame(self.body)
+        buttons.pack(side="bottom", fill="x", pady=(12, 0))
+        self.fit_button = ttk.Button(buttons, text="Fit", command=self.run_fit)
+        self.fit_button.pack(side="left")
+        ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+
+        self.refresh_columns()
+        self._show_method()
+
+    # -- what the sheet offers ---------------------------------------------
+    def source_table(self):
+        return self.app.table
+
+    def column_names(self):
+        """The Y columns of the sheet: everything after the first one."""
+        table = self.source_table()
+        if table is None:
+            return []
+        names = [str(one) for one in table.df.columns]
+        return names[1:]
+
+    def x_name(self):
+        table = self.source_table()
+        names = [str(one) for one in (table.df.columns if table is not None else [])]
+        return names[0] if names else ""
+
+    def refresh_columns(self):
+        """The list of columns, with the ticked ones already chosen."""
+        table = self.source_table()
+        names = self.column_names()
+        self.column_list.delete(0, "end")
+        for name in names:
+            self.column_list.insert("end", name)
+        chosen = []
+        for index, name in enumerate(names):
+            if table is not None and table.column_axis(name) in ("L", "R"):
+                chosen.append(index)
+        if not chosen:
+            chosen = list(range(len(names)))
+        for index in chosen:
+            self.column_list.selection_set(index)
+        self.x_label.configure(
+            text=(f"X values: the first column, \"{self.x_name()}\""
+                  if names else "This sheet has no column to fit."))
+        return names
+
+    def chosen_columns(self):
+        names = self.column_names()
+        picked = [names[index] for index in self.column_list.curselection()
+                  if index < len(names)]
+        return picked or names
+
+    # -- the method and its parameters -------------------------------------
+    def _method_chosen(self, _event=None):
+        picked = self.method_list.curselection()
+        if not picked:
+            return
+        self.model = FIT_MODELS[int(picked[0])]
+        self._show_method()
+
+    def options(self):
+        """The settings of this method, as the engine wants them."""
+        out = {}
+        for name, variable, kind, default, low, high in self._setting_specs():
+            text = variable.get()
+            if kind == "int":
+                value = to_int(text, int(default))
+                value = max(int(low), min(int(value), int(high)))
+            else:
+                value = to_float(text, float(default))
+            out[name] = value
+        return out
+
+    def _setting_specs(self):
+        return [(name, self.setting_vars[name], kind, default, low, high)
+                for name, _label, kind, default, low, high in self.model.settings
+                if name in self.setting_vars]
+
+    def _show_method(self):
+        """Build the right hand side for the method that was chosen."""
+        self.formula_label.configure(text=self.model.formula)
+        self.about_label.configure(text=self.model.about)
+
+        for child in self.settings_box.winfo_children():
+            child.destroy()
+        self.setting_vars = {}
+        if self.model.settings:
+            self.settings_box.pack(fill="x", pady=(10, 0), before=self.data_box)
+            for row, (name, label, kind, default, low, high) in enumerate(
+                    self.model.settings):
+                variable = tk.StringVar(value=str(default))
+                self.setting_vars[name] = variable
+                ttk.Label(self.settings_box, text=label).grid(
+                    row=row, column=0, sticky="w", padx=(0, 8), pady=3)
+                spin = ttk.Spinbox(self.settings_box, from_=low, to=high,
+                                   increment=1, width=8, textvariable=variable,
+                                   command=self._rebuild_params)
+                spin.grid(row=row, column=1, sticky="w", pady=3)
+                variable.trace_add("write", lambda *_a: self._rebuild_params())
+        else:
+            self.settings_box.pack_forget()
+        self._rebuild_params()
+
+    def _rebuild_params(self, *_args):
+        """One row per parameter: its name, a starting value and a hold."""
+        for child in self.params_box.winfo_children():
+            child.destroy()
+        self.start_vars, self.hold_vars = [], []
+        names = self.model.parameter_names(self.options())
+        if self.model.code == "movavg":
+            self.params_box.pack_forget()
+            return names
+        self.params_box.pack(fill="x", pady=(10, 0), before=self.curve_box)
+        ttk.Label(self.params_box, text="Start value", foreground="#666").grid(
+            row=0, column=1, sticky="w", padx=(0, 8))
+        ttk.Label(self.params_box, text="Hold", foreground="#666").grid(
+            row=0, column=2, sticky="w")
+        for row, name in enumerate(names, start=1):
+            ttk.Label(self.params_box, text=name).grid(
+                row=row, column=0, sticky="w", padx=(0, 8), pady=2)
+            start = tk.StringVar(value="")
+            hold = tk.BooleanVar(value=False)
+            self.start_vars.append(start)
+            self.hold_vars.append(hold)
+            ttk.Entry(self.params_box, textvariable=start, width=12).grid(
+                row=row, column=1, sticky="w", padx=(0, 8), pady=2)
+            ttk.Checkbutton(self.params_box, variable=hold).grid(
+                row=row, column=2, sticky="w", pady=2)
+        return names
+
+    def starting_values(self):
+        """(start, hold) as the engine wants them; empty means automatic."""
+        start, hold = [], []
+        for index, variable in enumerate(self.start_vars):
+            text = str(variable.get()).strip()
+            value = to_float(text, None) if text else None
+            start.append(value if (value is not None
+                                   and np.isfinite(value)) else None)
+            hold.append(bool(self.hold_vars[index].get()))
+        if any(hold[index] and start[index] is None for index in range(len(hold))):
+            # a parameter can only be held at a value that was typed in
+            hold = [hold[index] and start[index] is not None
+                    for index in range(len(hold))]
+        return start, hold
+
+    # -- doing it ----------------------------------------------------------
+    def run_fit(self):
+        table = self.source_table()
+        if table is None or not len(table.df.columns):
+            messagebox.showinfo("Regression", "There is nothing to fit yet.",
+                                parent=self)
+            return None
+        table._commit_edit()
+        if not self.column_list.size():
+            self.refresh_columns()
+        columns = self.chosen_columns()
+        if not columns:
+            messagebox.showinfo("Regression",
+                                "This sheet has no column to fit.\n"
+                                "The first column holds the X values and "
+                                "every column after it can be fitted.",
+                                parent=self)
+            return None
+
+        frame = table.df
+        x_name = self.x_name()
+        x_values = pd.to_numeric(frame[x_name], errors="coerce").to_numpy(float)
+        if not np.isfinite(x_values).any():
+            # a first column of names is no X axis: the row numbers are
+            x_values = np.arange(1, len(frame) + 1, dtype=float)
+            x_name = ROW_AXIS_LABEL
+
+        options = self.options()
+        start, hold = self.starting_values()
+        results, failed = [], []
+        for name in columns:
+            y_values = pd.to_numeric(frame[name], errors="coerce").to_numpy(float)
+            result = fit_column(self.model.code, x_values, y_values,
+                                options=options, start=start, hold=hold)
+            result["column"] = str(name)
+            results.append(result)
+            if not result.get("ok"):
+                failed.append(f"{name}: {result.get('message', 'it did not fit')}")
+
+        good = [one for one in results if one.get("ok")]
+        if not good:
+            messagebox.showerror("Regression",
+                                 "Nothing could be fitted.\n\n" + "\n".join(failed),
+                                 parent=self)
+            return None
+
+        self._results = good
+        sheet, names_off = self.build_sheet(good, x_name, options)
+        self.app.add_fit_tab(sheet, names_off, plot=bool(self.plot_var.get()))
+        self.result_label.configure(text=self.summary(good, failed))
+        return good
+
+    def summary(self, results, failed=()):
+        lines = []
+        for result in results:
+            values = ", ".join(
+                f"{name} = {short_number(value)}"
+                for name, value in zip(result["names"], result["params"]))
+            lines.append(f"{result['column']}: {values}"
+                         f"   (R² = {short_number(result.get('r2'))})")
+        lines += list(failed)
+        return "\n".join(lines)
+
+    def build_sheet(self, results, x_name, options):
+        """The new sheet: the curve, a blank column, then the parameters.
+
+        Returns the table itself and the names of the columns that hold the
+        parameters - those are not data to plot, so their check buttons are
+        switched off.
+        """
+        points = to_int(self.points_var.get(), FIT_POINTS)
+        margin = to_float(self.margin_var.get(), FIT_MARGIN)
+        if not self.model.extrapolates:
+            margin = 0.0
+        base = results[0]["x"]
+        for one in results[1:]:
+            base = np.concatenate([base, one["x"]])
+        grid = fit_grid(base, points=points, margin=margin)
+
+        sheet = {x_name: [rounded(one) for one in grid]}
+        for result in results:
+            curve = fitted_curve(result, grid)
+            sheet[f"{result['column']} fit"] = [
+                "" if not np.isfinite(one) else rounded(one) for one in curve]
+
+        # the parameters stand beside the curve, one blank column between
+        rows = []
+        for index, name in enumerate(results[0]["names"]):
+            rows.append((name, [result["params"][index] if
+                                index < len(result["params"]) else float("nan")
+                                for result in results]))
+        for index, (name, _value) in enumerate(results[0].get("derived") or []):
+            rows.append((name, [(result.get("derived") or [])[index][1]
+                                if index < len(result.get("derived") or [])
+                                else float("nan") for result in results]))
+        rows.append(("R squared", [result.get("r2") for result in results]))
+        rows.append(("RMSE", [result.get("rmse") for result in results]))
+        rows.append(("Points fitted", [result.get("points") for result in results]))
+        rows.append(("Method", [self.model.label for _ in results]))
+
+        height = len(grid)
+        blank = FIT_BLANK_COLUMN
+        sheet[blank] = [""] * height
+        parameter_columns = [blank, FIT_NAME_COLUMN]
+        sheet[FIT_NAME_COLUMN] = [
+            rows[index][0] if index < len(rows) else "" for index in range(height)]
+        for column, result in enumerate(results):
+            name = f"{result['column']} value"
+            parameter_columns.append(name)
+            values = []
+            for index in range(height):
+                if index >= len(rows):
+                    values.append("")
+                    continue
+                value = rows[index][1][column]
+                if isinstance(value, str):
+                    values.append(value)
+                elif value is None or not np.isfinite(float(value)):
+                    values.append("")
+                elif float(value).is_integer() and abs(float(value)) < 1e15:
+                    values.append(int(value))
+                else:
+                    values.append(rounded(value))
+            sheet[name] = values
+        return pd.DataFrame(sheet), parameter_columns
+
+
+# --------------------------------------------------------------------------
 # data table
 # --------------------------------------------------------------------------
 
@@ -4180,8 +5190,7 @@ class DataTable(ttk.Frame):
                      lambda e, i=index: self._show_header_context_menu(i, e))
             lbl.bind("<Button-2>",
                      lambda e, i=index: self._show_header_context_menu(i, e))
-            lbl.tooltip = Tooltip(
-                lbl, f"Column {c_letter}: click to select the whole column")
+            lbl.tooltip = Tooltip(lbl, f"Select column {c_letter}")
             self._col_labels[name] = lbl
         self._place_checks()
 
@@ -4602,8 +5611,58 @@ class DataTable(ttk.Frame):
         self._grow_timer = None
         self.grow_columns_to_fit()
 
+    def _draw_gridlines(self):
+        if not hasattr(self, "_grid_lines"):
+            self._grid_lines = []
+            
+        try:
+            first_frac, last_frac = self.tree.yview()
+        except Exception:
+            return
+            
+        children = self.tree.get_children()
+        num_items = len(children)
+        if num_items == 0: 
+            return
+            
+        first_idx = max(0, int(first_frac * num_items) - 2)
+        last_idx = min(num_items - 1, int(last_frac * num_items) + 2)
+        
+        needed = (last_idx - first_idx + 1) + len(self.tree["displaycolumns"])
+        while len(self._grid_lines) < needed:
+            self._grid_lines.append(tk.Frame(self.tree, background="#e8e8e8"))
+            
+        for f in self._grid_lines:
+            f.place_forget()
+            
+        f_idx = 0
+        tree_h = self.tree.winfo_height()
+        
+        # Draw vertical lines
+        try:
+            for col in self.tree["displaycolumns"]:
+                bbox = self.tree.bbox(children[0], col)
+                if bbox:
+                    x = bbox[0] + bbox[2]
+                    self._grid_lines[f_idx].place(x=x-1, y=0, width=1, height=tree_h)
+                    f_idx += 1
+        except tk.TclError:
+            pass
+                
+        # Draw horizontal lines
+        try:
+            for i in range(first_idx, last_idx + 1):
+                bbox = self.tree.bbox(children[i], self.tree["displaycolumns"][0])
+                if bbox:
+                    y = bbox[1] + bbox[3]
+                    self._grid_lines[f_idx].place(x=0, y=y-1, relwidth=1, height=1)
+                    f_idx += 1
+        except (tk.TclError, IndexError):
+            pass
+
     def _refresh_outline(self):
         """Draw the blue rectangle around the visible part of the block and the fill handle."""
+        self._draw_gridlines()
         bounds = self.block_bounds()
         if bounds is None or not self.tree.get_children():
             self._hide_outline()
@@ -4725,28 +5784,66 @@ class DataTable(ttk.Frame):
         if not getattr(self, "_fill_dragging", False):
             return "break"
         try:
+            tree_x = event.x_root - self.tree.winfo_rootx()
             tree_y = event.y_root - self.tree.winfo_rooty()
         except (tk.TclError, AttributeError):
+            tree_x = event.x
             tree_y = event.y
 
         row_id = self.tree.identify_row(tree_y)
-        r0, c0, r1, c1 = self._fill_start_bounds
-        if row_id and self.tree.exists(row_id):
-            target_r = max(r1, int(row_id))
-        else:
-            if tree_y > self.tree.winfo_height() - 10:
-                target_r = min(len(self.df) - 1, self._fill_target_row + 1)
-                self._start_fill_auto_scroll()
-            else:
-                target_r = self._fill_target_row
+        col_id = self.tree.identify_column(tree_x)
 
-        self._fill_target_row = target_r
-        if target_r > r1:
-            self._show_fill_feedback(r1 + 1, target_r, c0, c1)
-            self._show_fill_hint(r0, r1, c0, target_r)
+        r0, c0, r1, c1 = self._fill_start_bounds
+        
+        target_r = r1
+        target_c = c1
+        
+        if row_id and self.tree.exists(row_id):
+            hover_r = int(row_id)
         else:
+            hover_r = r1
+            
+        if col_id:
+            hover_c = int(col_id.replace('#', '')) - 1
+        else:
+            hover_c = c1
+            
+        dr_down = max(0, hover_r - r1)
+        dr_up = max(0, r0 - hover_r)
+        dc_right = max(0, hover_c - c1)
+        dc_left = max(0, c0 - hover_c)
+        
+        max_d = max(dr_down, dr_up, dc_right, dc_left)
+        
+        if max_d == 0:
+            self._fill_direction = None
             self._hide_fill_feedback()
             self._update_status_bar()
+            return "break"
+            
+        if max_d == dr_down:
+            self._fill_direction = "down"
+            target_r = r1 + dr_down
+            self._show_fill_feedback(r1 + 1, target_r, c0, c1)
+            self._show_fill_hint(r0, r1, c0, target_r)
+        elif max_d == dr_up:
+            self._fill_direction = "up"
+            target_r = r0 - dr_up
+            self._show_fill_feedback(target_r, r0 - 1, c0, c1)
+            self._update_status_bar()
+        elif max_d == dc_right:
+            self._fill_direction = "right"
+            target_c = c1 + dc_right
+            self._show_fill_feedback(r0, r1, c1 + 1, target_c)
+            self._update_status_bar()
+        elif max_d == dc_left:
+            self._fill_direction = "left"
+            target_c = c0 - dc_left
+            self._show_fill_feedback(r0, r1, target_c, c0 - 1)
+            self._update_status_bar()
+            
+        self._fill_target_row = target_r
+        self._fill_target_col = target_c
         return "break"
 
     def _show_fill_hint(self, r0, r1, column, target_r):
@@ -4778,11 +5875,22 @@ class DataTable(ttk.Frame):
         self._fill_dragging = False
 
         r0, c0, r1, c1 = self._fill_start_bounds
+        direction = getattr(self, "_fill_direction", None)
         target_r = getattr(self, "_fill_target_row", r1)
-        if target_r > r1:
-            self._execute_fill_down(r1, target_r, c0, c1, first_r=r0)
-            self.select_block(r0, c0, target_r, c1, anchor=(r0, c0), cursor=(target_r, c1))
-            self.tree.see(str(target_r))
+        target_c = getattr(self, "_fill_target_col", c1)
+        
+        if direction:
+            self._execute_fill(r0, c0, r1, c1, target_r, target_c, direction)
+            if direction == "down":
+                self.select_block(r0, c0, target_r, c1, anchor=(r0, c0), cursor=(target_r, c1))
+                self.tree.see(str(target_r))
+            elif direction == "up":
+                self.select_block(target_r, c0, r1, c1, anchor=(r1, c1), cursor=(target_r, c0))
+                self.tree.see(str(target_r))
+            elif direction == "right":
+                self.select_block(r0, c0, r1, target_c, anchor=(r0, c0), cursor=(r1, target_c))
+            elif direction == "left":
+                self.select_block(r0, target_c, r1, c1, anchor=(r1, c1), cursor=(r0, target_c))
         else:
             self._update_status_bar()
         return "break"
@@ -4795,7 +5903,7 @@ class DataTable(ttk.Frame):
         r0, c0, r1, c1 = bounds
         target_r = self._find_neighbor_extent(r1, c0, c1)
         if target_r > r1:
-            self._execute_fill_down(r1, target_r, c0, c1, first_r=r0)
+            self._execute_fill(r0, c0, r1, c1, target_r, c1, "down")
             self.select_block(r0, c0, target_r, c1, anchor=(r0, c0), cursor=(target_r, c1))
             self.tree.see(str(target_r))
         return "break"
@@ -4835,7 +5943,6 @@ class DataTable(ttk.Frame):
 
         return rows_count - 1
 
-    # -- a mathematical series instead of a copy ---------------------------
     def cell_number(self, row, column):
         """The value of one cell as a number, or None if it is not one."""
         if not (0 <= row < len(self.df) and 0 <= column < len(self.df.columns)):
@@ -4909,29 +6016,57 @@ class DataTable(ttk.Frame):
                 empty = False
             self.tree.set(str(row), name, "" if empty else str(value))
 
-    def _execute_fill_down(self, source_r, target_r, c0, c1, first_r=None):
-        """Carry the block on downwards, from `source_r` to `target_r`.
-
-        Every column decides for itself.  Two or more **numbers** selected
-        in it are a mathematical series and it is continued with their
-        step; a **formula** is replicated with its row references moved
-        along; anything else is simply copied - which is what a single
-        cell always does.
-        """
-        for c in range(c0, c1 + 1):
-            step = None if first_r is None else self.series_step(first_r, source_r, c)
-            source_formula = self.cell_formulas.get((source_r, c))
-            source_val = self.df.iat[source_r, c]
-            anchor = self.cell_number(source_r, c) if step is not None else None
-            col_name = self.df.columns[c]
-            for r in range(source_r + 1, target_r + 1):
+    def _execute_fill(self, r0, c0, r1, c1, target_r, target_c, direction):
+        if direction == "down":
+            s_r0, s_r1, s_c0, s_c1 = r1, r1, c0, c1
+            range_r = range(r1 + 1, target_r + 1)
+            range_c = range(c0, c1 + 1)
+            delta_sign_r = 1
+            delta_sign_c = 0
+        elif direction == "up":
+            s_r0, s_r1, s_c0, s_c1 = r0, r0, c0, c1
+            range_r = range(r0 - 1, target_r - 1, -1)
+            range_c = range(c0, c1 + 1)
+            delta_sign_r = -1
+            delta_sign_c = 0
+        elif direction == "right":
+            s_r0, s_r1, s_c0, s_c1 = r0, r1, c1, c1
+            range_r = range(r0, r1 + 1)
+            range_c = range(c1 + 1, target_c + 1)
+            delta_sign_r = 0
+            delta_sign_c = 1
+        elif direction == "left":
+            s_r0, s_r1, s_c0, s_c1 = r0, r1, c0, c0
+            range_r = range(r0, r1 + 1)
+            range_c = range(c0 - 1, target_c - 1, -1)
+            delta_sign_r = 0
+            delta_sign_c = -1
+            
+        import copy
+        
+        
+        for r in range_r:
+            for c in range_c:
+                if direction in ("up", "down"):
+                    src_r = s_r0
+                    src_c = c
+                    step = self.series_step(r0, r1, c) if r0 != r1 else None
+                else:
+                    src_r = r
+                    src_c = s_c0
+                    step = None
+                
+                source_formula = self.cell_formulas.get((src_r, src_c))
+                source_val = self.df.iat[src_r, src_c]
+                
                 if step is not None:
+                    anchor = self.cell_number(src_r, src_c)
                     self.cell_formulas.pop((r, c), None)
-                    self._set_cell_value(
-                        r, c, self.series_value(anchor, step, r - source_r))
+                    self._set_cell_value(r, c, self.series_value(anchor, step, abs(r - src_r)))
                 elif source_formula is not None:
-                    delta_row = r - source_r
-                    adj = adjust_formula_references(source_formula, delta_row=delta_row, delta_col=0)
+                    delta_row = r - src_r
+                    delta_col = c - src_c
+                    adj = adjust_formula_references(source_formula, delta_row=delta_row, delta_col=delta_col)
                     self.cell_formulas[(r, c)] = adj
                 else:
                     self.cell_formulas.pop((r, c), None)
@@ -7077,9 +8212,20 @@ class PlotWindow(tk.Toplevel):
         straight line across it.
         """
         data = pd.DataFrame({
-            "x": pd.to_numeric(df[x_col], errors="coerce"),
-            "y": pd.to_numeric(df[y_col], errors="coerce"),
+            "x": df[x_col],
+            "y": df[y_col],
         })
+        
+        # When plotting multiple tabs merged together, pd.merge(how="outer")
+        # introduces np.nan for rows that only exist in the other tab. We MUST
+        # drop those so they don't break our lines. Original gaps were marked
+        # with "<GAP>" before the merge, so ~pd.isna() preserves them.
+        valid = ~pd.isna(data["y"])
+        data = data[valid].copy()
+        
+        data["x"] = pd.to_numeric(data["x"], errors="coerce")
+        data["y"] = pd.to_numeric(data["y"], errors="coerce")
+        
         return (data["x"].to_numpy(dtype=float),
                 data["y"].to_numpy(dtype=float))
 
@@ -7517,6 +8663,30 @@ class PlotWindow(tk.Toplevel):
             patch.set_picker(True)
         self.bar_containers[f"hist_{column}"] = container
         return container
+
+    def draw_as_smooth_line(self, names):
+        """Draw these curves as a plain line: no markers, no bars.
+
+        A fitted curve is written with many points close together, so the
+        markers of a `Line + Symbol` diagram would be a solid band over the
+        measurements it belongs to.
+        """
+        changed = False
+        for name in names:
+            line = self.series.get(name)
+            if line is None:
+                continue
+            self.series_style[name] = "line"
+            line.set_linestyle("-")
+            line.set_marker("None")
+            self.refresh_series_visuals(name)
+            changed = True
+        if changed:
+            self.apply_style_axes()
+            self._rescale()
+            self.refresh_legend()
+            self.draw()
+        return changed
 
     def restore_series_data(self, column):
         """Put the values of a column back on its curve, whatever it drew.
@@ -11897,43 +13067,166 @@ separate curve.  Two cases do without an X column: a **histogram** counts
 every column as a sample of raw values, and a sheet whose **first column is
 the only filled one** draws that column against the **row numbers**.
 
+The table is not one sheet but as many as are needed: the **tabs** along its
+bottom edge each hold a table of their own (section 1.1).
+
 ### Toolbar
 
-| Button | What it does |
-| --- | --- |
-| Plot (Split button) | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the dropdown arrow opens the style menu to choose among 9 styles. |
-| Update plot | Sends the current data to the diagrams that are already open, keeping every style setting. |
-| Add row (icon, split button) | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
-| Delete row (icon) | Deletes every row the highlighted block touches. |
-| Add column (icon, split button) | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
-| Delete column (icon) | Deletes the column of the selected cell (after a confirmation). |
-| Settings... | Opens the settings editor (see section 4). |
+The toolbar has **two rows**.  The first one carries everything that acts on
+the table, the second one the regression and the check button that draws two
+sheets together:
+
+| Button | Row | What it does |
+| --- | --- | --- |
+| Plot (split button) | first | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the arrow opens the style menu to choose among 9 styles. |
+| Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
+| Open / Save data file (icons) | first | The same as the two `File` menu commands. |
+| (the Plot icon) | first | A picture of the style that will be drawn - it changes with the style chosen from the arrow. |
+| Add row (icon, split button) | first | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
+| Delete row (icon) | first | Deletes every row the highlighted block touches. |
+| Add column (icon, split button) | first | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
+| Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
+| Settings... | first | Opens the settings editor (see section 4). |
+| **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
+| **Plot with previous tab** | second | Draws this sheet **and the one before it** in the same diagram.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
 `File` menu.
 
-### The row and column icons
+### 1.1 Sheets (tabs)
 
-The four row and column tools are **coloured icons**, drawn in the same
-style as the `T`, shape and arrow buttons of the diagram window.  Each one
-is a tiny picture of a sheet of three bands - lying down for the rows,
-standing up for the columns - and the band that is painted shows exactly
-what will happen:
+Along the bottom of the table there is a **tab for every sheet** and a `+`
+that makes a new one.  Each sheet is a full table of its own: its own
+columns, its own values, its own formulas and its own check buttons.  The
+sheet in front is the one every command of the toolbar and of the menus
+works on.
 
-* **Blue adds.**  The blue band is the new row or column, drawn where it
-  will appear: at the top or the bottom of the little sheet for a row,
-  at the left or the right for a column.  A band standing **apart** from
-  the other two means the far end of the whole sheet.  A blue `⊕` marks
-  the button as one that adds something.
-* **Red deletes.**  The red band in the middle is the row or column that
-  goes away, and the red `⊗` says that something is removed.
+* **A new sheet**: click `+`.  It opens empty and is called `Data 2`,
+  `Data 3`, and so on.
+* **Renaming, colouring, deleting**: right click (or Ctrl-click) a tab.
+  The name of a sheet matters: it is what a curve of that sheet is called
+  in a diagram that draws several sheets at once.  The last sheet is never
+  deleted.
+* **Every sheet is written into the `.aplt` file** with its name, its data,
+  its formulas, which of its columns are ticked, and whether it is drawn
+  with the one before it.  A file written by an older version - one single
+  table - opens as a single sheet.
+
+**Two sheets in one diagram.**  Two data files loaded into two sheets are
+often two measurements of the same thing.  Ticking **`Plot with previous
+tab`** on the second sheet draws the two together: the X columns are matched
+up, and every curve is named `column (sheet)` - `Signal (Monday)`,
+`Signal (Tuesday)` - so the legend says which measurement it came from.  The
+chain goes on: a third sheet with the box ticked joins the two before it.
+
+Every diagram remembers **which sheet it was opened from**, so `Update`
+brings each of them up to date from its own sheet and a second sheet never
+overwrites the diagram of the first one.
+
+### 1.2 Regression: fitting a curve to the data
+
+The `Regression` button of the second toolbar row opens a window that fits a
+curve to the columns of the sheet in front.  The **methods stand on the
+left**; choosing one shows on the right exactly what it needs.
+
+Eight methods are offered, and every one of them works out its own starting
+values, so all of them fit **out of the box** - there is nothing to set up
+before pressing `Fit`:
+
+| Method | The curve | Its parameters |
+| --- | --- | --- |
+| Straight line | `y = a*x + b` | slope, intercept |
+| Polynomial | `y = c0 + c1*x + c2*x^2 + ...` | the coefficients (the **order** is a setting) |
+| Exponential growth | `y = Y0 * exp(k*x)` | Y0, rate (and the doubling time) |
+| One phase decay | `y = (Y0 - Plateau)*exp(-K*x) + Plateau` | Y0, plateau, rate (and the half life) |
+| Two phase decay | `y = Plateau + Fast*exp(-Kf*x) + Slow*exp(-Ks*x)` | plateau, two spans, two rates (and both half lives) |
+| Logistic curve | `y = Bottom + (Top-Bottom)/(1 + exp(-k*(x-x50)))` | bottom, top, midpoint, steepness |
+| Gaussian distribution | `y = Base + A*exp(-(x-Mean)^2/(2*SD^2))` | baseline, amplitude, mean, width (and the FWHM and the area) |
+| Moving average | the running mean of n points | the window (a setting, not a fitted number) |
+
+Everything but the moving average is fitted by **least squares**: the sum of
+the squared distances between the data and the curve is made as small as it
+goes.  The straight line and the polynomial are solved exactly; the four
+curved ones are fitted with the **Levenberg-Marquardt** method, written into
+the program itself, so nothing beyond numpy is needed.
+
+**What the right hand side offers**
+
+* **Settings** of the method that has them: the `Order` of a polynomial
+  (1 to 10), the `Window` of a moving average.
+* **Columns to fit**: every column after the first one.  The ones that are
+  ticked for plotting are chosen to begin with; click, `Shift`-click or
+  `Ctrl/Cmd`-click to choose others.  The **first column holds the X
+  values** (a first column of names counts the rows instead).
+* **Parameters**: one line for every parameter of the method.  Leaving the
+  `Start value` empty lets the program work it out from the data, which is
+  what usually happens.  Typing one in says where the fit should set out
+  from - useful when a difficult fit runs away - and ticking `Hold` beside
+  it **keeps that parameter fixed** at the value typed in while the others
+  are fitted (a plateau that is known, a baseline that is zero).
+* **The curve that is written**: how many `Points` it is drawn with (100)
+  and how far `Past the data` it reaches (5 per cent of the range at both
+  ends).  A moving average says nothing outside the measurements, so it is
+  never drawn past them.
+
+**What `Fit` does**
+
+1. Every chosen column is fitted, and a **new sheet** appears right after
+   the sheet that was fitted, called `Fit` (`Fit 2`, `Fit 3`, ...).
+2. That sheet holds the **X values** of the curve in its first column and
+   the fitted curve of every column beside it (`A fit`, `B fit`, ...) - 100
+   points over the range of the data, widened by 5 per cent.
+3. Then **one column is left empty**, and after it come the **parameters**:
+   a column of names (`Parameter`) and one column of values for every curve
+   that was fitted.  Under the parameters stand what follows from them (a
+   half life, the FWHM...), then `R squared`, `RMSE`, the number of points
+   fitted and the name of the method.
+4. The parameter columns are **not data to draw**: their `y_L` / `y_R` check
+   buttons are switched off, so they never become curves.
+5. The new sheet has **`Plot with previous tab` ticked**, and the diagram is
+   refreshed at once: the measurements keep their markers and the fitted
+   curve is drawn over them as a **smooth line**.
+
+Everything in the new sheet is an ordinary sheet: the numbers can be edited,
+copied, saved with the graph and plotted in any style.
+
+### The toolbar icons
+
+Every icon of the toolbar is **drawn by the program itself** - there are no
+picture files to carry around.  Each one is painted four times as large as
+it is shown and then shrunk, which is what gives it smooth edges, and they
+are all kept in the same **pastel and grey** shades so the toolbar stays
+quiet beside the table.
+
+The **Plot** button carries a little picture of the style it will draw, and
+that picture **follows the style**: a line, a line with markers, scattered
+points, bars, error bars, a histogram, a staircase, a grid of counts or a
+pie.  Choosing another style from its arrow menu changes the icon at once,
+so the button always shows what clicking it will open.
+
+The four row and column tools are a tiny picture of a **sheet of three
+bands** - lying down for the rows, standing up for the columns - with a
+small badge in the corner:
+
+* **Pastel blue and a `+` add.**  The blue band is the new row or column,
+  and it is drawn **where it will appear**: at the near end for
+  *above* / *before*, at the far end for *below* / *after*, and standing
+  **apart** from the other two for *at the end of the sheet*.
+* **Pastel rose and a `-` delete.**  The rose band in the middle is the row
+  or column that goes away.
+
+The two file tools beside them - an open folder and a disk - are drawn in
+the same shades.
 
 Resting the pointer on any of them brings a **popup text** that spells the
-operation out in words - *"Add row: inserts an empty row below the selected
-cell (the arrow chooses the place)"*, *"Delete column: removes the column of
-the selected cell, with its data"*, and so on.  The text follows the place
-that is chosen, so the button always says what it is about to do.
+operation out in words - *"Insert row below (click arrow for options)"*,
+*"Delete column"*, and so on.  The text follows the place that is chosen, so
+the button always says what it is about to do.
+
+The icons need **Pillow** (`pip install pillow`), which is used to paint
+them.  Without it every button simply carries its name in words and
+everything else works exactly the same.
 
 **Adding around the selected cell.**  The two adding icons are **split
 buttons**, like `Plot`:
@@ -13582,7 +14875,28 @@ class App:
             return self.tables[idx]
         return self.tables[0] if self.tables else None
 
-    def add_tab(self, name, blank=False):
+    def use_tabs(self, count):
+        """Have exactly `count` sheets, using the ones that are open.
+
+        A sheet that is there already is emptied and filled again rather
+        than destroyed and built anew, so nothing that holds on to it is
+        left pointing at a widget that no longer exists.
+        """
+        count = max(1, int(count))
+        while len(self.tables) > count:
+            table = self.tables.pop()
+            self.tab_images.pop(str(table.master), None)
+            self.notebook.forget(table.master)
+            table.master.destroy()
+        while len(self.tables) < count:
+            self.add_tab(f"Data {len(self.tables) + 1}")
+        for table in self.tables:               # a clean sheet to fill
+            table.plot_with_previous_var.set(False)
+            table.cell_formulas = {}
+        return self.tables
+
+    def add_tab(self, name, blank=False, at=None):
+        """A new sheet, at the end or (with `at`) in the middle."""
         frame = ttk.Frame(self.notebook)
         table = DataTable(frame, self.settings,
                           on_rename=self._column_renamed,
@@ -13591,14 +14905,86 @@ class App:
         table.pack(fill="both", expand=True)
         if blank:
             table.set_dataframe(self._empty_frame(), check_all=True, blank=True)
-            
-        self.tables.append(table)
+
+        last = len(self.tables) if at is None else max(0, min(int(at),
+                                                             len(self.tables)))
+        self.tables.insert(last, table)
         if hasattr(self, "plus_frame") and str(self.plus_frame) in self.notebook.tabs():
-            idx = self.notebook.index(self.plus_frame)
-            self.notebook.insert(idx, frame, text=name)
+            end = self.notebook.index(self.plus_frame)
+            self.notebook.insert(min(last, end), frame, text=name)
         else:
-            self.notebook.add(frame, text=name)
-            
+            self.notebook.insert(min(last, len(self.notebook.tabs())),
+                                 frame, text=name)
+        return table
+
+    def tab_names(self):
+        return [str(self.notebook.tab(index, "text"))
+                for index in range(len(self.tables))]
+
+    def free_tab_name(self, stem):
+        """`stem`, `stem 2`, `stem 3`... - whatever is not taken yet."""
+        taken = set(self.tab_names())
+        if stem not in taken:
+            return stem
+        number = 2
+        while f"{stem} {number}" in taken:
+            number += 1
+        return f"{stem} {number}"
+
+    def add_fit_tab(self, frame, quiet_columns=(), plot=True, name=None):
+        """The answer of a regression: a sheet of its own after this one.
+
+        It goes right after the sheet it was fitted to, with "Plot with
+        previous tab" ticked, so the curve and the measurements stand in
+        the same diagram.  The columns holding the parameters are not data
+        to draw: their two check buttons are switched off.
+        """
+        source = self.active_tab_index
+        title = name or self.free_tab_name(FIT_TAB_PREFIX)
+        table = self.add_tab(title, at=source + 1)
+        table.set_dataframe(frame, check_all=True)
+        for column in quiet_columns:
+            table.set_column_axis(column, None)
+        table.plot_with_previous_var.set(True)
+        self.notebook.select(source + 1)
+        self._follow_active_tab()
+        if plot:
+            # the diagrams of the sheet that was fitted now draw the fit as
+            # well: the new sheet is the one that carries both of them
+            for window in self.open_windows():
+                if self.window_tab(window) == source:
+                    window.source_tab = source + 1
+            if self.open_windows():
+                self.update_plot()
+            else:
+                self.open_plot(self.current_plot_style)
+            # a fitted curve is a smooth line of a hundred points: markers
+            # on every one of them would hide the measurements behind it
+            quiet = set(str(one) for one in quiet_columns)
+            drawn = [str(one) for one in frame.columns][1:]
+            names = [one for one in drawn if one not in quiet]
+            names += [f"{one} ({title})" for one in names]
+            for window in self.open_windows():
+                window.draw_as_smooth_line(names)
+        return table
+
+    def open_regression(self, *_args):
+        """The regression window of the sheet in front."""
+        window = getattr(self, "_regression", None)
+        if window is not None:
+            try:
+                if window.winfo_exists():
+                    window.refresh_columns()
+                    window.lift()
+                    window.focus_force()
+                    return window
+            except tk.TclError:
+                pass
+        self._regression = RegressionDialog(
+            self.root, self,
+            on_close=lambda _d=None: setattr(self, "_regression", None))
+        return self._regression
+
     def _on_tab_changed(self, event):
         idx = self.notebook.index("current")
         if hasattr(self, "plus_frame") and idx == self.notebook.index(self.plus_frame):
@@ -13607,11 +14993,32 @@ class App:
             self.notebook.select(len(self.tables) - 1)
             idx = len(self.tables) - 1
             
-        if idx > 0 and idx < len(self.tables):
-            self.plot_with_previous_cb.configure(variable=self.tables[idx].plot_with_previous_var)
-            self.plot_with_previous_cb.pack(side="left", padx=(20, 0))
-        else:
-            self.plot_with_previous_cb.pack_forget()
+        self._follow_active_tab()
+        window = getattr(self, "_regression", None)
+        if window is not None:
+            try:
+                if window.winfo_exists():
+                    window.refresh_columns()
+            except tk.TclError:
+                self._regression = None
+
+    def _follow_active_tab(self):
+        """Point the check button of the toolbar at the sheet in front."""
+        box = getattr(self, "plot_with_previous_cb", None)
+        if box is None or not hasattr(self, "notebook"):
+            return False               # the toolbar is built first
+        idx = self.active_tab_index
+        if not (0 <= idx < len(self.tables)):
+            return False
+        box.configure(variable=self.tables[idx].plot_with_previous_var,
+                      state=("disabled" if idx == 0 else "normal"))
+        return True
+
+    def _plot_with_previous_changed(self):
+        """Ticking it at once draws the two sheets together."""
+        if self.open_windows():
+            self.update_plot()
+        return True
 
     def _show_tab_context_menu(self, event):
         try:
@@ -13642,7 +15049,10 @@ class App:
         if hex_value:
             img = tk.PhotoImage(width=14, height=14)
             img.put(hex_value, to=(0, 0, 14, 14))
-            self.tab_images[idx] = img
+            # kept by the sheet itself: a number would point at the wrong
+            # tab as soon as one before it is deleted, and the picture would
+            # be collected while its tab still shows it
+            self.tab_images[str(self.tables[idx].master)] = img
             self.notebook.tab(idx, image=img, compound="left")
 
     def delete_tab(self, idx):
@@ -13654,8 +15064,18 @@ class App:
         if messagebox.askyesno("Delete Tab", f"Delete tab '{current_name}' with its data?", parent=self.root):
             table = self.tables.pop(idx)
             self.notebook.forget(idx)
-            table.master.destroy() # Destroy the frame holding the table
-            self.tab_images.pop(idx, None)
+            self.tab_images.pop(str(table.master), None)
+            table.master.destroy()   # the frame that holds the sheet
+            # the diagrams know which sheet they draw: the ones after the
+            # deleted sheet moved up by one
+            for window in self.open_windows():
+                where = getattr(window, "source_tab", None)
+                if where is None:
+                    continue
+                if where > idx:
+                    window.source_tab = where - 1
+                elif where == idx:
+                    window.source_tab = min(idx, len(self.tables) - 1)
             
             if self.active_tab_index >= len(self.tables):
                 self.notebook.select(len(self.tables) - 1)
@@ -13667,7 +15087,19 @@ class App:
         self.root.focus_force()
 
     # -- user interface ----------------------------------------------------
+    @staticmethod
+    def _set_tool_icon(button, name, words):
+        """Give a toolbar button its drawn icon (or words without Pillow)."""
+        picture = file_tool_icon(name)
+        if picture is None:
+            button.configure(text=words)
+        else:
+            button.icon_img = picture        # kept, or Tk lets it go
+            button.configure(image=picture, compound="left")
+        return picture
+
     def _build_toolbar(self):
+        alt = "Opt" if sys.platform == "darwin" else "Alt"
         bar = ttk.Frame(self.root, padding=(10, 8))
         bar.pack(fill="x")
         self.current_plot_style = "line_symbol"
@@ -13680,9 +15112,27 @@ class App:
             on_menu=self._show_plot_style_menu
         )
         self.plot_split_btn.pack(side="left")
-        ttk.Button(bar, text="Update plot", command=self.update_plot).pack(
-            side="left", padx=(6, 0))
+        
+        btn_update = ttk.Button(bar, text="Update", style="Toolbutton", command=self.update_plot)
+        btn_update.pack(side="left", padx=(6, 0))
+        Tooltip(btn_update, "Update open plots")
+        
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
+        
+        self.open_data_btn = ttk.Button(bar, text="", width=0,
+                                        style="Toolbutton", command=self.load_csv)
+        self._set_tool_icon(self.open_data_btn, "open", "Open")
+        self.open_data_btn.pack(side="left")
+        Tooltip(self.open_data_btn, f"Open data file ({ACCEL_NAME}+{alt}+O)")
+
+        self.save_data_btn = ttk.Button(bar, text="", width=0,
+                                        style="Toolbutton", command=self.save_csv)
+        self._set_tool_icon(self.save_data_btn, "save", "Save")
+        self.save_data_btn.pack(side="left", padx=(2, 0))
+        Tooltip(self.save_data_btn, f"Save data file ({ACCEL_NAME}+{alt}+S)")
+        
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
+        
         # the four row / column tools: blue icons add, red ones delete
         self.add_row_btn = TableToolButton(
             bar, kind="row", action="add", where=self.row_place,
@@ -13699,10 +15149,31 @@ class App:
             bar, kind="column", action="delete", command=self.delete_column)
         self.delete_column_btn.pack(side="left", padx=(6, 0))
         
-        self.plot_with_previous_cb = ttk.Checkbutton(bar, text="Plot with previous tab")
-        # this will be packed and configured in _on_tab_changed
-        
-        ttk.Button(bar, text="Settings...", command=self.open_settings).pack(side="right")
+        btn_settings = ttk.Button(bar, text="Settings...", style="Toolbutton", command=self.open_settings)
+        btn_settings.pack(side="right")
+        Tooltip(btn_settings, "Graph settings")
+
+        # ---- the second row, under the Plot and Update buttons ----------
+        second = ttk.Frame(self.root, padding=(10, 0, 10, 8))
+        second.pack(fill="x")
+        self.second_bar = second
+
+        self.regression_btn = ttk.Button(second, text="Regression",
+                                         style="Toolbutton",
+                                         command=self.open_regression)
+        self.regression_btn.pack(side="left")
+        Tooltip(self.regression_btn,
+                "Fit a curve to the data of this sheet (Cmd/Ctrl+R)")
+
+        # the same check button on every sheet: on the first one there is
+        # nothing before it, so it is there but cannot be ticked
+        self.plot_with_previous_cb = ttk.Checkbutton(
+            second, text="Plot with previous tab",
+            command=self._plot_with_previous_changed)
+        self.plot_with_previous_cb.pack(side="left", padx=(12, 0))
+        Tooltip(self.plot_with_previous_cb,
+                "Draw this sheet and the one before it in the same diagram")
+        self._follow_active_tab()
 
     # -- where a new row or column goes -------------------------------------
     ROW_PLACES = (("Add row above the selected cell", "above"),
@@ -13821,6 +15292,10 @@ class App:
         plot_menu.add_command(label="Open diagram", command=self.open_plot)
         plot_menu.add_command(label="Update diagram (keep style)",
                               command=self.update_plot)
+        plot_menu.add_separator()
+        plot_menu.add_command(label="Regression...",
+                              accelerator=f"{ACCEL_NAME}+R",
+                              command=self.open_regression)
         if plot is not None:            # commands of this diagram window
             plot_menu.add_separator()
             plot_menu.add_command(label="Axes properties...",
@@ -13897,11 +15372,45 @@ class App:
 
     # -- file I/O ----------------------------------------------------------
     def load_csv(self, path=None):
-        """Open a csv / txt / dat file; the separator is detected by default."""
+        """Open a csv / txt / dat / xlsx file; the separator is detected by default."""
         if path is None:
             path = filedialog.askopenfilename(filetypes=DATA_PATTERNS)
         if not path:
             return None
+            
+        if str(path).lower().endswith(".xlsx"):
+            try:
+                sheets = pd.read_excel(path, sheet_name=None, engine="openpyxl")
+                if not sheets:
+                    messagebox.showerror("Error", "The Excel file contains no data.")
+                    return None
+                    
+                # Clear all tabs except the first one
+                for table in self.tables[1:]:
+                    self.notebook.forget(table.master)
+                    table.master.destroy()
+                self.tables = [self.tables[0]]
+                
+                # Load each sheet
+                first = True
+                for sheet_name, df in sheets.items():
+                    frame = df.where(df.notna(), "")
+                    if first:
+                        self.notebook.tab(0, text=sheet_name)
+                        self.tables[0].set_dataframe(frame, check_all=True)
+                        first = False
+                    else:
+                        self.add_tab(sheet_name)
+                        self.tables[-1].set_dataframe(frame, check_all=False)
+                
+                self.notebook.select(0)
+                info = {"separator": "Excel", "decimal": ".", "bad_lines": 0}
+                self.set_file_title(path, info)
+                return info
+            except Exception as error:
+                messagebox.showerror("Error", f"Could not read the Excel file: {error}")
+                return None
+
         try:
             frame, info = read_table(path,
                                      separator=self.settings.get("csv", "separator"),
@@ -13939,13 +15448,33 @@ class App:
             pass
 
     def save_csv(self):
-        if self.df.empty:
+        if not any(not tab.df.empty for tab in self.tables):
             messagebox.showinfo("Information", "There is no data to save.")
             return
         path = filedialog.asksaveasfilename(defaultextension=".csv",
                                             filetypes=DATA_PATTERNS)
         if not path:
             return
+            
+        if str(path).lower().endswith(".xlsx"):
+            try:
+                with pd.ExcelWriter(path, engine="openpyxl") as writer:
+                    for i, tab in enumerate(self.tables):
+                        if not tab.df.empty:
+                            name = self.notebook.tab(i, "text")
+                            tab.df.to_excel(writer, sheet_name=name, index=False)
+                messagebox.showinfo("Successful", "The file has been saved.")
+                return
+            except Exception as error:
+                messagebox.showerror("Error", f"Could not save the file: {error}")
+                return
+                
+        # Warn if saving multiple tabs to a single CSV
+        if len(self.tables) > 1:
+            messagebox.showwarning("Multiple Tabs Detected", 
+                                   "Saving as CSV or TXT only saves the currently active tab. "
+                                   "To save all tabs in one file, please save as an Excel (.xlsx) file.")
+                                   
         separator = separator_from_setting(self.settings.get("csv", "separator"))
         if separator in (None, WHITESPACE_SEP):
             separator = "\t" if str(path).lower().endswith((".txt", ".dat")) else ","
@@ -14152,6 +15681,7 @@ class App:
             "o": wrap(self.open_graph),
             "s": wrap(self.save_graph),
             "e": wrap(self.export_figure, plot),
+            "r": wrap(self.open_regression),
         }
         with_alt = {
             "o": wrap(self.load_csv),
@@ -14175,16 +15705,35 @@ class App:
 
     def project_document(self):
         """Data plus the full state of every open diagram."""
-        rows = [[value for value in row]
-                for row in self.df.itertuples(index=False, name=None)]
-        formulas = {f"{r},{c}": formula
-                    for (r, c), formula in getattr(self.table, "cell_formulas", {}).items()}
+        tabs_data = []
+        for i, tab in enumerate(self.tables):
+            df = tab.df
+            rows = [[value for value in row]
+                    for row in df.itertuples(index=False, name=None)]
+            formulas = {f"{r},{c}": formula
+                        for (r, c), formula in getattr(tab, "cell_formulas", {}).items()}
+            tabs_data.append({
+                "name": self.notebook.tab(i, "text"),
+                "plot_with_previous": bool(
+                    getattr(tab, "plot_with_previous_var", None)
+                    and tab.plot_with_previous_var.get()),
+                "columns": [str(name) for name in df.columns],
+                "rows": rows,
+                # which of the two check buttons of every column is ticked:
+                # a sheet with no diagram of its own would lose them
+                "axes": {str(name): tab.column_axis(name)
+                         for name in df.columns},
+                "formulas": formulas
+            })
+            
+        first_tab = tabs_data[0] if tabs_data else {"columns": [], "rows": [], "formulas": {}}
         return {
-            "format": "aplot", "version": 1, "application": APP_NAME,
-            "data": {"columns": [str(name) for name in self.df.columns],
-                     "rows": rows,
-                     "formulas": formulas},
-            "plots": [window.to_state() for window in self.open_windows()],
+            "format": "aplot", "version": 2, "application": APP_NAME,
+            "data": first_tab,
+            "tabs": tabs_data,
+            "plots": [dict(window.to_state(),
+                            source_tab=self.window_tab(window))
+                      for window in self.open_windows()],
         }
 
     def save_project(self, path=None, quiet=False):
@@ -14193,7 +15742,8 @@ class App:
         `quiet` is the Cmd/Ctrl+S of a graph that already has a file: it is
         simply brought up to date, without a dialog of any kind.
         """
-        self.table._commit_edit()
+        for tab in self.tables:
+            tab._commit_edit()
         if path is None:
             path = filedialog.asksaveasfilename(
                 defaultextension=PROJECT_SUFFIX,
@@ -14234,33 +15784,51 @@ class App:
                 "Error", f"This is not an {APP_NAME} ({PROJECT_SUFFIX}) file.")
             return False
 
+        tabs_data = document.get("tabs")
         data = document.get("data") or {}
         columns = data.get("columns") or []
         rows = data.get("rows") or []
-        if not columns:
+        
+        if not columns and not tabs_data:
             messagebox.showerror("Error", "The file contains no data.")
             return False
             
-        for table in self.tables:
-            self.notebook.forget(table.master)
-            table.master.destroy()
-        self.tables = []
-        self.add_tab("Data 1")
-        self.notebook.select(0)
-            
-        frame = pd.DataFrame(rows, columns=columns)
-        frame = frame.where(frame.notna(), "")   # JSON null -> empty cell
-        self.table.set_dataframe(frame, check_all=True)
+        # the sheets that are already open are used again instead of being
+        # thrown away and built anew: everything that holds on to a table -
+        # a diagram, a property window, the regression - keeps working
+        if not tabs_data:
+            tabs_data = [{"name": "Data 1", "columns": columns, "rows": rows,
+                          "formulas": (data.get("formulas") or {})}]
+        self.use_tabs(len(tabs_data))
+        for i, tab_data in enumerate(tabs_data):
+            table = self.tables[i]
+            t_cols = tab_data.get("columns") or []
+            t_rows = tab_data.get("rows") or []
+            self.notebook.tab(i, text=tab_data.get("name", f"Data {i + 1}"))
 
-        raw_formulas = data.get("formulas") or {}
-        loaded_formulas = {}
-        for k, v in raw_formulas.items():
-            try:
-                parts = k.split(",")
-                loaded_formulas[(int(parts[0]), int(parts[1]))] = str(v)
-            except (ValueError, IndexError):
-                pass
-        self.table.cell_formulas = loaded_formulas
+            frame = pd.DataFrame(t_rows, columns=t_cols)
+            frame = frame.where(frame.notna(), "")   # JSON null -> empty cell
+            table.set_dataframe(frame, check_all=(i == 0))
+
+            saved_axes = tab_data.get("axes")
+            if isinstance(saved_axes, dict):
+                for name, code in saved_axes.items():
+                    table.set_column_axis(name, code)
+
+            if tab_data.get("plot_with_previous"):
+                table.plot_with_previous_var.set(True)
+
+            raw_formulas = tab_data.get("formulas") or {}
+            loaded_formulas = {}
+            for k, v in raw_formulas.items():
+                try:
+                    parts = str(k).split(",")
+                    loaded_formulas[(int(parts[0]), int(parts[1]))] = str(v)
+                except (ValueError, IndexError):
+                    pass
+            table.cell_formulas = loaded_formulas
+            
+        self.notebook.select(0)
 
         for window in self.open_windows():   # replace the current diagrams
             window.destroy()
@@ -14268,11 +15836,16 @@ class App:
         for state in document.get("plots") or []:
             # a saved project brings its own curves: the whole table is used,
             # and its own style - a histogram reads the columns differently
+            index = state.get("source_tab", 0)
+            index = (int(index) if isinstance(index, (int, float))
+                     and 0 <= int(index) < len(self.tables) else 0)
             window = PlotWindow(
-                self.root, self.df.copy(), self.settings, app=self,
+                self.root, self.plot_data(index=index), self.settings, app=self,
+                layout=self.plot_layout(index=index),
                 plot_style=str(state.get("plot_style") or "line_symbol"))
             if not window.winfo_exists():
                 continue
+            window.source_tab = index
             window.apply_state(state)
             self.plot_windows.append(window)
         self._remember_saved(path)
@@ -14449,61 +16022,101 @@ class App:
                 return False
         return True
 
-    def plot_data(self, _style=None):
-        """The data that goes to the diagrams: the ticked columns only."""
-        idx = self.active_tab_index
-        df = self.table.plot_dataframe(1).copy()
-        
-        if idx > 0 and self.table.plot_with_previous_var.get():
-            prev_table = self.tables[idx - 1]
-            prev_df = prev_table.plot_dataframe(1).copy()
-            
-            prev_layout = prev_table.plot_layout()
-            curr_layout = self.table.plot_layout()
-            
-            prev_x = prev_layout["x"]
-            curr_x = curr_layout["x"]
-            
-            if prev_x and curr_x and not prev_df.empty and not df.empty:
-                if prev_x != curr_x:
-                    df = df.rename(columns={curr_x: prev_x})
-                
-                prev_name = self.notebook.tab(idx - 1, "text")
-                curr_name = self.notebook.tab(idx, "text")
-                
-                prev_y = [c for c in prev_df.columns if c != prev_x]
-                curr_y = [c for c in df.columns if c != prev_x]
-                
-                prev_df = prev_df.rename(columns={c: f"{c} ({prev_name})" for c in prev_y})
-                df = df.rename(columns={c: f"{c} ({curr_name})" for c in curr_y})
-                
-                merged = pd.merge(prev_df, df, on=prev_x, how="outer")
-                return merged
-                
-        return df
+    def tab_chain(self, index=None):
+        """The sheets that are drawn together, in the order they are drawn.
 
-    def plot_layout(self):
-        """Which axis every ticked column belongs to."""
-        idx = self.active_tab_index
-        layout = self.table.plot_layout()
+        A sheet whose "Plot with previous tab" is ticked is drawn with the
+        one before it - and that one with the one before it again, so a
+        whole run of sheets can stand in the same diagram.
+        """
+        idx = self.active_tab_index if index is None else int(index)
+        idx = max(0, min(idx, len(self.tables) - 1)) if self.tables else 0
+        chain = [idx]
+        while (chain[-1] > 0
+               and getattr(self.tables[chain[-1]], "plot_with_previous_var", None)
+               and self.tables[chain[-1]].plot_with_previous_var.get()):
+            chain.append(chain[-1] - 1)
+        chain.reverse()
+        return chain
+
+    def plot_data(self, _style=None, index=None):
+        """The data that goes to the diagrams: the ticked columns only."""
+        idx = (self.active_tab_index if index is None
+               else max(0, min(int(index), len(self.tables) - 1)))
         
-        if idx > 0 and self.table.plot_with_previous_var.get():
-            prev_layout = self.tables[idx - 1].plot_layout()
+        chain = self.tab_chain(idx)
+        if len(chain) == 1:
+            return self.tables[idx].plot_dataframe(1).copy()
             
-            prev_name = self.notebook.tab(idx - 1, "text")
-            curr_name = self.notebook.tab(idx, "text")
+        merged_df = None
+        base_x = None
+        
+        for i in chain:
+            tab = self.tables[i]
+            df = tab.plot_dataframe(1).copy()
+            layout = tab.plot_layout()
+            curr_x = layout.get("x")
             
-            merged_layout = {"x": prev_layout["x"], "x_side": prev_layout["x_side"], "y": {}}
-            
-            for y, side in prev_layout.get("y", {}).items():
-                merged_layout["y"][f"{y} ({prev_name})"] = side
+            if not curr_x or df.empty:
+                continue
                 
-            for y, side in layout.get("y", {}).items():
-                merged_layout["y"][f"{y} ({curr_name})"] = side
+            tab_name = self.notebook.tab(i, "text")
+            
+            if merged_df is None:
+                merged_df = df
+                base_x = curr_x
+                curr_y = [c for c in merged_df.columns if c != base_x]
+                merged_df[curr_y] = merged_df[curr_y].fillna("<GAP>")
+                merged_df = merged_df.rename(columns={c: f"{c} ({tab_name})" for c in curr_y})
+            else:
+                if curr_x != base_x:
+                    df = df.rename(columns={curr_x: base_x})
+                curr_y = [c for c in df.columns if c != base_x]
+                df[curr_y] = df[curr_y].fillna("<GAP>")
+                df = df.rename(columns={c: f"{c} ({tab_name})" for c in curr_y})
+                merged_df = pd.merge(merged_df, df, on=base_x, how="outer")
                 
+        if merged_df is not None:
+            try:
+                merged_df = merged_df.sort_values(by=base_x, ignore_index=True)
+            except Exception:
+                pass
+            return merged_df
+
+        return self.tables[idx].plot_dataframe(1).copy()
+
+    def plot_layout(self, index=None):
+        """Which axis every ticked column belongs to."""
+        idx = (self.active_tab_index if index is None
+               else max(0, min(int(index), len(self.tables) - 1)))
+        chain = self.tab_chain(idx)
+        if len(chain) == 1:
+            return self.tables[idx].plot_layout()
+            
+        merged_layout = None
+        
+        for i in chain:
+            tab = self.tables[i]
+            layout = tab.plot_layout()
+            curr_x = layout.get("x")
+            
+            if not curr_x:
+                continue
+                
+            tab_name = self.notebook.tab(i, "text")
+            
+            if merged_layout is None:
+                merged_layout = {"x": curr_x, "x_side": layout.get("x_side", "bottom"), "y": {}}
+                for y, side in layout.get("y", {}).items():
+                    merged_layout["y"][f"{y} ({tab_name})"] = side
+            else:
+                for y, side in layout.get("y", {}).items():
+                    merged_layout["y"][f"{y} ({tab_name})"] = side
+                    
+        if merged_layout is not None:
             return merged_layout
-            
-        return layout
+
+        return self.tables[idx].plot_layout()
 
     def open_windows(self):
         """The diagrams that are still open."""
@@ -14516,10 +16129,12 @@ class App:
         style = plot_style or getattr(self, "current_plot_style", "line_symbol")
         if not self._plottable(style):
             return None
-        window = PlotWindow(self.root, self.plot_data(), self.settings,
-                            app=self, layout=self.plot_layout(),
+        index = self.active_tab_index
+        window = PlotWindow(self.root, self.plot_data(index=index), self.settings,
+                            app=self, layout=self.plot_layout(index=index),
                             plot_style=style)
         if window.winfo_exists():
+            window.source_tab = index      # the sheet this diagram draws
             self.plot_windows.append(window)
             return window
         return None
@@ -14534,11 +16149,20 @@ class App:
         if not windows:
             self.open_plot()  # nothing to update yet: open the first diagram
             return
-        data = self.plot_data()
-        layout = self.plot_layout()
+        # every diagram is brought up to date from its own sheet, so a
+        # second sheet does not overwrite the diagram of the first one
         for window in windows:
-            window.update_data(data.copy(), layout=layout)
+            index = self.window_tab(window)
+            window.update_data(self.plot_data(index=index),
+                               layout=self.plot_layout(index=index))
             window.lift()
+
+    def window_tab(self, window):
+        """The sheet a diagram was made from (the one in front by default)."""
+        index = getattr(window, "source_tab", None)
+        if index is None or not (0 <= int(index) < len(self.tables)):
+            return self.active_tab_index
+        return int(index)
 
 
 def main():
