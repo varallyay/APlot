@@ -131,6 +131,7 @@ from matplotlib.legend import Legend
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Polygon, Rectangle
+from matplotlib.text import Text
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                MultipleLocator, NullLocator)
 from matplotlib.transforms import Affine2D
@@ -635,6 +636,47 @@ def read_table(path, separator="auto", decimal="auto"):
 # persistent configuration
 # --------------------------------------------------------------------------
 
+def font_families():
+    """Every font family this computer offers, in alphabetical order."""
+    try:
+        from matplotlib import font_manager
+        names = sorted(set(font_manager.get_font_names()))
+    except (ImportError, AttributeError, OSError):
+        names = []
+    return names or ["DejaVu Sans"]
+
+
+def resolved_font_family():
+    """The font matplotlib is drawing with right now, by name."""
+    try:
+        from matplotlib import font_manager
+        path = font_manager.findfont(
+            font_manager.FontProperties(family=matplotlib.rcParams["font.family"]))
+        name = font_manager.FontProperties(fname=path).get_name()
+        return name if name in set(font_families()) else font_families()[0]
+    except (ImportError, AttributeError, OSError, ValueError):
+        return "DejaVu Sans"
+
+
+def known_font_family(name):
+    """`name` when this computer really has that font, otherwise None."""
+    name = str(name or "").strip()
+    return name if name and name in set(font_families()) else None
+
+
+DEFAULT_FONT_FAMILY = resolved_font_family()
+
+
+def use_font_family(name):
+    """Draw every diagram made from now on with this font."""
+    family = known_font_family(name)
+    if family is None:
+        return None
+    matplotlib.rcParams["font.family"] = [family]
+    return family
+
+
+
 DEFAULTS = {
     "window": {
         "main_width": 950, "main_height": 520,
@@ -664,6 +706,7 @@ DEFAULTS = {
         "fill_follows_line": True,
     },
     "fonts": {
+        "family": DEFAULT_FONT_FAMILY,
         "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
@@ -701,6 +744,7 @@ DEFAULTS = {
 }
 
 # (key, label, kind, extra) - kind: int / float / bool / text / choice / color
+#                                   / font (the list of the installed fonts)
 SETTINGS_SPEC = [
     ("window", "Windows", [
         ("main_width", "Main window width [px]", "int"),
@@ -717,16 +761,17 @@ SETTINGS_SPEC = [
         ("auto_extend", "Add a new row when leaving the last one", "bool"),
     ]),
     ("plot", "Plot", [
-        ("fig_width", "Figure width [inch]", "float"),
-        ("fig_height", "Figure height [inch]", "float"),
+        # a list of two settings puts them side by side on one line
+        [("fig_width", "Figure width [inch]", "float"),
+         ("fig_height", "Figure height [inch]", "float")],
         ("dpi", "Resolution [dpi]", "int"),
         ("title_template", "Title ({x} = name of the X column)", "text"),
         ("y_label", "Default Y axis label", "text"),
-        ("line_style", "Line style", "choice", names(LINE_STYLES)),
-        ("line_width", "Line width", "float"),
+        [("line_style", "Line style", "choice", names(LINE_STYLES)),
+         ("line_width", "Line width", "float")],
         ("marker", "Marker", "choice", names(MARKERS)),
-        ("marker_size", "Marker size", "float"),
-        ("marker_edge_width", "Marker edge width", "float"),
+        [("marker_size", "Marker size", "float"),
+         ("marker_edge_width", "Marker edge width", "float")],
         ("hollow_markers", "Hollow markers (no fill)", "bool"),
         ("legend_visible", "Show legend", "bool"),
         ("legend_location", "Legend position", "choice", LEGEND_LOCATIONS),
@@ -736,12 +781,13 @@ SETTINGS_SPEC = [
         ("legend_transparent", "Transparent legend background", "bool"),
         ("fill_under", "Fill under the curves", "bool"),
         ("fill_follows_line", "Fill colour follows the curve", "bool"),
-        ("fill_color", "Fill colour (when it does not)", "color"),
-        ("fill_alpha", "Fill opacity (0-1)", "float"),
+        [("fill_color", "Fill colour (when it does not)", "color"),
+         ("fill_alpha", "Fill opacity (0-1)", "float")],
         ("fill_pattern", "Fill pattern", "choice", names(HATCH_PATTERNS)),
         ("fill_base", "Fill down to", "choice", names(FILL_BASES)),
     ]),
     ("fonts", "Fonts", [
+        ("family", "Font of the diagrams", "font"),
         ("title", "Plot title size", "int"),
         ("title_color", "Plot title colour", "color"),
         ("axis_label", "Axis label size", "int"),
@@ -1194,12 +1240,13 @@ class PlotSplitButton(ttk.Button):
     arrow on its right opens the list of the nine of them.
     """
 
-    ARROW = " \u23f7"           # the small triangle of the split button
+    LABEL = "  Plot"            # the word beside the picture
+    ARROW = "  \u23f7"          # the small triangle of the split button
 
     def __init__(self, master, style="line_symbol", width=0, height=26,
                  background=None, on_plot=None, on_menu=None):
-        super().__init__(master, text=self.ARROW, width=0, style="Toolbutton",
-                         compound="left", command=on_plot)
+        super().__init__(master, text=self.LABEL + self.ARROW, width=0,
+                         style="Toolbutton", compound="left", command=on_plot)
         self.style = style
         self.icon_img = None
         self.on_menu = on_menu
@@ -1219,9 +1266,10 @@ class PlotSplitButton(ttk.Button):
         picture = plot_style_icon(style)
         if picture is not None:
             self.icon_img = picture          # kept, or Tk lets it go
-            self.configure(image=picture, text=self.ARROW, compound="left")
+            self.configure(image=picture, text=self.LABEL + self.ARROW,
+                           compound="left")
         else:                                # no Pillow: a plain text button
-            self.configure(text="Plot" + self.ARROW)
+            self.configure(text=self.LABEL + self.ARROW)
         style_desc = dict((code, label) for label, code, *_ in PLOT_STYLES).get(style, "Plot")
         self.tooltip.set_text(f"Plot: {style_desc} (click arrow to change)")
         return picture
@@ -1816,8 +1864,8 @@ class SettingsDialog(ToolDialog):
         for section, title, fields in SETTINGS_SPEC:
             page = ttk.Frame(notebook, padding=12)
             notebook.add(page, text=title)
-            for row, spec in enumerate(fields):
-                self._add_field(page, row, section, spec)
+            for row, entry in enumerate(fields):
+                self._add_row(page, row, section, entry)
 
         info = ttk.Label(self.body, foreground="#666", justify="left",
                          text=f"Saved to: {config.path}\n"
@@ -1832,37 +1880,66 @@ class SettingsDialog(ToolDialog):
         ttk.Button(bar, text="Save", command=self._save).pack(side="right", padx=(0, 6))
 
     # -- construction ------------------------------------------------------
-    def _add_field(self, page, row, section, spec):
+    # a number needs far less room than a sentence
+    NUMBER_WIDTH = 9
+    TEXT_WIDTH = 22
+    CHOICE_WIDTH = 16
+    FONT_WIDTH = 24            # font names are long
+
+    def _add_row(self, page, row, section, entry):
+        """One line of a settings page: one setting, or two side by side."""
+        if isinstance(entry, (list,)) and entry and isinstance(entry[0], tuple):
+            for half, spec in enumerate(entry[:2]):
+                self._add_field(page, row, section, spec, half=half)
+            return len(entry[:2])
+        self._add_field(page, row, section, entry)
+        return 1
+
+    def _add_field(self, page, row, section, spec, half=0):
         key, label, kind = spec[0], spec[1], spec[2]
         extra = spec[3] if len(spec) > 3 else None
         value = self.config_obj.get(section, key)
+        # the left half of a line uses columns 0 and 1, the right half 2 and 3
+        column = 2 * int(half)
+        pad = (16, 8) if half else (0, 8)
 
         if kind == "bool":
             var = tk.BooleanVar(value=bool(value))
             widget = ttk.Checkbutton(page, text=label, variable=var)
-            widget.grid(row=row, column=0, columnspan=2, sticky="w", pady=3)
+            widget.grid(row=row, column=column, columnspan=2, sticky="w",
+                        padx=(pad[0], 0), pady=3)
             getter = var.get
-        elif kind == "choice":
-            var = tk.StringVar(value=str(value))
-            widget = ttk.Combobox(page, textvariable=var, state="readonly",
-                                  values=extra, width=18)
-            self.field(page, row, label, widget)
-            getter = var.get
-        elif kind == "color":
-            widget = ColorSwatch(page, safe_hex(value))
-            self.field(page, row, label, widget)
-            getter = lambda w=widget: w.color
         else:
-            var = tk.StringVar(value=str(value))
-            widget = ttk.Entry(page, textvariable=var, width=30)
-            self.field(page, row, label, widget)
-            if kind == "int":
-                getter = lambda v=var, la=label: self._parse(v.get(), la, int)
-            elif kind == "float":
-                getter = lambda v=var, la=label: self._parse(v.get(), la, float)
-            else:
+            if kind in ("choice", "font"):
+                if kind == "font":
+                    extra = font_families()
+                    value = known_font_family(value) or DEFAULT_FONT_FAMILY
+                var = tk.StringVar(value=str(value))
+                widget = ttk.Combobox(page, textvariable=var, state="readonly",
+                                      values=extra,
+                                      width=(self.FONT_WIDTH if kind == "font"
+                                             else self.CHOICE_WIDTH))
                 getter = var.get
+            elif kind == "color":
+                widget = ColorSwatch(page, safe_hex(value))
+                getter = lambda w=widget: w.color
+            else:
+                var = tk.StringVar(value=str(value))
+                width = (self.TEXT_WIDTH if kind not in ("int", "float")
+                         else self.NUMBER_WIDTH)
+                widget = ttk.Entry(page, textvariable=var, width=width)
+                if kind == "int":
+                    getter = lambda v=var, la=label: self._parse(v.get(), la, int)
+                elif kind == "float":
+                    getter = lambda v=var, la=label: self._parse(v.get(), la,
+                                                                float)
+                else:
+                    getter = var.get
+            ttk.Label(page, text=label).grid(row=row, column=column, sticky="w",
+                                             padx=pad, pady=3)
+            widget.grid(row=row, column=column + 1, sticky="w", pady=3)
         self._getters[(section, key)] = getter
+        return widget
 
     @staticmethod
     def _parse(text, label, kind):
@@ -8664,6 +8741,32 @@ class PlotWindow(tk.Toplevel):
         self.bar_containers[f"hist_{column}"] = container
         return container
 
+    def font_family(self):
+        """The font this diagram is drawn with, or None for the usual one."""
+        return known_font_family((self.fonts or {}).get("family"))
+
+    def apply_font_family(self, family=None, redraw=False):
+        """Give every text of this diagram the same font.
+
+        A text made later takes its font from the settings of the program,
+        so a diagram opened after the setting was changed is drawn with the
+        new font from the first line; this brings the ones that are already
+        on the paper over as well.
+        """
+        family = known_font_family(family) or self.font_family()
+        if family is None:
+            return False
+        if self.fonts is not None:
+            self.fonts["family"] = family
+        for text in self.fig.findobj(Text):
+            try:
+                text.set_fontfamily(family)
+            except (ValueError, AttributeError):
+                continue
+        if redraw:
+            self.draw()
+        return True
+
     def draw_as_smooth_line(self, names):
         """Draw these curves as a plain line: no markers, no bars.
 
@@ -9574,6 +9677,10 @@ class PlotWindow(tk.Toplevel):
             "",
         ]
         out += self._script_data()
+        family = self.font_family()
+        if family:
+            out += ["", "# the font of every text of the diagram",
+                    f"plt.rcParams[\"font.family\"] = [{lit(family)}]"]
         out += [
             "",
             f"DPI = {lit(dpi)}",
@@ -10164,6 +10271,7 @@ class PlotWindow(tk.Toplevel):
         return {
             "geometry": self.geometry(),
             "plot_style": self.plot_style,
+            "font_family": self.font_family() or "",
             "figure": {"width": float(self.fig.get_figwidth()),
                        "height": float(self.fig.get_figheight()),
                        "dpi": float(self.fig.get_dpi())},
@@ -10210,6 +10318,10 @@ class PlotWindow(tk.Toplevel):
 
         if "plot_style" in state:
             self.plot_style = state["plot_style"]
+
+        family = known_font_family(state.get("font_family"))
+        if family:
+            self.fonts["family"] = family
 
         legend = state.get("legend") or {}
         self.legend_visible = bool(legend.get("visible", self.legend_visible))
@@ -10360,6 +10472,7 @@ class PlotWindow(tk.Toplevel):
                 pass
         self.refresh_fills()
         self.refresh_legend()
+        self.apply_font_family()     # after everything has been drawn again
         self.draw()
 
     def _init_axes(self, plot_cfg):
@@ -10397,6 +10510,7 @@ class PlotWindow(tk.Toplevel):
                                            "label": str(right[0])}, redraw=False)
         self._pie_axes = None       # nothing was decided about the axes yet
         self.apply_style_axes()     # a pie window opens without axes
+        self.apply_font_family()
         self._rescale()
 
     def _reapply_distances(self):
@@ -10541,8 +10655,11 @@ class PlotWindow(tk.Toplevel):
                             # ndivide=1: the parts are drawn over each other, so a marker with
                             # an error bar through it is one single sample
                             handler_map={tuple: HandlerTuple(ndivide=1)})
+            family = self.font_family()
             for text in legend.get_texts():
                 text.set_color(state.get("color", "#000000"))
+                if family:                   # a box built after a font change
+                    text.set_fontfamily(family)
             box = legend.get_frame()            # surrounding box of this legend
             edge = state.get("edge", "#000000")
             face = state.get("face", "#ffffff")
@@ -13078,7 +13195,7 @@ sheets together:
 
 | Button | Row | What it does |
 | --- | --- | --- |
-| Plot (split button) | first | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the arrow opens the style menu to choose among 9 styles. |
+| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
 | Open / Save data file (icons) | first | The same as the two `File` menu commands. |
 | (the Plot icon) | first | A picture of the style that will be drawn - it changes with the style chosen from the arrow. |
@@ -13104,14 +13221,22 @@ works on.
 
 * **A new sheet**: click `+`.  It opens empty and is called `Data 2`,
   `Data 3`, and so on.
-* **Renaming, colouring, deleting**: right click (or Ctrl-click) a tab.
-  The name of a sheet matters: it is what a curve of that sheet is called
-  in a diagram that draws several sheets at once.  The last sheet is never
-  deleted.
-* **Every sheet is written into the `.aplt` file** with its name, its data,
-  its formulas, which of its columns are ticked, and whether it is drawn
-  with the one before it.  A file written by an older version - one single
-  table - opens as a single sheet.
+* **Renaming**: click the tab of the sheet that is **already in front** a
+  second time - exactly as a title or an axis label of a diagram is renamed
+  - and the name can be written **on the tab itself**; `Enter` keeps it,
+  `Esc` leaves it as it was.  A double click does the same, and
+  `Rename tab` in the right click menu asks for the name in a little
+  window.  The name of a sheet matters: it is what a curve of that sheet is
+  called in a diagram that draws several sheets at once, and the diagrams
+  follow the new name at once.
+* **Colouring and deleting**: right click (or Ctrl-click) a tab.
+  `Tab colour` paints a small square on it, which is useful for telling a
+  fit, a measurement and a calculation apart at a glance.  The last sheet
+  is never deleted.
+* **Every sheet is written into the `.aplt` file** with its name, **its
+  colour**, its data, its formulas, which of its columns are ticked, and
+  whether it is drawn with the one before it.  A file written by an older
+  version - one single table - opens as a single sheet.
 
 **Two sheets in one diagram.**  Two data files loaded into two sheets are
 often two measurements of the same thing.  Ticking **`Plot with previous
@@ -14701,12 +14826,18 @@ application menu on macOS.  The values are written to
 and are read again at every start.  `Restore defaults` puts back the
 built-in values.
 
+Settings that belong together stand **side by side on one line** - the width
+and the height of the figure, the style and the width of the line, the size
+and the edge width of the marker, the colour and the opacity of the fill -
+and the boxes are only as wide as what goes into them: a number needs far
+less room than a title.
+
 | Tab | Contents |
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
-| Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
+| Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
 | Text boxes | Font size and colour, frame and background of the text boxes added with the **T** button. |
@@ -14716,6 +14847,25 @@ built-in values.
 
 Window sizes and plot defaults are used by windows opened after saving;
 diagrams that are already open keep their settings.
+
+### The font of the diagrams
+
+The first line of the `Fonts` tab is a list of **every font this computer
+has**.  Whatever is chosen there is used for the whole diagram - the title,
+the axis labels, the numbers on the axes, the legend boxes, the text boxes,
+the names on a pie - and, unlike the other settings, it reaches the diagrams
+that are **already open** as well, so the effect can be seen at once.
+
+* The starting value is the font the program was drawing with anyway
+  (`DejaVu Sans`, which comes with matplotlib), so nothing changes until
+  another one is chosen.
+* The font is written into the `.aplt` file with the rest of the diagram,
+  so a graph opens with the font it was saved with even on a computer whose
+  setting says something else.
+* The **exported matplotlib program** sets the same font in its first lines,
+  so the picture it draws matches the one on the screen.
+* A font that this computer does not have is quietly ignored and the usual
+  one is kept.
 
 
 ## 5. Typical workflow
@@ -14832,9 +14982,14 @@ class App:
         self.tables = []
         self.tab_images = {}
         
+        self._tab_editor = None         # the little box that writes a name
+        self._tab_click = None          # the tab of the click before this one
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.notebook.bind("<Button-2>", self._show_tab_context_menu)
         self.notebook.bind("<Button-3>", self._show_tab_context_menu)
+        self.notebook.bind("<ButtonRelease-1>", self._on_tab_click, add="+")
+        self.notebook.bind("<Double-Button-1>", self._on_tab_double_click,
+                           add="+")
         
         self.plus_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.plus_frame, text=" + ")
@@ -14843,6 +14998,7 @@ class App:
         self.notebook.select(0)
 
         self._build_menu()
+        use_font_family(self.settings.get("fonts", "family"))
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
         self._saved_signature = self.project_signature()
         self.root.after_idle(self._focus)
@@ -14890,9 +15046,10 @@ class App:
             table.master.destroy()
         while len(self.tables) < count:
             self.add_tab(f"Data {len(self.tables) + 1}")
-        for table in self.tables:               # a clean sheet to fill
+        for index, table in enumerate(self.tables):   # a clean sheet to fill
             table.plot_with_previous_var.set(False)
             table.cell_formulas = {}
+            self.set_tab_color(index, None)
         return self.tables
 
     def add_tab(self, name, blank=False, at=None):
@@ -15039,21 +15196,220 @@ class App:
         menu.tk_popup(event.x_root, event.y_root)
 
     def rename_tab(self, idx):
+        """Ask for a new name (the right click menu of a tab)."""
         current_name = self.notebook.tab(idx, "text")
-        new_name = simpledialog.askstring("Rename Tab", "New tab name:", initialvalue=current_name, parent=self.root)
+        new_name = simpledialog.askstring("Rename Tab", "New tab name:",
+                                          initialvalue=current_name,
+                                          parent=self.root)
         if new_name:
-            self.notebook.tab(idx, text=new_name)
+            self.set_tab_name(idx, new_name)
+        return new_name
+
+    def set_tab_name(self, idx, name):
+        """Give one sheet a new name; the diagrams follow it."""
+        name = str(name).strip()
+        if not name or not (0 <= int(idx) < len(self.tables)):
+            return None
+        self.notebook.tab(idx, text=name)
+        # a curve of this sheet carries its name: "Signal (Monday)"
+        self.refresh_windows(idx)
+        return name
+
+    def refresh_windows(self, index=None):
+        """Bring the diagrams up to date without asking any questions.
+
+        `update_plot` is the command of the toolbar and says so when there
+        is nothing to draw; this is the quiet one used when something else
+        (a renamed sheet, say) has to reach the diagrams.
+        """
+        for window in self.open_windows():
+            where = self.window_tab(window)
+            if index is not None and int(index) not in self.tab_chain(where):
+                continue
+            window.update_data(self.plot_data(index=where),
+                               layout=self.plot_layout(index=where))
+        return True
+
+    # -- writing the name of a tab straight on the tab ---------------------
+    def _tab_at(self, x, y):
+        """The number of the tab under a point of the notebook, or None."""
+        try:
+            found = self.notebook.tk.call(self.notebook._w, "identify", "tab",
+                                          int(x), int(y))
+        except (tk.TclError, ValueError, TypeError):
+            return None
+        if found == "" or found is None:
+            return None
+        try:
+            return int(found)
+        except (TypeError, ValueError):
+            return None
+
+    def tab_box(self, idx):
+        """(x, y, width, height) of one tab inside the notebook, or None.
+
+        Tk does not hand out the place of a tab, so it is found by asking
+        the notebook which tab is at a point: the row of the tabs first,
+        then the two edges of this one.
+        """
+        notebook = self.notebook
+        width, height = notebook.winfo_width(), notebook.winfo_height()
+        if width < 4 or height < 4:
+            return None
+        row = None
+        for y in range(height - 3, max(-1, height - 48), -2):
+            if self._tab_at(6, y) is not None:
+                row = y
+                break
+        if row is None:                 # the tabs may sit on the top edge
+            for y in range(2, min(height, 48), 2):
+                if self._tab_at(6, y) is not None:
+                    row = y
+                    break
+        if row is None:
+            return None
+        left = right = None
+        for x in range(0, width, 2):
+            if self._tab_at(x, row) == int(idx):
+                left = x if left is None else left
+                right = x
+        if left is None:
+            return None
+        top, bottom = row, row
+        for y in range(row, -1, -1):
+            if self._tab_at(left + 2, y) != int(idx):
+                break
+            top = y
+        for y in range(row, height):
+            if self._tab_at(left + 2, y) != int(idx):
+                break
+            bottom = y
+        return (left, top, max(24, right - left + 2), max(16, bottom - top + 1))
+
+    def begin_tab_rename(self, idx=None):
+        """Write the name of a sheet on the tab itself.
+
+        The second click on the tab that is already in front opens it, just
+        as a second click on an axis label of a diagram does.
+        """
+        idx = self.active_tab_index if idx is None else int(idx)
+        if not (0 <= idx < len(self.tables)):
+            return None
+        self.cancel_tab_rename()
+        box = self.tab_box(idx)
+        if box is None:
+            return self.rename_tab(idx)      # a window too small to write on
+        x, y, width, height = box
+        editor = tk.Entry(self.notebook, justify="center", relief="solid",
+                          borderwidth=1, highlightthickness=0,
+                          insertbackground=CARET_COLOR, insertwidth=2)
+        editor.insert(0, self.notebook.tab(idx, "text"))
+        editor.select_range(0, "end")
+        editor.place(in_=self.notebook, x=x, y=y,
+                     width=max(width, 60), height=height)
+        editor.bind("<Return>", lambda _e: self.commit_tab_rename())
+        editor.bind("<KP_Enter>", lambda _e: self.commit_tab_rename())
+        editor.bind("<Escape>", lambda _e: self.cancel_tab_rename())
+        editor.bind("<FocusOut>", lambda _e: self.commit_tab_rename())
+        self._tab_editor = (editor, idx)
+        editor.focus_force()
+        return editor
+
+    def commit_tab_rename(self, _event=None):
+        """Keep what was written on the tab."""
+        holder, self._tab_editor = getattr(self, "_tab_editor", None), None
+        if holder is None:
+            return None
+        editor, idx = holder
+        try:
+            text = editor.get()
+        except tk.TclError:
+            text = ""
+        try:
+            editor.destroy()
+        except tk.TclError:
+            pass
+        return self.set_tab_name(idx, text)
+
+    def cancel_tab_rename(self, _event=None):
+        """Throw the writing away."""
+        holder, self._tab_editor = getattr(self, "_tab_editor", None), None
+        if holder is None:
+            return None
+        try:
+            holder[0].destroy()
+        except tk.TclError:
+            pass
+        return None
+
+    def _on_tab_click(self, event):
+        """A second click on the tab in front writes its name."""
+        if getattr(self, "_tab_editor", None) is not None:
+            self.commit_tab_rename()
+        idx = self._tab_at(event.x, event.y)
+        if idx is None:
+            return None
+        if hasattr(self, "plus_frame") and idx == self.notebook.index(self.plus_frame):
+            self._tab_click = None
+            return None
+        previous, self._tab_click = getattr(self, "_tab_click", None), None
+        now = time.monotonic()
+        if (previous is not None and previous[0] == idx
+                and idx == self.active_tab_index
+                and (now - previous[1]) * 1000.0 <= RENAME_DELAY):
+            self.root.after_idle(lambda where=idx: self.begin_tab_rename(where))
+            return None
+        self._tab_click = (idx, now)
+        return None
+
+    def _on_tab_double_click(self, event):
+        """Two quick clicks write the name as well."""
+        idx = self._tab_at(event.x, event.y)
+        self._tab_click = None
+        if idx is None:
+            return None
+        if hasattr(self, "plus_frame") and idx == self.notebook.index(self.plus_frame):
+            return None
+        self.root.after_idle(lambda where=idx: self.begin_tab_rename(where))
+        return "break"
             
     def color_tab(self, idx):
-        _, hex_value = colorchooser.askcolor(title="Choose Tab Colour", parent=self.root)
+        _, hex_value = colorchooser.askcolor(title="Choose Tab Colour",
+                                             parent=self.root)
         if hex_value:
-            img = tk.PhotoImage(width=14, height=14)
-            img.put(hex_value, to=(0, 0, 14, 14))
-            # kept by the sheet itself: a number would point at the wrong
-            # tab as soon as one before it is deleted, and the picture would
-            # be collected while its tab still shows it
-            self.tab_images[str(self.tables[idx].master)] = img
-            self.notebook.tab(idx, image=img, compound="left")
+            self.set_tab_color(idx, hex_value)
+        return hex_value
+
+    def set_tab_color(self, idx, hex_value):
+        """Paint the little square on one tab (None takes it away).
+
+        The colour is kept by the sheet itself, so it stays with it when a
+        tab before it is deleted, and it is written into the `.aplt` file.
+        """
+        if not (0 <= int(idx) < len(self.tables)):
+            return None
+        table = self.tables[int(idx)]
+        color = safe_hex(hex_value, None) if hex_value else None
+        table.tab_color = color
+        key = str(table.master)
+        if color is None:
+            self.tab_images.pop(key, None)
+            self.notebook.tab(idx, image="", compound="none")
+            return None
+        img = tk.PhotoImage(width=14, height=14)
+        img.put(color, to=(0, 0, 14, 14))
+        # kept by the sheet itself: a number would point at the wrong
+        # tab as soon as one before it is deleted, and the picture would
+        # be collected while its tab still shows it
+        self.tab_images[key] = img
+        self.notebook.tab(idx, image=img, compound="left")
+        return color
+
+    def tab_color(self, idx):
+        """The colour of one tab, or None."""
+        if not (0 <= int(idx) < len(self.tables)):
+            return None
+        return getattr(self.tables[int(idx)], "tab_color", None)
 
     def delete_tab(self, idx):
         if len(self.tables) <= 1:
@@ -15343,11 +15699,14 @@ class App:
             f"Settings file: {self.settings.path}", parent=self.root)
 
     def open_settings(self):
-        SettingsDialog(self.root, self.settings, on_saved=self._settings_saved)
+        """The settings editor; the window itself is handed back."""
+        return SettingsDialog(self.root, self.settings,
+                              on_saved=self._settings_saved)
 
     def _settings_saved(self):
         for table in self.tables:
             table.apply_config()
+        self.apply_font_setting()
         self.root.geometry(f"{self.settings.get('window', 'main_width')}x"
                            f"{self.settings.get('window', 'main_height')}")
         messagebox.showinfo(
@@ -15355,6 +15714,15 @@ class App:
             "The settings have been saved and will be used at the next start "
             "as well.\nPlot defaults apply to diagrams opened from now on.",
             parent=self.root)
+
+    def apply_font_setting(self):
+        """The chosen font: for the diagrams to come, and for the open ones."""
+        family = use_font_family(self.settings.get("fonts", "family"))
+        if family is None:
+            return None
+        for window in self.open_windows():
+            window.apply_font_family(family, redraw=True)
+        return family
 
     def _ask_column(self, title):
         columns = list(self.df.columns)
@@ -15719,6 +16087,7 @@ class App:
                     and tab.plot_with_previous_var.get()),
                 "columns": [str(name) for name in df.columns],
                 "rows": rows,
+                "color": getattr(tab, "tab_color", None),
                 # which of the two check buttons of every column is ticked:
                 # a sheet with no diagram of its own would lose them
                 "axes": {str(name): tab.column_axis(name)
@@ -15809,6 +16178,8 @@ class App:
             frame = pd.DataFrame(t_rows, columns=t_cols)
             frame = frame.where(frame.notna(), "")   # JSON null -> empty cell
             table.set_dataframe(frame, check_all=(i == 0))
+
+            self.set_tab_color(i, tab_data.get("color"))
 
             saved_axes = tab_data.get("axes")
             if isinstance(saved_axes, dict):

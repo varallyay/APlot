@@ -37,7 +37,7 @@ sheets together:
 
 | Button | Row | What it does |
 | --- | --- | --- |
-| Plot (split button) | first | Clicking the main button opens a NEW diagram with the active plotting style. Clicking the arrow opens the style menu to choose among 9 styles. |
+| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
 | Open / Save data file (icons) | first | The same as the two `File` menu commands. |
 | (the Plot icon) | first | A picture of the style that will be drawn - it changes with the style chosen from the arrow. |
@@ -63,14 +63,22 @@ works on.
 
 * **A new sheet**: click `+`.  It opens empty and is called `Data 2`,
   `Data 3`, and so on.
-* **Renaming, colouring, deleting**: right click (or Ctrl-click) a tab.
-  The name of a sheet matters: it is what a curve of that sheet is called
-  in a diagram that draws several sheets at once.  The last sheet is never
-  deleted.
-* **Every sheet is written into the `.aplt` file** with its name, its data,
-  its formulas, which of its columns are ticked, and whether it is drawn
-  with the one before it.  A file written by an older version - one single
-  table - opens as a single sheet.
+* **Renaming**: click the tab of the sheet that is **already in front** a
+  second time - exactly as a title or an axis label of a diagram is renamed
+  - and the name can be written **on the tab itself**; `Enter` keeps it,
+  `Esc` leaves it as it was.  A double click does the same, and
+  `Rename tab` in the right click menu asks for the name in a little
+  window.  The name of a sheet matters: it is what a curve of that sheet is
+  called in a diagram that draws several sheets at once, and the diagrams
+  follow the new name at once.
+* **Colouring and deleting**: right click (or Ctrl-click) a tab.
+  `Tab colour` paints a small square on it, which is useful for telling a
+  fit, a measurement and a calculation apart at a glance.  The last sheet
+  is never deleted.
+* **Every sheet is written into the `.aplt` file** with its name, **its
+  colour**, its data, its formulas, which of its columns are ticked, and
+  whether it is drawn with the one before it.  A file written by an older
+  version - one single table - opens as a single sheet.
 
 **Two sheets in one diagram.**  Two data files loaded into two sheets are
 often two measurements of the same thing.  Ticking **`Plot with previous
@@ -1660,12 +1668,18 @@ application menu on macOS.  The values are written to
 and are read again at every start.  `Restore defaults` puts back the
 built-in values.
 
+Settings that belong together stand **side by side on one line** - the width
+and the height of the figure, the style and the width of the line, the size
+and the edge width of the marker, the colour and the opacity of the fill -
+and the boxes are only as wide as what goes into them: a number needs far
+less room than a title.
+
 | Tab | Contents |
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
-| Fonts | Size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
+| Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
 | Text boxes | Font size and colour, frame and background of the text boxes added with the **T** button. |
@@ -1675,6 +1689,25 @@ built-in values.
 
 Window sizes and plot defaults are used by windows opened after saving;
 diagrams that are already open keep their settings.
+
+### The font of the diagrams
+
+The first line of the `Fonts` tab is a list of **every font this computer
+has**.  Whatever is chosen there is used for the whole diagram - the title,
+the axis labels, the numbers on the axes, the legend boxes, the text boxes,
+the names on a pie - and, unlike the other settings, it reaches the diagrams
+that are **already open** as well, so the effect can be seen at once.
+
+* The starting value is the font the program was drawing with anyway
+  (`DejaVu Sans`, which comes with matplotlib), so nothing changes until
+  another one is chosen.
+* The font is written into the `.aplt` file with the rest of the diagram,
+  so a graph opens with the font it was saved with even on a computer whose
+  setting says something else.
+* The **exported matplotlib program** sets the same font in its first lines,
+  so the picture it draws matches the one on the screen.
+* A font that this computer does not have is quietly ignored and the usual
+  one is kept.
 
 
 ## 5. Typical workflow
