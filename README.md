@@ -2,12 +2,66 @@
 
 APlot is a small desktop program for typing or loading tabular data and
 turning it into a Matplotlib diagram whose every detail can be changed by
-clicking on it.  It is a single Python file and needs only `tkinter`,
-`pandas`, `numpy` and `matplotlib`.
+clicking on it.  It is a **single Python file**.
 
 Start it with:
 
     python3 aplot.py
+
+
+## What it needs
+
+Four packages have to be there; everything else is part of Python itself.
+
+| Package | Used for | Install |
+| --- | --- | --- |
+| `tkinter` | the whole user interface: windows, menus, the table | comes with Python (on some Linux systems as the separate `python3-tk` package) |
+| `numpy` | every calculation: the curves, the histograms, the fitting | `pip install numpy` |
+| `pandas` | the sheets themselves and the reading of data files | `pip install pandas` |
+| `matplotlib` | the diagrams, and the pictures that are exported | `pip install matplotlib` |
+
+All four at once:
+
+    pip install numpy pandas matplotlib
+
+### Optional packages
+
+The program **starts and works without every one of these**.  Each of them
+switches one convenience on, and when it is missing the program says so
+quietly or simply leaves that one thing out.
+
+| Package | What it adds when it is there | Without it |
+| --- | --- | --- |
+| **`tkinterdnd2`** | **dropping a picture** from the Finder onto a diagram (it brings the `tkdnd` extension of Tk, which Tk itself has no drop support without) | pictures still arrive by pasting (`Ctrl/Cmd+V`), through the picture button of the toolbar and through `Plot > Insert picture...` |
+| `pillow` (`PIL`) | the drawn **toolbar icons**, reading a **picture** that is pasted or dropped, and the clipboard of the system | the buttons carry their names in words and pictures cannot be inserted |
+| `openpyxl` | opening and saving **Excel** (`.xlsx`) files, one sheet per tab | CSV, TXT, DAT and the program's own `.aplt` files work as usual |
+| `pyobjc-framework-Cocoa` | the bold application menu on **macOS** is called `APlot` | that menu keeps the name of the Python interpreter |
+
+    pip install tkinterdnd2 pillow openpyxl
+    pip install pyobjc-framework-Cocoa        # macOS only
+
+An optional package is always imported inside a `try`, so a missing one is
+never an error.  An editor that checks the imports (VS Code with Pylance,
+for instance) may still mark such a line as unresolved - that is the editor
+saying the package is not installed in the interpreter **it** has selected,
+not a fault in the program.
+
+**Install into the interpreter that really runs APlot.**  A bare `pip` often
+belongs to another Python than the `python3` that starts the program; this
+always lands in the right place:
+
+    python3 -m pip install tkinterdnd2
+
+and `python3 -c "import sys; print(sys.executable)"` says which interpreter
+that is.
+
+### The one file
+
+Beside `aplot.py` the program writes `~/.aplot/config.json` the first time
+the settings are saved, and nothing else.  No `icons` folder, no data
+directory: the toolbar icons are drawn by the program itself, and a graph
+carries its data, its formulas and even its pictures inside its own `.aplt`
+file.
 
 
 ## 0. The name
@@ -191,9 +245,9 @@ operation out in words - *"Insert row below (click arrow for options)"*,
 *"Delete column"*, and so on.  The text follows the place that is chosen, so
 the button always says what it is about to do.
 
-The icons need **Pillow** (`pip install pillow`), which is used to paint
-them.  Without it every button simply carries its name in words and
-everything else works exactly the same.
+The icons are painted with **Pillow** (one of the optional packages, see
+`What it needs`).  Without it every button simply carries its name in words
+and everything else works exactly the same.
 
 **Adding around the selected cell.**  The two adding icons are **split
 buttons**, like `Plot`:
