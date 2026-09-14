@@ -107,6 +107,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -127,21 +128,39 @@ import pandas as pd
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.backend_bases import MouseEvent
 from matplotlib.colors import to_hex, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.image import BboxImage
 from matplotlib.legend import Legend
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
-from matplotlib.patches import Ellipse, Polygon, Rectangle
+from matplotlib.patches import (Ellipse, FancyArrow, FancyBboxPatch,
+                                Polygon, Rectangle)
 from matplotlib.text import Text
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                MultipleLocator, NullLocator)
 from matplotlib.transforms import Affine2D, Bbox, TransformedBbox
 
 APP_NAME = "APlot"
+APP_ID = "hu.feti.aplot"        # what macOS calls the program among its own
 PROJECT_SUFFIX = ".aplt"
 CONFIG_FILE = Path.home() / ".aplot" / "config.json"
+
+# the picture of the program itself: a spectrum under its own name
+APP_ICON_SIZE = 512             # the icon is drawn this large and scaled down
+APP_ICON_SIZES = (16, 32, 128, 256, 512)   # the sizes an .icns is built of
+APP_ICON_PANEL = "#f4f5f7"      # the rounded square behind the picture
+APP_ICON_PANEL_EDGE = "#c9ced6"
+APP_ICON_FILL = "#11548d"       # the filled spectrum
+APP_ICON_LINE = "#f59f1e"       # and its outline
+APP_ICON_LABEL = "#ffec5c"      # the yellow box with the name in it
+APP_ICON_ARROW = "#f4918e"
+# the peaks the spectrum of the icon is built from: (centre, width, height)
+APP_ICON_PEAKS = ((0.55, 0.150, 0.24), (0.47, 0.020, 0.20),
+                  (0.545, 0.019, 0.46), (0.625, 0.024, 1.00),
+                  (0.70, 0.042, 0.10), (0.36, 0.070, 0.08))
 
 # --------------------------------------------------------------------------
 # option tables
@@ -272,6 +291,27 @@ OBJECT_NAMES = {"shape": "Drawing", "arrow": "Arrow", "note": "Text box",
                 "legend": "Legend box", "text": "Text", "frame": "Frame",
                 "axis": "Axis"}
 COPYABLE = ("shape", "arrow", "note")   # a legend or an axis label is not copied
+
+# which object hides which: the stack, from the very back to the very front.
+# The curves take part in it too, so a drawing can be pushed behind a graph
+# and a graph can be brought in front of another one.
+STACK_KINDS = ("series", "shape", "arrow", "note")
+STACK_NAMES = {"series": "Curve", "shape": "Drawing", "arrow": "Arrow",
+               "note": "Text box", "picture": "Picture"}
+Z_STACK_BASE = 2.0          # the very back of the stack (a plain curve sits here)
+Z_STACK_STEP = 0.02         # the usual distance between two neighbours
+Z_STACK_SPAN = 3.0          # the whole stack stays inside base ... base + span
+Z_PICTURE_GAP = 0.004       # the frame of a picture is just above its pixels
+# One curve is drawn with several artists - the line, the filled area under
+# it, its error bars - which matplotlib lays at distances of a few tenths
+# from each other.  Those distances are squeezed into this much, so that a
+# whole curve fits between two places of the stack and nothing of another
+# object can ever slide in between them.
+Z_SERIES_SPREAD = 0.006
+Z_DEFAULT = {"shape": 5.0, "arrow": 5.0, "note": 6.0, "series": 2.0}
+# the styles whose curve is a whole group of drawn things (every bar, every
+# slice), which the exported program has to move together
+STACK_CONTAINERS = ("bar", "errorbar", "stairs", "pie", "histogram")
 PASTE_STEP = 14.0           # pixels: how far a pasted copy sits from the original
 NUDGE_STEP = 1.0            # pixels: one press of an arrow key
 NUDGE_BIG_STEP = 10.0       # pixels: with Shift
@@ -288,6 +328,11 @@ INLINE_FAMILY = "DejaVu Sans"
 CARET_COLOR = "#1a5fb4"     # the blinking cursor of the in-place editor
 CARET_ON_MS = 600           # how long it is shown ...
 CARET_OFF_MS = 350          # ... and how long it is away: it blinks
+# the modifiers that make a key press a command instead of a character:
+# Control, Mod1 (Alt on Linux, Command on the Mac), and the Alt and Meta
+# bits Tk adds itself.  Option on the Mac is left out on purpose: it is how
+# the accented letters are written there.
+TYPING_COMMAND_KEYS = 0x0004 | 0x0008 | 0x20000 | 0x40000
 SELECT_COLOR = "#1a5fb4"    # the blue of the selection
 BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
 BLOCK_LINE = 2              # thickness of the outline around the block
@@ -893,6 +938,206 @@ class Config:
 
     def set(self, section, key, value):
         self.data[section][key] = value
+
+
+# --------------------------------------------------------------------------
+# the picture of the program itself
+# --------------------------------------------------------------------------
+
+def icon_spectrum(x):
+    """The curve drawn in the icon: a few peaks over a broad shoulder."""
+    values = np.zeros_like(np.asarray(x, dtype=float))
+    for centre, width, height in APP_ICON_PEAKS:
+        values = values + height * np.exp(-0.5 * ((x - centre) / width) ** 2)
+    top = float(np.max(values)) or 1.0
+    return values / top
+
+
+def app_icon_png(size=APP_ICON_SIZE):
+    """The icon of the program as the bytes of a PNG file.
+
+    It is drawn rather than carried as a picture file, so the one file of
+    the program stays the only thing that has to be copied, and the icon is
+    sharp at whatever size the system asks for.
+    """
+    size = max(16, int(size))
+    fig = Figure(figsize=(size / 100.0, size / 100.0), dpi=100)
+    FigureCanvasAgg(fig)                     # a figure that is never shown
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_axis_off()
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.add_patch(FancyBboxPatch(
+        (0.035, 0.035), 0.93, 0.93,
+        boxstyle="round,pad=0,rounding_size=0.20",
+        facecolor=APP_ICON_PANEL, edgecolor=APP_ICON_PANEL_EDGE,
+        linewidth=size / 160.0))
+    x = np.linspace(0.0, 1.0, 700)
+    y = icon_spectrum(x)
+    left, right, bottom, top = 0.20, 0.93, 0.17, 0.76
+    px = left + x * (right - left)
+    py = bottom + y * (top - bottom)
+    ax.fill_between(px, bottom, py, facecolor=APP_ICON_FILL, edgecolor="none",
+                    zorder=3)
+    ax.plot(px, py, color=APP_ICON_LINE, linewidth=size / 62.0,
+            solid_joinstyle="round", solid_capstyle="round", zorder=4)
+    width = size / 64.0
+    ax.plot([left, left], [bottom, 0.88], color="#000000", linewidth=width,
+            solid_capstyle="round", zorder=5)
+    ax.plot([left, 0.95], [bottom, bottom], color="#000000", linewidth=width,
+            solid_capstyle="round", zorder=5)
+    ax.add_patch(FancyArrow(0.255, 0.875, 0.30, 0.0, width=0.012,
+                            head_width=0.055, head_length=0.055,
+                            length_includes_head=True, color=APP_ICON_ARROW,
+                            zorder=6))
+    ax.add_patch(FancyBboxPatch(
+        (0.215, 0.645), 0.355, 0.155,
+        boxstyle="round,pad=0,rounding_size=0.05",
+        facecolor=APP_ICON_LABEL, edgecolor="none", zorder=7))
+    ax.text(0.3925, 0.7235, APP_NAME, ha="center", va="center",
+            fontsize=size / 9.6, color="#000000", zorder=8)
+    holder = io.BytesIO()
+    fig.savefig(holder, format="png", dpi=100, transparent=True)
+    return holder.getvalue()
+
+
+_ICON_PHOTO = {}                 # size -> the Tk picture, which Tk may not lose
+
+
+def app_icon_photo(size=APP_ICON_SIZE):
+    """The icon as a Tk picture, or None when Tk cannot read a PNG."""
+    size = int(size)
+    if size in _ICON_PHOTO:
+        return _ICON_PHOTO[size]
+    try:
+        photo = tk.PhotoImage(
+            data=base64.b64encode(app_icon_png(size)).decode("ascii"))
+    except (tk.TclError, ValueError, OSError, RuntimeError):
+        return None
+    _ICON_PHOTO[size] = photo
+    return photo
+
+
+def apply_app_icon(window, size=APP_ICON_SIZE):
+    """Give a window - and the Dock or the task bar - the icon of APlot.
+
+    `wm iconphoto` is what every system understands: on macOS Tk hands the
+    picture to the Dock, on Linux and Windows it becomes the icon of the
+    window.  `default=True` gives it to every window opened afterwards as
+    well, so the diagrams carry it too.
+    """
+    photo = app_icon_photo(size)
+    if photo is None:
+        return False
+    try:
+        window.iconphoto(True, photo)
+    except (tk.TclError, AttributeError):
+        return False
+    return True
+
+
+def write_icon_file(path, size=APP_ICON_SIZE):
+    """Write the icon into a PNG file; returns the path, or None."""
+    try:
+        target = Path(str(path)).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(app_icon_png(size))
+    except (OSError, ValueError):
+        return None
+    return target
+
+
+def write_icns(folder, name=APP_NAME):
+    """Build the `.icns` macOS wants, from the drawn icon; the path or None.
+
+    macOS builds it out of a folder of PNGs with `iconutil`; when that tool
+    is missing the largest PNG is written instead, which is enough for the
+    Dock of most systems.
+    """
+    folder = Path(str(folder)).expanduser()
+    iconset = folder / f"{name}.iconset"
+    try:
+        iconset.mkdir(parents=True, exist_ok=True)
+        for one in APP_ICON_SIZES:      # the names Apple's iconutil expects
+            (iconset / f"icon_{one}x{one}.png").write_bytes(app_icon_png(one))
+            (iconset / f"icon_{one}x{one}@2x.png").write_bytes(
+                app_icon_png(one * 2))
+    except (OSError, ValueError):
+        return None
+    target = folder / f"{name}.icns"
+    try:
+        done = subprocess.run(["iconutil", "-c", "icns", str(iconset),
+                               "-o", str(target)],
+                              capture_output=True, text=True, timeout=120)
+        if done.returncode == 0 and target.is_file():
+            shutil.rmtree(iconset, ignore_errors=True)
+            return target
+    except (OSError, subprocess.SubprocessError):
+        pass
+    shutil.rmtree(iconset, ignore_errors=True)
+    fallback = folder / f"{name}.png"
+    try:
+        fallback.write_bytes(app_icon_png(APP_ICON_SIZE))
+    except OSError:
+        return None
+    return fallback
+
+
+APP_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>{name}</string>
+    <key>CFBundleDisplayName</key><string>{name}</string>
+    <key>CFBundleExecutable</key><string>{name}</string>
+    <key>CFBundleIdentifier</key><string>{identifier}</string>
+    <key>CFBundleIconFile</key><string>{icon}</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1.0</string>
+    <key>LSMinimumSystemVersion</key><string>10.13</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+"""
+
+
+def make_macos_app(folder=None, name=APP_NAME):
+    """Build `APlot.app` around this very file; returns the path, or None.
+
+    A program started as `python3 aplot.py` belongs to the interpreter as
+    far as macOS is concerned: the Dock shows the icon and the name of
+    Python.  A tiny application bundle - a folder with the right shape -
+    gives it its own icon and its own name for good.  Nothing is compiled
+    and nothing is copied: the bundle starts this same file.
+    """
+    if sys.platform != "darwin":
+        return None
+    home = Path(folder).expanduser() if folder else Path.home() / "Applications"
+    bundle = home / f"{name}.app"
+    macos, resources = bundle / "Contents" / "MacOS", bundle / "Contents" / "Resources"
+    script = Path(__file__).resolve()
+    try:
+        macos.mkdir(parents=True, exist_ok=True)
+        resources.mkdir(parents=True, exist_ok=True)
+        icon = write_icns(resources, name)
+        (bundle / "Contents" / "Info.plist").write_text(
+            APP_PLIST.format(name=name, identifier=APP_ID,
+                             icon=(icon.name if icon else f"{name}.icns")),
+            encoding="utf-8")
+        launcher = macos / name
+        launcher.write_text(
+            "#!/bin/sh\n"
+            f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"\n',
+            encoding="utf-8")
+        launcher.chmod(0o755)
+        # macOS keeps what it knows about a bundle: it is told to look again
+        subprocess.run(["touch", str(bundle)], capture_output=True, timeout=30)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return bundle
 
 
 def set_macos_app_name(name=APP_NAME):
@@ -5701,6 +5946,8 @@ class DataTable(ttk.Frame):
         tree.bind("<Shift-space>", wrap(self.select_rows_of_block))
         for sequence in ("<Delete>", "<BackSpace>"):
             tree.bind(sequence, wrap(self.clear_block))
+        # anything else that is a character starts writing the cell
+        tree.bind("<Key>", self._on_grid_typing)
 
     def _shape(self):
         return len(self.df), len(self.df.columns)
@@ -5826,6 +6073,65 @@ class DataTable(ttk.Frame):
         row, col = self.cursor
         self._begin_edit(str(row), col)
         return True
+
+    def take_keyboard(self):
+        """Give the keyboard to this sheet, with a cell under the cursor.
+
+        Tk hands a new window to no widget in particular, so until a cell
+        had been clicked the arrow keys went nowhere and nothing typed
+        arrived anywhere.  The sheet asks for the keyboard itself instead -
+        when the program starts, when another sheet comes to the front and
+        after a file has been opened - and the cell the cursor is on is
+        highlighted, ready to be typed into.
+        """
+        if self._editor is not None or self._heading_editor is not None:
+            return False              # an open cell keeps the keyboard
+        try:
+            if not self.tree.winfo_exists():
+                return False
+            self.tree.focus_set()
+        except tk.TclError:
+            return False
+        rows, columns = self._shape()
+        if rows and columns:
+            row, col = self.cursor
+            if self.block is None or not (0 <= row < rows and 0 <= col < columns):
+                self.select_cell(0, 0)
+        return True
+
+    def _on_grid_typing(self, event):
+        """A character typed on the grid opens the cell and goes into it.
+
+        The arrows, Enter, Delete and the commands of Ctrl / Cmd have their
+        own bindings and never reach this one: Tk offers a key press to the
+        closest pattern it finds.  What is left is the ordinary typing, and
+        it starts writing the cell the cursor is on, as a spreadsheet does.
+        """
+        if self._editor is not None or self._heading_editor is not None:
+            return None
+        try:                     # Ctrl / Alt / Cmd: a command, not a letter
+            if int(event.state or 0) & (TYPING_COMMAND_KEYS):
+                return None
+        except (TypeError, ValueError):
+            pass
+        text = str(event.char or "")
+        if len(text) != 1 or not text.isprintable():
+            return None
+        rows, columns = self._shape()
+        row, col = self.cursor
+        if not (0 <= row < rows and 0 <= col < columns):
+            return None
+        self._begin_edit(str(row), col)
+        if self._editor is None:
+            return None
+        entry = self._editor[0]
+        try:
+            entry.delete(0, "end")
+            entry.insert(0, text)
+            entry.icursor("end")
+        except tk.TclError:
+            return None
+        return "break"
 
     # -- how the block is shown -------------------------------------------
     def covers_whole_rows(self):
@@ -7940,6 +8246,10 @@ class PlotWindow(tk.Toplevel):
         self._shape_counter = 0
         self._pending_shape = False
         self._shape_drag = None
+        # where each curve stands in the stack; the drawings, the arrows and
+        # the text boxes keep theirs in their own state, under "z"
+        self.series_z: dict = {}        # Y column name -> its place in the stack
+        self._object_menu = None        # the menu of the right click, while open
         # ("shape"|"arrow"|"note"|"legend"|"text", key) - one click selects,
         # a second click opens the properties of the selected object
         self.selection = None
@@ -8049,11 +8359,19 @@ class PlotWindow(tk.Toplevel):
             plot_menu.add_command(label="Copy object",
                                   accelerator=f"{ACCEL_NAME}+C",
                                   command=self.copy_selection)
+            plot_menu.add_command(label="Cut object",
+                                  accelerator=f"{ACCEL_NAME}+X",
+                                  command=self.cut_selection)
             plot_menu.add_command(label="Paste object",
                                   accelerator=f"{ACCEL_NAME}+V",
                                   command=self.paste_clipboard)
             plot_menu.add_command(label="Delete object", accelerator="Del",
                                   command=self.delete_selection)
+            plot_menu.add_separator()
+            plot_menu.add_command(label="Move forward",
+                                  command=self.raise_selection)
+            plot_menu.add_command(label="Move backward",
+                                  command=self.lower_selection)
             plot_menu.add_separator()
             plot_menu.add_command(label="Close", command=self.destroy)
             menubar.add_cascade(label="Plot", menu=plot_menu)
@@ -8165,9 +8483,20 @@ class PlotWindow(tk.Toplevel):
         for sequence in ("<Button-1>", "<Button-2>", "<Button-3>"):
             # add="+" keeps matplotlib's own handlers of these events
             widget.bind(sequence, self.take_focus, add="+")
+        if sys.platform == "darwin":
+            # Control and the one button of a Mac trackpad is a right click
+            widget.bind("<Control-Button-1>", self._menu_click, add="+")
         # when the window itself is activated and nothing inside it holds the
         # keyboard, the diagram takes it
         self.bind("<FocusIn>", self._window_focused, add="+")
+
+    def _menu_click(self, event):
+        """A Tk click that must open the menu of the right button."""
+        widget = self.canvas.get_tk_widget()
+        self.show_object_menu(event.x, widget.winfo_height() - event.y,
+                              getattr(event, "x_root", None),
+                              getattr(event, "y_root", None))
+        return "break"
 
     def _window_focused(self, _event=None):
         """This diagram window became the active one: it takes the keyboard.
@@ -8225,6 +8554,8 @@ class PlotWindow(tk.Toplevel):
                 bind_both(f"<{modifier}-{letter}>", wrap(self.copy_shortcut))
             for letter in ("v", "V"):
                 bind_both(f"<{modifier}-{letter}>", wrap(self.paste_clipboard))
+            for letter in ("x", "X"):
+                bind_both(f"<{modifier}-{letter}>", wrap(self.cut_selection))
         for sequence in ("<Delete>", "<BackSpace>"):
             bind_both(sequence, wrap(self.delete_selection))
 
@@ -9613,6 +9944,8 @@ class PlotWindow(tk.Toplevel):
             ax.ignore_existing_data_limits = ignoring
         except (AttributeError, ValueError):
             pass
+        # it belongs to that curve: it is moved with it in the stack
+        fill.aplot_series = str(column)
         self.fills[column] = fill
         return fill
 
@@ -9940,6 +10273,15 @@ class PlotWindow(tk.Toplevel):
             "",
             f"DPI = {lit(dpi)}",
             "PT = 72.0 / DPI          # the distances are given in pixels",
+            "",
+            "",
+            "def in_front(artist, z):",
+            '    """Put one curve - with everything drawn for it - at height z."""',
+            "    parts = artist if isinstance(artist, (list, tuple)) else [artist]",
+            "    for part in parts:",
+            "        for one in (part if isinstance(part, (list, tuple)) else [part]):",
+            "            if hasattr(one, 'set_zorder'):",
+            "                one.set_zorder(z)",
             "",
             "",
             "def turned(ax, centre, angle):",
@@ -10305,6 +10647,12 @@ class PlotWindow(tk.Toplevel):
                        lit(str(line.get_label()))))
             if not line.get_visible():
                 out.append("curves[%s].set_visible(False)" % lit(str(column)))
+            height = self.series_z.get(str(column))
+            if height is not None:        # where the user put this curve
+                out.append("in_front(%s, %s)"
+                           % (("bars_%s" % tag) if st in STACK_CONTAINERS
+                              else "curves[%s]" % lit(str(column)),
+                              lit(float(height))))
             fill = self.fill_state.get(column) or {}
             if fill.get("on"):
                 color = (store_color(line.get_color()) if fill.get("follow")
@@ -10319,7 +10667,7 @@ class PlotWindow(tk.Toplevel):
                        lit(color), lit(float(fill.get("alpha", 0.35))),
                        lit(fill.get("hatch") or None),
                        lit(color if fill.get("hatch") else "none"),
-                       lit(float(line.get_zorder()) - 0.5)))
+                       lit(self.fill_zorder(column, line))))
         if self.legend_visible and self.legends:
             out.append("")
             out.append("# every curve has a legend box of its own")
@@ -10398,7 +10746,8 @@ class PlotWindow(tk.Toplevel):
                    lit(str(state["text"])), lit(int(state["size"])),
                    lit(state["color"]), lit(float(state.get("angle", 0.0) or 0.0))))
             out.append(
-                "        rotation_mode='anchor', clip_on=False, zorder=6,")
+                "        rotation_mode='anchor', clip_on=False, zorder=%s,"
+                % lit(float(state.get("z") or Z_DEFAULT["note"])))
             out.append(
                 "        bbox={'boxstyle': 'round,pad=0.35', 'facecolor': %s, "
                 "'edgecolor': %s, 'linewidth': %s})"
@@ -10413,10 +10762,11 @@ class PlotWindow(tk.Toplevel):
             angle = self.angle_of(state)
             centre = self.shape_centre(state)
             face = state.get("face", "none")
+            height = float(state.get("z") or Z_DEFAULT["shape"])
             common = ("transform=turned(ax, (%s, %s), %s), clip_on=False, "
-                      "zorder=5, edgecolor=%s, linestyle=%s, linewidth=%s, "
+                      "zorder=%s, edgecolor=%s, linestyle=%s, linewidth=%s, "
                       "facecolor=%s"
-                      % (lit(centre[0]), lit(centre[1]), lit(angle),
+                      % (lit(centre[0]), lit(centre[1]), lit(angle), lit(height),
                          lit(state["edge"]), lit(state["style"]),
                          lit(float(state["width"])),
                          lit("none" if face == "none"
@@ -10443,8 +10793,9 @@ class PlotWindow(tk.Toplevel):
                            "%s, %s), ax.transAxes)"
                            % (key, lit(x), lit(y), lit(w), lit(h)))
                 out.append("art_%s = BboxImage(box_%s, "
-                           "interpolation='antialiased', zorder=4, alpha=%s)"
-                           % (key, key, lit(float(state.get("alpha", 1.0)))))
+                           "interpolation='antialiased', zorder=%s, alpha=%s)"
+                           % (key, key, lit(height - Z_PICTURE_GAP),
+                              lit(float(state.get("alpha", 1.0)))))
                 out.append("art_%s.set_data(picture_%s)" % (key, key))
                 out.append("art_%s.set_clip_on(False)" % key)
                 out.append("ax.add_artist(art_%s)" % key)
@@ -10459,14 +10810,15 @@ class PlotWindow(tk.Toplevel):
             out += ["", "# ----------------------------------------- the arrows"]
         for key, state in self.arrow_state.items():
             points, shaft_end = self._head_polygon(state)
+            height = float(state.get("z") or Z_DEFAULT["arrow"])
             out.append(
                 "ax.plot([%s, %s], [%s, %s], transform=ax.transAxes, color=%s, "
                 "linestyle=%s, linewidth=%s, solid_capstyle='butt', "
-                "clip_on=False, zorder=5, label='_nolegend_')"
+                "clip_on=False, zorder=%s, label='_nolegend_')"
                 % (lit(float(state["tail"][0])), lit(float(shaft_end[0])),
                    lit(float(state["tail"][1])), lit(float(shaft_end[1])),
                    lit(state["color"]), lit(state["style"]),
-                   lit(float(state["width"]))))
+                   lit(float(state["width"])), lit(height)))
             if points is None:
                 continue
             corners = [[float(one[0]), float(one[1])] for one in points]
@@ -10474,17 +10826,18 @@ class PlotWindow(tk.Toplevel):
                 out.append(
                     "ax.plot(%s, %s, transform=ax.transAxes, color=%s, "
                     "linestyle='-', linewidth=%s, solid_joinstyle='miter', "
-                    "clip_on=False, zorder=5, label='_nolegend_')"
+                    "clip_on=False, zorder=%s, label='_nolegend_')"
                     % (lit([one[0] for one in corners]),
                        lit([one[1] for one in corners]),
-                       lit(state["color"]), lit(float(state["width"]))))
+                       lit(state["color"]), lit(float(state["width"])),
+                       lit(height)))
             else:
                 out.append(
                     "ax.add_patch(Polygon(%s, closed=True, "
                     "transform=ax.transAxes, facecolor=%s, edgecolor=%s, "
-                    "linewidth=%s, clip_on=False, zorder=5))"
+                    "linewidth=%s, clip_on=False, zorder=%s))"
                     % (lit(corners), lit(state["color"]), lit(state["color"]),
-                       lit(max(0.2, float(state["width"]) * 0.5))))
+                       lit(max(0.2, float(state["width"]) * 0.5)), lit(height)))
         return out
 
     # -- saving / restoring the whole diagram ------------------------------
@@ -10538,6 +10891,7 @@ class PlotWindow(tk.Toplevel):
                 "markeredgecolor": store_color(line.get_markeredgecolor()),
                 "markeredgewidth": float(line.get_markeredgewidth()),
                 "visible": bool(line.get_visible()),
+                "z": float(self.object_z("series", y_col) or Z_DEFAULT["series"]),
             })
         return {
             "geometry": self.geometry(),
@@ -10567,13 +10921,15 @@ class PlotWindow(tk.Toplevel):
                         "tail": [float(state["tail"][0]), float(state["tail"][1])],
                         "tip": [float(state["tip"][0]), float(state["tip"][1])],
                         "size": float(state["size"]), "style": state["style"],
-                        "width": float(state["width"]), "color": state["color"]}
+                        "width": float(state["width"]), "color": state["color"],
+                        "z": float(state.get("z") or Z_DEFAULT["arrow"])}
                        for state in self.arrow_state.values()],
             "notes": [{"text": state["text"],
                        "pos": [float(state["pos"][0]), float(state["pos"][1])],
                        "angle": float(state.get("angle", 0.0) or 0.0),
                        "size": int(state["size"]), "color": state["color"],
-                       "edge": state["edge"], "face": state["face"]}
+                       "edge": state["edge"], "face": state["face"],
+                       "z": float(state.get("z") or Z_DEFAULT["note"])}
                       for state in self.note_state.values()],
             "axes": axes,
             "series": series,
@@ -10670,6 +11026,8 @@ class PlotWindow(tk.Toplevel):
                                                line.get_markeredgewidth()))
             line.set_visible(entry.get("visible", True))
             self.refresh_series_visuals(column)
+            if entry.get("z") is not None:     # where it stands in the stack
+                self.series_z[str(column)] = float(entry["z"])
 
         # the styles of the file decide whether the axes are drawn at all
         self.apply_style_axes()
@@ -10711,6 +11069,8 @@ class PlotWindow(tk.Toplevel):
                 self.text_offset[name] = (float(value[0]), float(value[1]))
         self.apply_text_offsets()
 
+        self.apply_series_stack()      # the curves first: the drawings that
+                                       # follow are laid on top of them
         for key in list(self.shape_state):          # replace the drawings
             self.remove_shape(key)
         for shape in state.get("shapes") or []:
@@ -10827,6 +11187,10 @@ class PlotWindow(tk.Toplevel):
 
     # -- drawing / legend --------------------------------------------------
     def draw(self):
+        # a curve that was drawn again (another style, another colour, new
+        # data) comes back at its usual height: it is put back where the
+        # user had moved it, before anything is painted
+        self.apply_series_stack()
         self.canvas.draw_idle()
 
     def default_legend_state(self, index):
@@ -11010,8 +11374,11 @@ class PlotWindow(tk.Toplevel):
                   state=None):
         self._shape_counter += 1
         key = f"shape{self._shape_counter}"
-        self.shape_state[key] = state or self.default_shape_state(
+        state = state or self.default_shape_state(
             kind or self.shape_kind, position[0], position[1], size[0], size[1])
+        if state.get("z") is None:
+            state["z"] = self.top_z()      # a new object stands in front
+        self.shape_state[key] = state
         self.refresh_shape(key)
         self.draw()
         return key
@@ -11054,7 +11421,8 @@ class PlotWindow(tk.Toplevel):
         face = state.get("face", "none")
         common = {
             "transform": self._shape_transform(state),
-            "clip_on": False, "zorder": 5,
+            "clip_on": False,
+            "zorder": float(state.get("z") or Z_DEFAULT["shape"]),
             "edgecolor": state["edge"], "linestyle": state["style"],
             "linewidth": state["width"],
             "facecolor": ("none" if face == "none"
@@ -11104,7 +11472,9 @@ class PlotWindow(tk.Toplevel):
                              max(MIN_SHAPE_SIZE, float(state["w"])),
                              max(MIN_SHAPE_SIZE, float(state["h"]))),
             self.ax.transAxes)
-        artist = BboxImage(box, interpolation="antialiased", zorder=4,
+        height = float(state.get("z") or Z_DEFAULT["shape"])
+        artist = BboxImage(box, interpolation="antialiased",
+                           zorder=height - Z_PICTURE_GAP,
                            alpha=float(state.get("alpha", 1.0)))
         artist.set_data(values)
         artist.set_clip_on(False)
@@ -11112,7 +11482,7 @@ class PlotWindow(tk.Toplevel):
         self.ax.add_artist(artist)
         self.shape_pictures[key] = artist
         patch.set_facecolor("none")        # the picture is the filling
-        patch.set_zorder(5)
+        patch.set_zorder(height)
         return artist
 
     @staticmethod
@@ -11190,12 +11560,12 @@ class PlotWindow(tk.Toplevel):
         self.draw()
         return True
 
-    def paste_picture(self, _event=None):
+    def paste_picture(self, _event=None, centre=None):
         """A picture from the clipboard, in the middle of the diagram."""
         picture = clipboard_picture(self.canvas.get_tk_widget())
         if picture is None:
             return None
-        return self.add_picture(picture)
+        return self.add_picture(picture, centre=centre)
 
     def insert_picture_file(self, *_args):
         """`Insert picture...`: choose a picture file and place it."""
@@ -11413,8 +11783,11 @@ class PlotWindow(tk.Toplevel):
     def add_arrow(self, head=None, tail=(0.3, 0.3), tip=(0.5, 0.5), state=None):
         self._arrow_counter += 1
         key = f"arrow{self._arrow_counter}"
-        self.arrow_state[key] = state or self.default_arrow_state(
+        state = state or self.default_arrow_state(
             head or self.arrow_head, tail, tip)
+        if state.get("z") is None:
+            state["z"] = self.top_z()      # a new arrow stands in front
+        self.arrow_state[key] = state
         self.refresh_arrow(key)
         self.draw()
         return key
@@ -11466,11 +11839,12 @@ class PlotWindow(tk.Toplevel):
         if state is None:
             return None
         points, shaft_end = self._head_polygon(state)
+        height = float(state.get("z") or Z_DEFAULT["arrow"])
         shaft, = self.ax.plot(
             [state["tail"][0], shaft_end[0]], [state["tail"][1], shaft_end[1]],
             transform=self.ax.transAxes, color=state["color"],
             linestyle=state["style"], linewidth=state["width"],
-            solid_capstyle="butt", clip_on=False, zorder=5,
+            solid_capstyle="butt", clip_on=False, zorder=height,
             label="_nolegend_")
         artists = [shaft]
         if points is not None:
@@ -11479,14 +11853,14 @@ class PlotWindow(tk.Toplevel):
                     [p[0] for p in points], [p[1] for p in points],
                     transform=self.ax.transAxes, color=state["color"],
                     linestyle="-", linewidth=state["width"],
-                    solid_joinstyle="miter", clip_on=False, zorder=5,
+                    solid_joinstyle="miter", clip_on=False, zorder=height,
                     label="_nolegend_")
             else:
                 head = Polygon(points, closed=True, transform=self.ax.transAxes,
                                facecolor=state["color"],
                                edgecolor=state["color"],
                                linewidth=max(0.2, state["width"] * 0.5),
-                               clip_on=False, zorder=5)
+                               clip_on=False, zorder=height)
                 self.ax.add_patch(head)
             artists.append(head)
         self.arrows[key] = artists
@@ -11998,31 +12372,353 @@ class PlotWindow(tk.Toplevel):
                             float(moved["pos"][1]) + dy)
         return moved
 
-    def copy_selection(self, _event=None):
-        """Ctrl/Cmd+C: keep the selected object with all of its properties."""
-        kind, _key = self.selection or (None, None)
-        state = self.selected_state()
+    # -- which object is in front of which ---------------------------------
+    def stack_store(self, kind):
+        """The dictionary that keeps the state of one kind of object."""
+        return {"shape": self.shape_state, "arrow": self.arrow_state,
+                "note": self.note_state}.get(kind)
+
+    def object_name(self, kind, key=None):
+        """What one object is called in a menu or in a message."""
+        if kind == "shape":
+            state = self.shape_state.get(key) or {}
+            if state.get("kind") == PICTURE_KIND:
+                return STACK_NAMES["picture"]
+        return STACK_NAMES.get(kind) or OBJECT_NAMES.get(kind, str(kind))
+
+    def series_artists(self, name):
+        """Every artist one curve is drawn with: the line, its filling ..."""
+        found, seen = [], set()
+        line = self.series.get(name)
+        if line is not None:
+            found.append(line)
+            seen.add(id(line))
+        for axes in self.plot_axes():
+            for artist in list(axes.get_children()):
+                if getattr(artist, "aplot_series", None) != str(name):
+                    continue
+                if id(artist) not in seen:
+                    seen.add(id(artist))
+                    found.append(artist)
+        return found
+
+    def set_series_zorder(self, name, z):
+        """Put one curve - with everything drawn for it - at height `z`.
+
+        A curve is more than one artist: the filling under it, its error
+        bars, the bars of a bar chart.  They were laid out at distances of
+        a few tenths from the line itself; the **order** of those parts is
+        kept but the distances are squeezed together, so that the whole
+        curve occupies one single place of the stack.  Without that, an
+        object pushed behind the curve would still be drawn over its filled
+        area - its outline showing through the filling.
+        """
+        line = self.series.get(name)
+        if line is None:
+            return False
+        base = float(line.get_zorder())
+        artists, offsets = [], []
+        for artist in self.series_artists(name):
+            offset = getattr(artist, "aplot_zoffset", None)
+            if offset is None:
+                offset = float(artist.get_zorder()) - base
+                artist.aplot_zoffset = offset
+            artists.append(artist)
+            offsets.append(float(offset))
+        span = (max(offsets) - min(offsets)) if offsets else 0.0
+        scale = (Z_SERIES_SPREAD / span) if span > Z_SERIES_SPREAD else 1.0
+        for artist, offset in zip(artists, offsets):
+            try:
+                artist.set_zorder(float(z) + offset * scale)
+            except (AttributeError, TypeError, ValueError):
+                continue
+        self.series_z[str(name)] = float(z)
+        return True
+
+    def fill_zorder(self, column, line):
+        """Where the filled area of one curve really is, for the export."""
+        artist = self.fills.get(column)
+        if artist is not None:
+            try:
+                return float(artist.get_zorder())
+            except (AttributeError, TypeError, ValueError):
+                pass
+        return float(line.get_zorder()) - 0.5
+
+    def apply_series_stack(self):
+        """Give the curves the places they had after they were drawn again."""
+        for name in list(self.series):
+            z = self.series_z.get(str(name))
+            if z is not None:
+                self.set_series_zorder(name, z)
+        return True
+
+    def object_z(self, kind, key):
+        """Where one object stands in the stack now, or None."""
+        if kind == "series":
+            if key not in self.series:
+                return None
+            stored = self.series_z.get(str(key))
+            if stored is not None:
+                return float(stored)
+            line = self.series.get(key)
+            return float(line.get_zorder()) if line is not None \
+                else Z_DEFAULT["series"]
+        store = self.stack_store(kind)
+        state = None if store is None else store.get(key)
         if state is None:
-            self.flash("Select an object first, then copy it")
             return None
-        if kind not in COPYABLE:
-            self.flash(f"{OBJECT_NAMES.get(kind, kind)} cannot be copied - "
-                       "text boxes, drawings and arrows can")
+        z = state.get("z")
+        return float(z) if z is not None else float(Z_DEFAULT.get(kind, 5.0))
+
+    def set_object_z(self, kind, key, z):
+        """Put one object at height `z` and remember it there."""
+        if kind == "series":
+            return self.set_series_zorder(key, z)
+        store = self.stack_store(kind)
+        state = None if store is None else store.get(key)
+        if state is None:
+            return False
+        state["z"] = float(z)
+        if kind == "shape":
+            patch = self.shapes.get(key)
+            if patch is not None:
+                patch.set_zorder(float(z))
+            picture = self.shape_pictures.get(key)
+            if picture is not None:      # the pixels just under their frame
+                picture.set_zorder(float(z) - Z_PICTURE_GAP)
+        elif kind == "arrow":
+            for artist in self.arrows.get(key) or []:
+                artist.set_zorder(float(z))
+        elif kind == "note":
+            artist = self.notes.get(key)
+            if artist is not None:
+                artist.set_zorder(float(z))
+        return True
+
+    def stack_members(self):
+        """Every object that can change places, from the back to the front."""
+        entries = []
+        for rank, kind in enumerate(STACK_KINDS):
+            keys = (list(self.series) if kind == "series"
+                    else list(self.stack_store(kind) or {}))
+            for order, key in enumerate(keys):
+                z = self.object_z(kind, key)
+                if z is None:
+                    continue
+                entries.append((z, rank, order, kind, key))
+        entries.sort(key=lambda one: (one[0], one[1], one[2]))
+        return [(kind, key) for _z, _rank, _order, kind, key in entries]
+
+    def restack(self, order=None, redraw=True):
+        """Lay the whole stack out again, evenly, from the back forward."""
+        order = self.stack_members() if order is None else list(order)
+        if order:
+            step = min(Z_STACK_STEP, Z_STACK_SPAN / float(len(order)))
+            for index, (kind, key) in enumerate(order):
+                self.set_object_z(kind, key, Z_STACK_BASE + index * step)
+        if redraw:
+            self.draw()
+        return order
+
+    def top_z(self):
+        """The height a new object needs to stand in front of everything."""
+        heights = [self.object_z(kind, key) for kind, key in self.stack_members()]
+        heights = [one for one in heights if one is not None]
+        return (max(heights) if heights else Z_STACK_BASE) + Z_STACK_STEP
+
+    def move_in_stack(self, kind, key, step=1):
+        """One step forward (step = 1) or backward (step = -1) in the stack.
+
+        The object changes places with its neighbour, so one click moves it
+        past exactly one other object - a drawing walks behind the curves
+        one by one, and a curve can be brought out in front of the others.
+        """
+        order = self.stack_members()
+        try:
+            index = order.index((kind, key))
+        except ValueError:
+            return False
+        target = max(0, min(len(order) - 1, index + int(step)))
+        if target == index:
+            self.flash(f"{self.object_name(kind, key)} is already "
+                       + ("in front of everything" if step > 0
+                          else "behind everything"))
+            return False
+        order.insert(target, order.pop(index))
+        self.restack(order)
+        neighbour = order[index]         # the one it changed places with
+        self.flash(f"{self.object_name(kind, key)} moved "
+                   + ("in front of " if step > 0 else "behind ")
+                   + self.object_name(*neighbour).lower())
+        return True
+
+    def bring_to_front(self, kind, key):
+        return self.move_in_stack(kind, key, len(self.stack_members()))
+
+    def send_to_back(self, kind, key):
+        return self.move_in_stack(kind, key, -len(self.stack_members()))
+
+    # -- what the right click found ---------------------------------------
+    def _mouse_event(self, x, y, button=1):
+        """A matplotlib click at one point of the canvas, for the hit tests."""
+        try:
+            return MouseEvent("button_press_event", self.canvas,
+                              float(x), float(y), button)
+        except (TypeError, ValueError, AttributeError):
             return None
-        PlotWindow._clipboard = {"kind": kind, "pasted": 0,
-                                 "state": copy.deepcopy(state)}
-        self.flash(f"{OBJECT_NAMES.get(kind, kind)} copied - "
+
+    def stack_object_at(self, x, y):
+        """(kind, key) of the object under the pointer, the front one first.
+
+        Unlike `object_at`, which asks the kinds of object in a fixed order,
+        this one asks the **stack**: what is drawn in front is what the
+        pointer finds, so a curve that was brought forward is picked
+        before the drawing it now covers.
+        """
+        candidates = []
+        for kind, finder in (("arrow", self.arrow_at), ("shape", self.shape_at),
+                             ("note", self.note_at)):
+            key = finder(x, y)
+            if key is not None:
+                candidates.append((kind, key))
+        name = self.series_at(self._mouse_event(x, y))
+        if name is not None:
+            candidates.append(("series", name))
+        if not candidates:
+            return (None, None)
+        candidates.sort(key=lambda one: self.object_z(*one) or 0.0)
+        return candidates[-1]
+
+    def show_object_menu(self, x, y, root_x=None, root_y=None):
+        """The menu of a right click: copy, cut, paste and the stacking.
+
+        It opens over any object - a drawing, a picture, an arrow, a text
+        box or a curve - and over the empty paper as well, where the only
+        thing that can be done is pasting.
+        """
+        kind, key = self.stack_object_at(x, y)
+        point = self._axes_point_at(x, y)
+        if kind in ("shape", "arrow", "note"):
+            self.select_object(kind, key)      # show what the menu works on
+            self.draw()
+        menu = tk.Menu(self, tearoff=0)
+        able = "normal" if kind in COPYABLE else "disabled"
+        stackable = "normal" if kind is not None else "disabled"
+        menu.add_command(label=(self.object_name(kind, key) if kind is not None
+                                else "The paper of the diagram"),
+                         state="disabled")
+        menu.add_separator()
+        menu.add_command(label="Copy", accelerator=f"{ACCEL_NAME}+C", state=able,
+                         command=lambda: self.copy_object(kind, key))
+        menu.add_command(label="Cut", accelerator=f"{ACCEL_NAME}+X", state=able,
+                         command=lambda: self.cut_object(kind, key))
+        menu.add_command(label="Paste", accelerator=f"{ACCEL_NAME}+V",
+                         command=lambda: self.paste_clipboard(at=point))
+        menu.add_separator()
+        menu.add_command(label="Move forward", state=stackable,
+                         command=lambda: self.move_in_stack(kind, key, 1))
+        menu.add_command(label="Move backward", state=stackable,
+                         command=lambda: self.move_in_stack(kind, key, -1))
+        self._object_menu = menu                # kept, or Tk lets it go
+        if root_x is None or root_y is None:
+            widget = self.canvas.get_tk_widget()
+            root_x = widget.winfo_rootx() + int(x)
+            root_y = widget.winfo_rooty() + int(widget.winfo_height() - y)
+        try:
+            menu.tk_popup(int(root_x), int(root_y))
+        except tk.TclError:
+            return None
+        finally:
+            try:
+                menu.grab_release()
+            except tk.TclError:
+                pass
+        return menu
+
+    def _axes_point_at(self, x, y):
+        """One point of the canvas in axes coordinates."""
+        try:
+            point = self.ax.transAxes.inverted().transform((float(x), float(y)))
+        except (ValueError, TypeError):
+            return (0.5, 0.5)
+        return (float(point[0]), float(point[1]))
+
+    # -- copy, cut and paste ----------------------------------------------
+    def copy_object(self, kind, key):
+        """Keep one object, with all of its properties, for pasting."""
+        store = self.stack_store(kind) if kind in COPYABLE else None
+        state = None if store is None else store.get(key)
+        if state is None:
+            if kind is None:
+                self.flash("Select an object first, then copy it")
+            else:
+                self.flash(f"{self.object_name(kind, key)} cannot be copied - "
+                           "text boxes, drawings, pictures and arrows can")
+            return None
+        PlotWindow._clipboard = {
+            "kind": kind, "pasted": 0,
+            "state": {name: value for name, value in copy.deepcopy(state).items()
+                      if not str(name).startswith("_")}}
+        self.flash(f"{self.object_name(kind, key)} copied - "
                    f"paste it with {PASTE_HINT}")
         return kind
 
-    def paste_clipboard(self, _event=None):
+    def cut_object(self, kind, key):
+        """Copy one object and take it out of the diagram."""
+        if self.copy_object(kind, key) is None:
+            return None
+        remover = {"shape": self.remove_shape, "arrow": self.remove_arrow,
+                   "note": self.remove_note}.get(kind)
+        if remover is None:
+            return None
+        name = self.object_name(kind, key)
+        remover(key)
+        self.flash(f"{name} cut out - paste it with {PASTE_HINT}")
+        return kind
+
+    def copy_selection(self, _event=None):
+        """Ctrl/Cmd+C: keep the selected object with all of its properties."""
+        kind, key = self.selection or (None, None)
+        if kind is not None and kind not in COPYABLE:
+            self.flash(f"{OBJECT_NAMES.get(kind, kind)} cannot be copied - "
+                       "text boxes, drawings and arrows can")
+            return None
+        return self.copy_object(kind, key)
+
+    def cut_selection(self, _event=None):
+        """Ctrl/Cmd+X: the selected object goes to the clipboard and away."""
+        kind, key = self.selection or (None, None)
+        if kind is None:
+            self.flash("Select an object first, then cut it")
+            return None
+        return self.cut_object(kind, key)
+
+    def raise_selection(self, _event=None):
+        """The menu: one step forward with the selected object."""
+        kind, key = self.selection or (None, None)
+        if kind is None:
+            self.flash("Select an object first, or use the right button on it")
+            return False
+        return self.move_in_stack(kind, key, 1)
+
+    def lower_selection(self, _event=None):
+        """The menu: one step backward with the selected object."""
+        kind, key = self.selection or (None, None)
+        if kind is None:
+            self.flash("Select an object first, or use the right button on it")
+            return False
+        return self.move_in_stack(kind, key, -1)
+
+    def paste_clipboard(self, _event=None, at=None):
         """Ctrl/Cmd+V: a picture from the clipboard, or the copied object.
 
         A picture waiting on the clipboard is what the user means nearly
         always; the object copied inside the program is used when there is
-        no picture to paste.
+        no picture to paste.  `at` is a point of the plot area - the menu of
+        a right click pastes where the pointer was.
         """
-        key = self.paste_picture()
+        key = self.paste_picture(centre=at)
         if key is not None:
             return key
         data = PlotWindow._clipboard
@@ -12030,10 +12726,13 @@ class PlotWindow(tk.Toplevel):
             self.flash("Nothing has been copied yet - copy an object, or a "
                        "picture in another program")
             return None
-        data["pasted"] += 1                     # repeated pastes cascade
-        step = PASTE_STEP * data["pasted"]
-        dx, dy = self._axes_delta(step, -step)
         kind = data["kind"]
+        if at is not None:                      # pasted where it was asked for
+            dx, dy = self._to_point_delta(kind, data["state"], at)
+        else:
+            data["pasted"] += 1                 # repeated pastes cascade
+            step = PASTE_STEP * data["pasted"]
+            dx, dy = self._axes_delta(step, -step)
         state = self._shifted_state(kind, data["state"], dx, dy)
         if kind == "shape":
             key = self.add_shape(state=state)
@@ -12043,8 +12742,21 @@ class PlotWindow(tk.Toplevel):
             key = self.add_note(state["pos"], state=state)
         self.select_object(kind, key)
         self.draw()
-        self.flash(f"{OBJECT_NAMES.get(kind, kind)} pasted")
+        self.flash(f"{self.object_name(kind, key)} pasted")
         return key
+
+    @staticmethod
+    def _to_point_delta(kind, state, point):
+        """How far one object must move to sit around `point`."""
+        if kind == "shape":
+            now = (float(state["x"]) + float(state["w"]) / 2.0,
+                   float(state["y"]) + float(state["h"]) / 2.0)
+        elif kind == "arrow":
+            now = ((float(state["tail"][0]) + float(state["tip"][0])) / 2.0,
+                   (float(state["tail"][1]) + float(state["tip"][1])) / 2.0)
+        else:
+            now = (float(state["pos"][0]), float(state["pos"][1]))
+        return (float(point[0]) - now[0], float(point[1]) - now[1])
 
     def nudge_selection(self, dx_pixels, dy_pixels):
         """Move the selected object with the arrow keys."""
@@ -12449,7 +13161,10 @@ class PlotWindow(tk.Toplevel):
         """Create a text box at `position` (axes coordinates)."""
         self._note_counter += 1
         key = f"note{self._note_counter}"
-        self.note_state[key] = state or self.default_note_state(position)
+        state = state or self.default_note_state(position)
+        if state.get("z") is None:
+            state["z"] = self.top_z()      # a new text box stands in front
+        self.note_state[key] = state
         if text is not None:
             self.note_state[key]["text"] = text
         self.refresh_note(key)
@@ -12485,7 +13200,8 @@ class PlotWindow(tk.Toplevel):
         artist = self.ax.text(state["pos"][0], state["pos"][1], state["text"],
                               transform=self.ax.transAxes,
                               fontsize=state["size"], color=state["color"],
-                              ha="left", va="center", bbox=box, zorder=6,
+                              ha="left", va="center", bbox=box,
+                              zorder=float(state.get("z") or Z_DEFAULT["note"]),
                               rotation=self.angle_of(state),
                               rotation_mode="anchor",
                               picker=True, clip_on=False)
@@ -13192,6 +13908,12 @@ class PlotWindow(tk.Toplevel):
         # canvas widget (see take_focus), not from inside this handler
         if self._inline is not None:       # a click elsewhere finishes writing
             self.commit_inline_edit()
+        if event.button == 3:              # the right button opens the menu
+            gui = getattr(event, "guiEvent", None)
+            self.show_object_menu(event.x, event.y,
+                                  getattr(gui, "x_root", None),
+                                  getattr(gui, "y_root", None))
+            return
         if event.dblclick:                 # every object needs two clicks
             self._rename_click = None      # a real double click is not a rename
             self._rename_prev = None
@@ -13659,6 +14381,12 @@ Start it with:
 
     python3 aplot.py
 
+It also answers a few questions on the command line:
+
+    python3 aplot.py --help          what these are
+    python3 aplot.py --make-app      build APlot.app on macOS (see below)
+    python3 aplot.py --icon FILE     write the icon into a PNG file
+
 
 ## What it needs
 
@@ -13713,6 +14441,36 @@ the settings are saved, and nothing else.  No `icons` folder, no data
 directory: the toolbar icons are drawn by the program itself, and a graph
 carries its data, its formulas and even its pictures inside its own `.aplt`
 file.
+
+### The icon, and the name in the Dock
+
+The program **draws its own icon**: a filled spectrum under a yellow plate
+with the name `APlot` on it.  It is drawn, not carried as a picture file,
+so it is sharp at whatever size the system asks for and the single file
+stays the only thing to copy.  Every window wears it - on Linux and Windows
+in the task bar, on macOS in the Dock.
+
+`python3 aplot.py --icon aplot.png` writes it out, for a launcher, a
+shortcut or a `.desktop` file of your own.
+
+On **macOS** one thing cannot be reached from inside a running program: a
+program started as `python3 aplot.py` *is* the Python interpreter as far as
+the system is concerned, so the Dock calls it `Python 3.12`.  The cure is a
+small application bundle, and APlot builds one for itself:
+
+    python3 aplot.py --make-app
+
+This writes `~/Applications/APlot.app`.  It is a folder, not a copy: it
+holds the icon, the name and a two-line launcher that starts **this same
+`aplot.py`**, wherever it lies.  Start the program from there (or drag it
+onto the Dock) and the Dock shows the APlot icon and the name `APlot`.
+Give the command a folder of your own to put it somewhere else:
+
+    python3 aplot.py --make-app /Applications
+
+Run it again after moving `aplot.py`, so that the launcher points at the
+new place.  With `pyobjc-framework-Cocoa` installed the bold application
+menu says `APlot` even without the bundle.
 
 
 ## 0. The name
@@ -14351,6 +15109,14 @@ nothing.
 
 ### Editing cells
 
+* The sheet has the keyboard **as soon as the window opens**: cell `A1` is
+  already marked, the arrow keys walk from cell to cell and typing starts
+  writing - nothing has to be clicked first.  The sheet that is brought to
+  the front, and the one left in front by an opened graph, take the
+  keyboard the same way.
+* **Just start typing**: the first character opens the cell under the
+  cursor and is the first character in it, as in a spreadsheet.  `Enter`
+  or `F2` opens it with the value that is there instead.
 * Click a cell to edit it.  The text is selected, so typing replaces it.
 * `Enter` or `Down` moves one row down, `Up` one row up.
 * `Tab` moves right, `Shift+Tab` moves left; at the end of a row the cursor
@@ -14405,6 +15171,7 @@ leaves its row quiet.
 | `Ctrl/Cmd+Space` | The whole columns the block touches. |
 | `Ctrl/Cmd+A` | The whole table. |
 | `Enter` or `F2` | Opens the cell under the cursor for editing. |
+| Any letter, digit or sign | Opens the cell under the cursor and writes that character into it (what was there is replaced).  `Ctrl`, `Cmd` and `Alt` together with a key stay commands and never write. |
 
 The open cell always carries a **blinking blue cursor** and always has the
 keyboard, even when a diagram window was the one in front a moment before
@@ -14501,7 +15268,8 @@ properties at once.
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing, picture or arrow with all of its properties and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Move forward`, `Move backward` (see `Which object is in front`). |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
@@ -14509,11 +15277,49 @@ properties at once.
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
-| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, paste and delete of the selected object, plus closing this diagram. |
+| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, `Move forward` and `Move backward`, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
+
+### Which object is in front
+
+Everything drawn inside the plot area stands in one **stack**: the curves,
+the drawings, the pictures, the arrows and the text boxes together.  What
+is higher in the stack is painted over what is lower, and every one of them
+can be moved up and down in it - so a picture can be pushed **behind** the
+curves as a background, and one curve can be brought out **in front of**
+another one.
+
+* A **right click** on any of them (`Ctrl`+click on a Mac, or the right
+  button of the mouse) opens a small menu.  Its first line names what was
+  found under the pointer - `Curve`, `Drawing`, `Picture`, `Arrow`,
+  `Text box`, or `The paper of the diagram` when the pointer was on the
+  empty paper.
+* **Move forward** lifts it past exactly **one** neighbour, **Move
+  backward** pushes it one behind.  Clicking the same line again and again
+  walks it through the whole stack, and the toolbar says at every step what
+  it has just passed.  The same two commands are in the **Plot** menu, for
+  whatever is selected.
+* **Copy** and **Cut** put a text box, a drawing, a picture or an arrow
+  aside - `Cut` takes it out of the diagram as well.  A **curve** belongs
+  to the spreadsheet, so those two lines are greyed out over a curve; it
+  can still be moved in the stack.
+* **Paste** lays the copied object - or a picture waiting on the clipboard
+  of the system - exactly **where the right button was pressed**, on top of
+  everything.  This is what the empty paper is for: right click anywhere in
+  the diagram and paste.
+* What the pointer finds is what is **in front** at that point, so after a
+  curve has been moved over a drawing the same click reaches the curve.
+* A newly drawn object always appears in front of everything, and the whole
+  order is written into the `.aplt` file and into the exported matplotlib
+  program.
+* A curve is more than one drawn thing - its line, the **filled area**
+  under it, its error bars, its bars.  They keep their own order among
+  themselves but move as **one** object, so something pushed behind a
+  filled curve disappears under the filling completely, not only under the
+  line.
 
 ### Drawing rectangles, triangles, circles, ellipses and lines
 
@@ -15558,6 +16364,9 @@ class App:
         self.root.geometry(f"{self.settings.get('window', 'main_width')}x"
                            f"{self.settings.get('window', 'main_height')}")
         self.root.wm_iconname(APP_NAME)
+        # the drawn icon: the Dock on a Mac, the task bar elsewhere, and
+        # every window this one opens later
+        apply_app_icon(self.root)
         self.plot_windows: list[PlotWindow] = []
         self._help_window = None
         # the .aplt file this graph belongs to, and how it looked when it was
@@ -15746,6 +16555,8 @@ class App:
             idx = len(self.tables) - 1
             
         self._follow_active_tab()
+        # the sheet that came to the front is the one the keyboard writes on
+        self.root.after_idle(self.focus_sheet)
         window = getattr(self, "_regression", None)
         if window is not None:
             try:
@@ -16036,6 +16847,33 @@ class App:
         self.root.attributes("-topmost", True)
         self.root.attributes("-topmost", False)
         self.root.focus_force()
+        self.focus_sheet()
+
+    def focus_sheet(self, _event=None):
+        """The sheet in front takes the keyboard, ready to be typed into.
+
+        Without this the window itself held the keyboard when the program
+        started, so the arrow keys moved no cell selector and nothing typed
+        arrived until a cell had been clicked.
+        """
+        table = self.table
+        if table is None:
+            return False
+        try:
+            current = self.root.focus_displayof()
+        except (tk.TclError, KeyError):
+            current = None
+        if current is not None and self.keyboard_busy(current):
+            return False            # a cell that is open keeps the keyboard
+        if current is not None:      # a dialog or a diagram is being used
+            try:
+                if current.winfo_toplevel() is not self.root:
+                    return False
+            except (tk.TclError, AttributeError):
+                return False
+        if getattr(self, "_tab_editor", None) is not None:
+            return False            # a tab name is being written
+        return table.take_keyboard()
 
     # -- user interface ----------------------------------------------------
     @staticmethod
@@ -16261,11 +17099,19 @@ class App:
             plot_menu.add_command(label="Copy object (or the whole figure)",
                                   accelerator=f"{ACCEL_NAME}+C",
                                   command=plot.copy_shortcut)
+            plot_menu.add_command(label="Cut object",
+                                  accelerator=f"{ACCEL_NAME}+X",
+                                  command=plot.cut_selection)
             plot_menu.add_command(label="Paste object",
                                   accelerator=f"{ACCEL_NAME}+V",
                                   command=plot.paste_clipboard)
             plot_menu.add_command(label="Delete object", accelerator="Del",
                                   command=plot.delete_selection)
+            plot_menu.add_separator()
+            plot_menu.add_command(label="Move forward",
+                                  command=plot.raise_selection)
+            plot_menu.add_command(label="Move backward",
+                                  command=plot.lower_selection)
             plot_menu.add_separator()
             plot_menu.add_command(label="Close this diagram",
                                   command=plot.close_window)
@@ -16817,6 +17663,9 @@ class App:
             window.apply_state(state)
             self.plot_windows.append(window)
         self._remember_saved(path)
+        # a file without a diagram leaves the sheet in front: it may be
+        # typed into at once (a diagram that opened keeps the keyboard)
+        self.root.after_idle(self.focus_sheet)
         return True
 
     def random_csv(self, low=0, high=100, rows=None, columns=None):
@@ -17133,12 +17982,57 @@ class App:
         return int(index)
 
 
-def main():
+USAGE = f"""{APP_NAME} - plotting and editing tabular data
+
+  python3 aplot.py                 start the program
+  python3 aplot.py --make-app      build {APP_NAME}.app (macOS), so that the Dock
+                                   shows this program's own icon and name
+  python3 aplot.py --icon FILE     write the icon into a PNG file
+  python3 aplot.py --help          this text
+"""
+
+
+def run_command(argv):
+    """The few things the program can be asked for on the command line."""
+    if not argv:
+        return None
+    first = str(argv[0])
+    if first in ("-h", "--help"):
+        print(USAGE)
+        return 0
+    if first == "--icon":
+        path = argv[1] if len(argv) > 1 else f"{APP_NAME.lower()}_icon.png"
+        written = write_icon_file(path)
+        print(f"The icon was written to {written}" if written
+              else f"The icon could not be written to {path}")
+        return 0 if written else 1
+    if first == "--make-app":
+        if sys.platform != "darwin":
+            print("--make-app builds a macOS application bundle; "
+                  f"this system is {sys.platform}.")
+            return 1
+        bundle = make_macos_app(argv[1] if len(argv) > 1 else None)
+        if bundle is None:
+            print("The application bundle could not be built.")
+            return 1
+        print(f"{bundle} is ready.\n"
+              "Open it once from the Finder (or drag it onto the Dock): the "
+              f"Dock then shows the {APP_NAME} icon and the name {APP_NAME}.")
+        return 0
+    return None
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    done = run_command(argv)
+    if done is not None:
+        return done
     set_macos_app_name(APP_NAME)  # must run before the first Tk window
     root = tk.Tk()
     App(root)
     root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

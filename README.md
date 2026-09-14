@@ -8,6 +8,12 @@ Start it with:
 
     python3 aplot.py
 
+It also answers a few questions on the command line:
+
+    python3 aplot.py --help          what these are
+    python3 aplot.py --make-app      build APlot.app on macOS (see below)
+    python3 aplot.py --icon FILE     write the icon into a PNG file
+
 
 ## What it needs
 
@@ -62,6 +68,36 @@ the settings are saved, and nothing else.  No `icons` folder, no data
 directory: the toolbar icons are drawn by the program itself, and a graph
 carries its data, its formulas and even its pictures inside its own `.aplt`
 file.
+
+### The icon, and the name in the Dock
+
+The program **draws its own icon**: a filled spectrum under a yellow plate
+with the name `APlot` on it.  It is drawn, not carried as a picture file,
+so it is sharp at whatever size the system asks for and the single file
+stays the only thing to copy.  Every window wears it - on Linux and Windows
+in the task bar, on macOS in the Dock.
+
+`python3 aplot.py --icon aplot.png` writes it out, for a launcher, a
+shortcut or a `.desktop` file of your own.
+
+On **macOS** one thing cannot be reached from inside a running program: a
+program started as `python3 aplot.py` *is* the Python interpreter as far as
+the system is concerned, so the Dock calls it `Python 3.12`.  The cure is a
+small application bundle, and APlot builds one for itself:
+
+    python3 aplot.py --make-app
+
+This writes `~/Applications/APlot.app`.  It is a folder, not a copy: it
+holds the icon, the name and a two-line launcher that starts **this same
+`aplot.py`**, wherever it lies.  Start the program from there (or drag it
+onto the Dock) and the Dock shows the APlot icon and the name `APlot`.
+Give the command a folder of your own to put it somewhere else:
+
+    python3 aplot.py --make-app /Applications
+
+Run it again after moving `aplot.py`, so that the launcher points at the
+new place.  With `pyobjc-framework-Cocoa` installed the bold application
+menu says `APlot` even without the bundle.
 
 
 ## 0. The name
@@ -700,6 +736,14 @@ nothing.
 
 ### Editing cells
 
+* The sheet has the keyboard **as soon as the window opens**: cell `A1` is
+  already marked, the arrow keys walk from cell to cell and typing starts
+  writing - nothing has to be clicked first.  The sheet that is brought to
+  the front, and the one left in front by an opened graph, take the
+  keyboard the same way.
+* **Just start typing**: the first character opens the cell under the
+  cursor and is the first character in it, as in a spreadsheet.  `Enter`
+  or `F2` opens it with the value that is there instead.
 * Click a cell to edit it.  The text is selected, so typing replaces it.
 * `Enter` or `Down` moves one row down, `Up` one row up.
 * `Tab` moves right, `Shift+Tab` moves left; at the end of a row the cursor
@@ -754,6 +798,7 @@ leaves its row quiet.
 | `Ctrl/Cmd+Space` | The whole columns the block touches. |
 | `Ctrl/Cmd+A` | The whole table. |
 | `Enter` or `F2` | Opens the cell under the cursor for editing. |
+| Any letter, digit or sign | Opens the cell under the cursor and writes that character into it (what was there is replaced).  `Ctrl`, `Cmd` and `Alt` together with a key stay commands and never write. |
 
 The open cell always carries a **blinking blue cursor** and always has the
 keyboard, even when a diagram window was the one in front a moment before
@@ -850,7 +895,8 @@ properties at once.
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing, picture or arrow with all of its properties and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Move forward`, `Move backward` (see `Which object is in front`). |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
@@ -858,11 +904,49 @@ properties at once.
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
-| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, paste and delete of the selected object, plus closing this diagram. |
+| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, `Move forward` and `Move backward`, plus closing this diagram. |
 | Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
+
+### Which object is in front
+
+Everything drawn inside the plot area stands in one **stack**: the curves,
+the drawings, the pictures, the arrows and the text boxes together.  What
+is higher in the stack is painted over what is lower, and every one of them
+can be moved up and down in it - so a picture can be pushed **behind** the
+curves as a background, and one curve can be brought out **in front of**
+another one.
+
+* A **right click** on any of them (`Ctrl`+click on a Mac, or the right
+  button of the mouse) opens a small menu.  Its first line names what was
+  found under the pointer - `Curve`, `Drawing`, `Picture`, `Arrow`,
+  `Text box`, or `The paper of the diagram` when the pointer was on the
+  empty paper.
+* **Move forward** lifts it past exactly **one** neighbour, **Move
+  backward** pushes it one behind.  Clicking the same line again and again
+  walks it through the whole stack, and the toolbar says at every step what
+  it has just passed.  The same two commands are in the **Plot** menu, for
+  whatever is selected.
+* **Copy** and **Cut** put a text box, a drawing, a picture or an arrow
+  aside - `Cut` takes it out of the diagram as well.  A **curve** belongs
+  to the spreadsheet, so those two lines are greyed out over a curve; it
+  can still be moved in the stack.
+* **Paste** lays the copied object - or a picture waiting on the clipboard
+  of the system - exactly **where the right button was pressed**, on top of
+  everything.  This is what the empty paper is for: right click anywhere in
+  the diagram and paste.
+* What the pointer finds is what is **in front** at that point, so after a
+  curve has been moved over a drawing the same click reaches the curve.
+* A newly drawn object always appears in front of everything, and the whole
+  order is written into the `.aplt` file and into the exported matplotlib
+  program.
+* A curve is more than one drawn thing - its line, the **filled area**
+  under it, its error bars, its bars.  They keep their own order among
+  themselves but move as **one** object, so something pushed behind a
+  filled curve disappears under the filling completely, not only under the
+  line.
 
 ### Drawing rectangles, triangles, circles, ellipses and lines
 
