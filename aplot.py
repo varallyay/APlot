@@ -136,8 +136,8 @@ from matplotlib.image import BboxImage
 from matplotlib.legend import Legend
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
-from matplotlib.patches import (Ellipse, FancyArrow, FancyBboxPatch,
-                                Polygon, Rectangle)
+from matplotlib.patches import (Ellipse, FancyBboxPatch, Polygon,
+                                Rectangle)
 from matplotlib.text import Text
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                MultipleLocator, NullLocator)
@@ -151,16 +151,16 @@ CONFIG_FILE = Path.home() / ".aplot" / "config.json"
 # the picture of the program itself: a spectrum under its own name
 APP_ICON_SIZE = 512             # the icon is drawn this large and scaled down
 APP_ICON_SIZES = (16, 32, 128, 256, 512)   # the sizes an .icns is built of
-APP_ICON_PANEL = "#f4f5f7"      # the rounded square behind the picture
-APP_ICON_PANEL_EDGE = "#c9ced6"
-APP_ICON_FILL = "#11548d"       # the filled spectrum
-APP_ICON_LINE = "#f59f1e"       # and its outline
-APP_ICON_LABEL = "#ffec5c"      # the yellow box with the name in it
-APP_ICON_ARROW = "#f4918e"
+APP_ICON_PANEL = "#eaeaea"      # the rounded square the spectrum lies on
+APP_ICON_FILL = "#0b4f8a"       # the filled body of the spectrum
+APP_ICON_LINE = "#f59f1e"       # and its orange outline
+APP_ICON_ROUNDING = 0.20        # how round the corners of the square are
+APP_ICON_FLOOR = 0.02           # where the foot of the curve lies ...
+APP_ICON_CEILING = 0.94         # ... and how high its tallest peak reaches
 # the peaks the spectrum of the icon is built from: (centre, width, height)
-APP_ICON_PEAKS = ((0.55, 0.150, 0.24), (0.47, 0.020, 0.20),
-                  (0.545, 0.019, 0.46), (0.625, 0.024, 1.00),
-                  (0.70, 0.042, 0.10), (0.36, 0.070, 0.08))
+APP_ICON_PEAKS = ((0.58, 0.170, 0.24), (0.44, 0.024, 0.22),
+                  (0.525, 0.028, 0.48), (0.655, 0.038, 1.00),
+                  (0.73, 0.055, 0.12), (0.32, 0.100, 0.10))
 
 # --------------------------------------------------------------------------
 # option tables
@@ -956,9 +956,11 @@ def icon_spectrum(x):
 def app_icon_png(size=APP_ICON_SIZE):
     """The icon of the program as the bytes of a PNG file.
 
-    It is drawn rather than carried as a picture file, so the one file of
-    the program stays the only thing that has to be copied, and the icon is
-    sharp at whatever size the system asks for.
+    It is the spectrum itself and nothing else: the blue body of the curve
+    with its orange outline, filling a rounded square.  It is drawn rather
+    than carried as a picture file, so the one file of the program stays
+    the only thing that has to be copied, and the icon is sharp at whatever
+    size the system asks for.
     """
     size = max(16, int(size))
     fig = Figure(figsize=(size / 100.0, size / 100.0), dpi=100)
@@ -967,35 +969,24 @@ def app_icon_png(size=APP_ICON_SIZE):
     ax.set_axis_off()
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
-    ax.add_patch(FancyBboxPatch(
-        (0.035, 0.035), 0.93, 0.93,
-        boxstyle="round,pad=0,rounding_size=0.20",
-        facecolor=APP_ICON_PANEL, edgecolor=APP_ICON_PANEL_EDGE,
-        linewidth=size / 160.0))
-    x = np.linspace(0.0, 1.0, 700)
+    # the rounded square is the paper the spectrum is drawn on, and it is
+    # also what everything is cut to: nothing reaches over its corners
+    panel = FancyBboxPatch(
+        (0.0, 0.0), 1.0, 1.0,
+        boxstyle=f"round,pad=0,rounding_size={APP_ICON_ROUNDING}",
+        facecolor=APP_ICON_PANEL, edgecolor="none", zorder=1)
+    ax.add_patch(panel)
+    # it runs off both sides, the way a spectrum fills a window
+    x = np.linspace(-0.12, 1.12, 900)
     y = icon_spectrum(x)
-    left, right, bottom, top = 0.20, 0.93, 0.17, 0.76
-    px = left + x * (right - left)
-    py = bottom + y * (top - bottom)
-    ax.fill_between(px, bottom, py, facecolor=APP_ICON_FILL, edgecolor="none",
-                    zorder=3)
-    ax.plot(px, py, color=APP_ICON_LINE, linewidth=size / 62.0,
-            solid_joinstyle="round", solid_capstyle="round", zorder=4)
-    width = size / 64.0
-    ax.plot([left, left], [bottom, 0.88], color="#000000", linewidth=width,
-            solid_capstyle="round", zorder=5)
-    ax.plot([left, 0.95], [bottom, bottom], color="#000000", linewidth=width,
-            solid_capstyle="round", zorder=5)
-    ax.add_patch(FancyArrow(0.255, 0.875, 0.30, 0.0, width=0.012,
-                            head_width=0.055, head_length=0.055,
-                            length_includes_head=True, color=APP_ICON_ARROW,
-                            zorder=6))
-    ax.add_patch(FancyBboxPatch(
-        (0.215, 0.645), 0.355, 0.155,
-        boxstyle="round,pad=0,rounding_size=0.05",
-        facecolor=APP_ICON_LABEL, edgecolor="none", zorder=7))
-    ax.text(0.3925, 0.7235, APP_NAME, ha="center", va="center",
-            fontsize=size / 9.6, color="#000000", zorder=8)
+    py = APP_ICON_FLOOR + y * (APP_ICON_CEILING - APP_ICON_FLOOR)
+    body = ax.fill_between(x, -0.2, py, facecolor=APP_ICON_FILL,
+                           edgecolor="none", zorder=2)
+    outline, = ax.plot(x, py, color=APP_ICON_LINE, linewidth=size / 46.0,
+                       solid_joinstyle="round", solid_capstyle="round",
+                       zorder=3)
+    for artist in (body, outline):
+        artist.set_clip_path(panel)
     holder = io.BytesIO()
     fig.savefig(holder, format="png", dpi=100, transparent=True)
     return holder.getvalue()
@@ -1248,6 +1239,7 @@ class Tooltip:
         self.delay = int(delay)
         self._timer = None
         self._window = None
+        widget.tooltip = self          # the hint of a button can be asked for
         widget.bind("<Enter>", self._entered, add="+")
         widget.bind("<Leave>", self._left, add="+")
         widget.bind("<ButtonPress>", self._left, add="+")
@@ -1713,7 +1705,24 @@ def _paint_save(draw, box):
          radius=0.03)
 
 
-FILE_ICON_PAINTERS = {"open": _paint_open, "save": _paint_save}
+def _paint_import(draw, box):
+    """A data file flowing into the sheet: an arrow pointing into paper."""
+    _bar(draw, box, 0.40, 0.05, 0.98, 0.95, ICON_PAPER, ICON_EDGE, 0.026,
+         radius=0.07)
+    for index in range(4):              # the lines of numbers on the sheet
+        y = 0.19 + index * 0.185
+        _bar(draw, box, 0.50, y, 0.90, y + 0.09, ICON_MUTED, None, 0,
+             radius=0.02)
+    width = max(1, int(round(0.024 * box)))
+    _bar(draw, box, 0.02, 0.42, 0.26, 0.58, ICON_ADD_COLOR, ICON_ADD_EDGE,
+         0.024, radius=0.03)
+    draw.polygon([(0.20 * box, 0.26 * box), (0.20 * box, 0.74 * box),
+                  (0.50 * box, 0.50 * box)],
+                 fill=ICON_ADD_COLOR, outline=ICON_ADD_EDGE, width=width)
+
+
+FILE_ICON_PAINTERS = {"open": _paint_open, "save": _paint_save,
+                      "import": _paint_import}
 
 
 def _paint_picture(draw, box):
@@ -10973,13 +10982,18 @@ class PlotWindow(tk.Toplevel):
         if saved_series is not None:
             # the file decides which curves exist: a column that was not
             # plotted when it was saved does not appear now either
-            wanted = {entry.get("column") for entry in saved_series}
+            found = {}
+            for entry in saved_series:
+                match = self.matching_series(entry.get("column"))
+                if match is not None:
+                    found[entry.get("column")] = match
+            wanted = set(found.values())
             for column in [name for name in self.series if name not in wanted]:
                 self.remove_series(column)
 
         for index, entry in enumerate(saved_series or []):
-            column = entry.get("column")
-            line = self.series.get(column)
+            column = found.get(entry.get("column"))
+            line = None if column is None else self.series.get(column)
             if line is None:
                 continue
             self.move_series(column, entry.get("axis", "left"))
@@ -11108,6 +11122,35 @@ class PlotWindow(tk.Toplevel):
         self.refresh_legend()
         self.apply_font_family()     # after everything has been drawn again
         self.draw()
+
+    def matching_series(self, name):
+        """The curve a saved column name belongs to, or None.
+
+        A sheet that is drawn together with another one lends its name to
+        its columns - `Signal (Fit)` instead of `Signal` - so the very same
+        curve may be called one thing in the file and another on the screen
+        once the sheets have been regrouped.  The plain name is compared
+        when the full one is not there, in both directions.
+        """
+        if name is None:
+            return None
+        name = str(name)
+        if name in self.series:
+            return name
+
+        def plain(text):
+            text = str(text)
+            if text.endswith(")") and " (" in text:
+                return text.rsplit(" (", 1)[0]
+            return text
+
+        wanted = plain(name)
+        if wanted in self.series:
+            return wanted
+        for one in self.series:
+            if plain(one) == wanted:
+                return one
+        return None
 
     def _init_axes(self, plot_cfg):
         # what the X axis really carries: the first column, or - when that
@@ -14444,11 +14487,12 @@ file.
 
 ### The icon, and the name in the Dock
 
-The program **draws its own icon**: a filled spectrum under a yellow plate
-with the name `APlot` on it.  It is drawn, not carried as a picture file,
-so it is sharp at whatever size the system asks for and the single file
-stays the only thing to copy.  Every window wears it - on Linux and Windows
-in the task bar, on macOS in the Dock.
+The program **draws its own icon**: a spectrum, its blue body under an
+orange outline, filling a rounded square and nothing else on it.  It is
+drawn, not carried as a picture file, so it is sharp at whatever size the
+system asks for and the single file stays the only thing to copy.  Every
+window wears it - on Linux and Windows in the task bar, on macOS in the
+Dock.
 
 `python3 aplot.py --icon aplot.png` writes it out, for a launcher, a
 shortcut or a `.desktop` file of your own.
@@ -14502,7 +14546,9 @@ sheets together:
 | --- | --- | --- |
 | Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
-| Open / Save data file (icons) | first | The same as the two `File` menu commands. |
+| Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
+| Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
+| Save graph (disc icon) | first | Writes the whole graph - the sheets and the diagrams - into the `.aplt` file.  `Cmd/Ctrl+S`. |
 | (the Plot icon) | first | A picture of the style that will be drawn - it changes with the style chosen from the arrow. |
 | Add row (icon, split button) | first | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
 | Delete row (icon) | first | Deletes every row the highlighted block touches. |
@@ -14510,7 +14556,7 @@ sheets together:
 | Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
 | Settings... | first | Opens the settings editor (see section 4). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
-| **Plot with previous tab** | second | Draws this sheet **and the one before it** in the same diagram.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
+| **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
@@ -14543,16 +14589,44 @@ works on.
   whether it is drawn with the one before it.  A file written by an older
   version - one single table - opens as a single sheet.
 
-**Two sheets in one diagram.**  Two data files loaded into two sheets are
-often two measurements of the same thing.  Ticking **`Plot with previous
-tab`** on the second sheet draws the two together: the X columns are matched
-up, and every curve is named `column (sheet)` - `Signal (Monday)`,
-`Signal (Tuesday)` - so the legend says which measurement it came from.  The
-chain goes on: a third sheet with the box ticked joins the two before it.
+**Sheets that are drawn together.**  Two data files loaded into two sheets
+are often two measurements of the same thing.  Ticking **`Plot with
+previous tab`** on the second sheet glues it to the first one, and the run
+of sheets that are stuck together is a **group**: the X columns are matched
+up and every curve of the group stands in the same diagram.
+
+The glue holds **in both directions**.  A diagram opened from **any** sheet
+of a group draws the **whole** group, so it makes no difference whether the
+box was ticked before or after the diagram was opened, or which sheet of
+the group was in front at the time.
+
+A sheet whose box is **not** ticked **begins a new group**.  With five
+sheets and the box ticked on the second and on the fifth, the groups are
+`1+2`, `3` alone and `4+5`: the fifth is drawn with the fourth, and not
+with the first three.
+
+Every curve keeps **its own column name**.  Only a name that is already
+taken by an earlier sheet of the group gets the name of its own sheet after
+it - `Signal` and `Signal (Tuesday)` - so that two curves never share one
+name, and ticking the box does not rename (and so does not restyle) a
+single curve that was already drawn.
+
+**Ticking the box changes nothing on the screen.**  It says what the next
+drawing will contain, and the diagrams that are open stay exactly as they
+are until:
+
+* **`Update`** brings every open diagram up to date - each of them from its
+  own group; or
+* **`Plot`** opens a **new** diagram of the group the sheet in front
+  belongs to, as the boxes stand at that moment.
+
+The one exception is a **regression**: the sheet it writes arrives with the
+box already ticked, and the diagram of the measurements is refreshed at
+once, so the fitted curve appears over the points without asking.
 
 Every diagram remembers **which sheet it was opened from**, so `Update`
-brings each of them up to date from its own sheet and a second sheet never
-overwrites the diagram of the first one.
+brings each of them up to date from its own group and one group never
+overwrites the diagram of another.
 
 ### 1.2 Regression: fitting a curve to the data
 
@@ -14615,8 +14689,9 @@ the program itself, so nothing beyond numpy is needed.
 4. The parameter columns are **not data to draw**: their `y_L` / `y_R` check
    buttons are switched off, so they never become curves.
 5. The new sheet has **`Plot with previous tab` ticked**, and the diagram is
-   refreshed at once: the measurements keep their markers and the fitted
-   curve is drawn over them as a **smooth line**.
+   refreshed at once - the one place where a drawing is brought up to date
+   without the `Update` button: the measurements keep their markers and the
+   fitted curve is drawn over them as a **smooth line**.
 
 Everything in the new sheet is an ordinary sheet: the numbers can be edited,
 copied, saved with the graph and plotted in any style.
@@ -16104,11 +16179,11 @@ come from the `Fonts` tab of the settings.
 
 | Menu item | Key | What it does |
 | --- | --- | --- |
-| Open data file (CSV, TXT, DAT) | `Cmd/Ctrl+Alt+O` | Reads a text data file into the table; the separator is recognised automatically. |
-| Save data file | `Cmd/Ctrl+Alt+S` | Writes the table into a text data file (`.csv`, `.txt`, `.dat`). |
-| Open graph (.aplt) | `Cmd/Ctrl+O` | Loads a complete APlot document: the data and the diagrams. |
-| Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open. |
+| Open graph (.aplt) | `Cmd/Ctrl+O` | Loads a complete APlot document: the data and the diagrams.  This is the **folder button** of the toolbar. |
+| Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open.  This is the **disc button** of the toolbar. |
 | Save graph as... | | The same, always asking for a new name. |
+| Import data (CSV, TXT, DAT)... | `Cmd/Ctrl+I` | Reads a text data file into the sheet; the separator is recognised automatically.  This is the **arrow button** of the toolbar. |
+| Export data (CSV, TXT, DAT)... | `Cmd/Ctrl+Alt+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
 | Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
 | Export as matplotlib script... | `Cmd/Ctrl+Alt+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
@@ -16131,7 +16206,7 @@ changes away, `Cancel` leaves everything as it is.  With several diagrams
 open, closing one of them does not ask - only the **last** one carries the
 whole graph.
 
-**Opening a file never asks.**  `Open graph`, `Open data file` and the
+**Opening a file never asks.**  `Open graph`, `Import data` and the
 random data of the `Data` menu simply replace what is on the screen: the
 question about unsaved work belongs to **leaving** the program (and to
 closing the last diagram), where something really can be lost.
@@ -16189,7 +16264,7 @@ open, then reopens the saved ones exactly as they were saved.
 
 ### Data files with any separator
 
-`Open data file` reads `.csv`, `.txt`, `.dat`, `.tsv` and `.asc` files (and
+`Import data` reads `.csv`, `.txt`, `.dat`, `.tsv` and `.asc` files (and
 anything else, with `All files`).  Nothing has to be prepared by hand:
 
 * the **separator** is recognised from the first lines of the file, in this
@@ -16271,7 +16346,7 @@ that are **already open** as well, so the effect can be seen at once.
 
 ## 5. Typical workflow
 
-1. `Random data` (File menu), `Open data file` or type the numbers by hand.
+1. `Random data` (File menu), `Import data` or type the numbers by hand.
    Untick the columns that should not be drawn.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
@@ -16469,6 +16544,12 @@ class App:
 
         last = len(self.tables) if at is None else max(0, min(int(at),
                                                              len(self.tables)))
+        # a sheet slipped in before a diagram's own sheet moves that sheet
+        # one place on: the diagram has to be told
+        for window in self.open_windows():
+            where = getattr(window, "source_tab", None)
+            if where is not None and int(where) >= last:
+                window.source_tab = int(where) + 1
         self.tables.insert(last, table)
         if hasattr(self, "plus_frame") and str(self.plus_frame) in self.notebook.tabs():
             end = self.notebook.index(self.plus_frame)
@@ -16510,11 +16591,10 @@ class App:
         self.notebook.select(source + 1)
         self._follow_active_tab()
         if plot:
-            # the diagrams of the sheet that was fitted now draw the fit as
-            # well: the new sheet is the one that carries both of them
-            for window in self.open_windows():
-                if self.window_tab(window) == source:
-                    window.source_tab = source + 1
+            # the new sheet is glued to the one that was fitted, so the
+            # diagrams of that sheet now draw the fitted curve as well -
+            # this is the one case where the drawing is brought up to date
+            # by itself, without the Update button
             if self.open_windows():
                 self.update_plot()
             else:
@@ -16578,9 +16658,14 @@ class App:
         return True
 
     def _plot_with_previous_changed(self):
-        """Ticking it at once draws the two sheets together."""
-        if self.open_windows():
-            self.update_plot()
+        """Ticking it only says what the next drawing will look like.
+
+        The diagrams that are open are deliberately left as they are: the
+        box decides what `Update` will send them and what `Plot` will put
+        into a new window, and nothing is redrawn until one of those two
+        buttons is pressed.
+        """
+        self._follow_active_tab()
         return True
 
     def _show_tab_context_menu(self, event):
@@ -16908,17 +16993,31 @@ class App:
         
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         
-        self.open_data_btn = ttk.Button(bar, text="", width=0,
-                                        style="Toolbutton", command=self.load_csv)
-        self._set_tool_icon(self.open_data_btn, "open", "Open")
-        self.open_data_btn.pack(side="left")
-        Tooltip(self.open_data_btn, f"Open data file ({ACCEL_NAME}+{alt}+O)")
+        # the folder opens a whole graph - the program's own file, with the
+        # sheets and the diagrams in it
+        self.open_graph_btn = ttk.Button(bar, text="", width=0,
+                                         style="Toolbutton",
+                                         command=self.open_graph)
+        self._set_tool_icon(self.open_graph_btn, "open", "Open")
+        self.open_graph_btn.pack(side="left")
+        Tooltip(self.open_graph_btn, f"Open graph ({ACCEL_NAME}+O)")
+        self.open_data_btn = self.open_graph_btn      # the name it had before
 
-        self.save_data_btn = ttk.Button(bar, text="", width=0,
-                                        style="Toolbutton", command=self.save_csv)
-        self._set_tool_icon(self.save_data_btn, "save", "Save")
-        self.save_data_btn.pack(side="left", padx=(2, 0))
-        Tooltip(self.save_data_btn, f"Save data file ({ACCEL_NAME}+{alt}+S)")
+        # ...and the arrow beside it brings numbers in from a data file
+        self.import_data_btn = ttk.Button(bar, text="", width=0,
+                                          style="Toolbutton",
+                                          command=self.load_csv)
+        self._set_tool_icon(self.import_data_btn, "import", "Import")
+        self.import_data_btn.pack(side="left", padx=(2, 0))
+        Tooltip(self.import_data_btn, f"Import data ({ACCEL_NAME}+I)")
+
+        self.save_graph_btn = ttk.Button(bar, text="", width=0,
+                                         style="Toolbutton",
+                                         command=self.save_graph)
+        self._set_tool_icon(self.save_graph_btn, "save", "Save")
+        self.save_graph_btn.pack(side="left", padx=(2, 0))
+        Tooltip(self.save_graph_btn, f"Save graph ({ACCEL_NAME}+S)")
+        self.save_data_btn = self.save_graph_btn      # the name it had before
         
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         
@@ -17047,13 +17146,6 @@ class App:
 
         alt = "Opt" if sys.platform == "darwin" else "Alt"
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Open data file (CSV, TXT, DAT)",
-                              accelerator=f"{ACCEL_NAME}+{alt}+O",
-                              command=self.load_csv)
-        file_menu.add_command(label="Save data file",
-                              accelerator=f"{ACCEL_NAME}+{alt}+S",
-                              command=self.save_csv)
-        file_menu.add_separator()
         file_menu.add_command(label=f"Open graph ({PROJECT_SUFFIX})",
                               accelerator=f"{ACCEL_NAME}+O",
                               command=self.open_graph)
@@ -17063,6 +17155,12 @@ class App:
         file_menu.add_command(label="Save graph as...",
                               command=self.save_graph_as)
         file_menu.add_separator()
+        file_menu.add_command(label="Import data (CSV, TXT, DAT)...",
+                              accelerator=f"{ACCEL_NAME}+I",
+                              command=self.load_csv)
+        file_menu.add_command(label="Export data (CSV, TXT, DAT)...",
+                              accelerator=f"{ACCEL_NAME}+{alt}+S",
+                              command=self.save_csv)
         file_menu.add_command(label="Export figure (image)...",
                               accelerator=f"{ACCEL_NAME}+E",
                               command=lambda: self.export_figure(plot))
@@ -17493,9 +17591,10 @@ class App:
             "s": wrap(self.save_graph),
             "e": wrap(self.export_figure, plot),
             "r": wrap(self.open_regression),
+            "i": wrap(self.load_csv),
         }
         with_alt = {
-            "o": wrap(self.load_csv),
+            "o": wrap(self.load_csv),       # what it used to be, still there
             "s": wrap(self.save_csv),
             "e": wrap(self.export_script, plot),
         }
@@ -17839,68 +17938,112 @@ class App:
                 return False
         return True
 
+    def tab_ticked(self, index):
+        """True when that sheet is drawn together with the one before it."""
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            return False
+        if not (0 < index < len(self.tables)):
+            return False            # the first sheet has nothing before it
+        variable = getattr(self.tables[index], "plot_with_previous_var", None)
+        if variable is None:
+            return False
+        try:
+            return bool(variable.get())
+        except tk.TclError:
+            return False
+
     def tab_chain(self, index=None):
         """The sheets that are drawn together, in the order they are drawn.
 
-        A sheet whose "Plot with previous tab" is ticked is drawn with the
-        one before it - and that one with the one before it again, so a
-        whole run of sheets can stand in the same diagram.
+        "Plot with previous tab" glues a sheet to the one before it, and
+        the glue holds **both ways**: the run of sheets stuck together is
+        one group, and a diagram made from any sheet of that group draws
+        the whole group.  A sheet whose box is not ticked begins a new
+        group - so ticking the fifth sheet while the fourth is left alone
+        draws the fourth and the fifth together, and leaves the first three
+        out of it.
         """
+        if not self.tables:
+            return [0]
         idx = self.active_tab_index if index is None else int(index)
-        idx = max(0, min(idx, len(self.tables) - 1)) if self.tables else 0
-        chain = [idx]
-        while (chain[-1] > 0
-               and getattr(self.tables[chain[-1]], "plot_with_previous_var", None)
-               and self.tables[chain[-1]].plot_with_previous_var.get()):
-            chain.append(chain[-1] - 1)
-        chain.reverse()
-        return chain
+        idx = max(0, min(idx, len(self.tables) - 1))
+        first = idx
+        while self.tab_ticked(first):         # back to the head of the group
+            first -= 1
+        last = idx
+        while self.tab_ticked(last + 1):      # ...and on to its tail
+            last += 1
+        return list(range(first, last + 1))
+
+    def chain_columns(self, chain):
+        """How the columns of a group of sheets are named in one diagram.
+
+        Every sheet keeps its own column names, so that gluing two sheets
+        together does not rename a single curve and nothing of their style
+        is lost.  Only a name that is **already taken** by a sheet earlier
+        in the group gets the name of its own sheet after it - `Signal`
+        and `Signal (Fit)` - because two curves cannot share one name.
+
+        It returns the name of the common X column and, for every sheet
+        that has anything to draw, `(index, its own X, {column: name})`.
+        """
+        base_x, parts, taken = None, [], set()
+        for number in chain:
+            if not (0 <= number < len(self.tables)):
+                continue
+            table = self.tables[number]
+            frame = table.plot_dataframe(1)
+            own_x = (table.plot_layout() or {}).get("x")
+            if not own_x or frame.empty:
+                continue
+            if base_x is None:
+                base_x = own_x
+                taken.add(str(base_x))
+            title = str(self.notebook.tab(number, "text"))
+            names = {}
+            for column in [one for one in frame.columns if one != own_x]:
+                name = str(column)
+                if name in taken:               # two curves of one name
+                    name = f"{column} ({title})"
+                    count = 2
+                    while name in taken:
+                        name = f"{column} ({title} {count})"
+                        count += 1
+                taken.add(name)
+                names[column] = name
+            parts.append((number, own_x, names))
+        return base_x, parts
 
     def plot_data(self, _style=None, index=None):
         """The data that goes to the diagrams: the ticked columns only."""
         idx = (self.active_tab_index if index is None
                else max(0, min(int(index), len(self.tables) - 1)))
-        
         chain = self.tab_chain(idx)
         if len(chain) == 1:
             return self.tables[idx].plot_dataframe(1).copy()
-            
-        merged_df = None
-        base_x = None
-        
-        for i in chain:
-            tab = self.tables[i]
-            df = tab.plot_dataframe(1).copy()
-            layout = tab.plot_layout()
-            curr_x = layout.get("x")
-            
-            if not curr_x or df.empty:
-                continue
-                
-            tab_name = self.notebook.tab(i, "text")
-            
-            if merged_df is None:
-                merged_df = df
-                base_x = curr_x
-                curr_y = [c for c in merged_df.columns if c != base_x]
-                merged_df[curr_y] = merged_df[curr_y].fillna("<GAP>")
-                merged_df = merged_df.rename(columns={c: f"{c} ({tab_name})" for c in curr_y})
-            else:
-                if curr_x != base_x:
-                    df = df.rename(columns={curr_x: base_x})
-                curr_y = [c for c in df.columns if c != base_x]
-                df[curr_y] = df[curr_y].fillna("<GAP>")
-                df = df.rename(columns={c: f"{c} ({tab_name})" for c in curr_y})
-                merged_df = pd.merge(merged_df, df, on=base_x, how="outer")
-                
-        if merged_df is not None:
-            try:
-                merged_df = merged_df.sort_values(by=base_x, ignore_index=True)
-            except Exception:
-                pass
-            return merged_df
 
-        return self.tables[idx].plot_dataframe(1).copy()
+        base_x, parts = self.chain_columns(chain)
+        merged = None
+        for number, own_x, names in parts:
+            frame = self.tables[number].plot_dataframe(1).copy()
+            columns = [one for one in frame.columns if one != own_x]
+            # a hole inside a sheet is marked, so that it stays a hole and
+            # is not confused with the rows the other sheet brought along
+            frame[columns] = frame[columns].fillna("<GAP>")
+            frame = frame.rename(columns={**names, own_x: base_x})
+            if merged is None:
+                merged = frame
+            else:
+                merged = pd.merge(merged, frame, on=base_x, how="outer")
+        if merged is None:
+            return self.tables[idx].plot_dataframe(1).copy()
+        try:
+            merged = merged.sort_values(by=base_x, ignore_index=True)
+        except (TypeError, ValueError, KeyError):
+            pass
+        return merged
 
     def plot_layout(self, index=None):
         """Which axis every ticked column belongs to."""
@@ -17909,31 +18052,17 @@ class App:
         chain = self.tab_chain(idx)
         if len(chain) == 1:
             return self.tables[idx].plot_layout()
-            
-        merged_layout = None
-        
-        for i in chain:
-            tab = self.tables[i]
-            layout = tab.plot_layout()
-            curr_x = layout.get("x")
-            
-            if not curr_x:
-                continue
-                
-            tab_name = self.notebook.tab(i, "text")
-            
-            if merged_layout is None:
-                merged_layout = {"x": curr_x, "x_side": layout.get("x_side", "bottom"), "y": {}}
-                for y, side in layout.get("y", {}).items():
-                    merged_layout["y"][f"{y} ({tab_name})"] = side
-            else:
-                for y, side in layout.get("y", {}).items():
-                    merged_layout["y"][f"{y} ({tab_name})"] = side
-                    
-        if merged_layout is not None:
-            return merged_layout
 
-        return self.tables[idx].plot_layout()
+        base_x, parts = self.chain_columns(chain)
+        if not parts:
+            return self.tables[idx].plot_layout()
+        head = self.tables[parts[0][0]].plot_layout()
+        merged = {"x": base_x, "x_side": head.get("x_side", "bottom"), "y": {}}
+        for number, _own_x, names in parts:
+            sides = (self.tables[number].plot_layout() or {}).get("y", {})
+            for column, side in sides.items():
+                merged["y"][names.get(column, column)] = side
+        return merged
 
     def open_windows(self):
         """The diagrams that are still open."""

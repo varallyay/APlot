@@ -71,11 +71,12 @@ file.
 
 ### The icon, and the name in the Dock
 
-The program **draws its own icon**: a filled spectrum under a yellow plate
-with the name `APlot` on it.  It is drawn, not carried as a picture file,
-so it is sharp at whatever size the system asks for and the single file
-stays the only thing to copy.  Every window wears it - on Linux and Windows
-in the task bar, on macOS in the Dock.
+The program **draws its own icon**: a spectrum, its blue body under an
+orange outline, filling a rounded square and nothing else on it.  It is
+drawn, not carried as a picture file, so it is sharp at whatever size the
+system asks for and the single file stays the only thing to copy.  Every
+window wears it - on Linux and Windows in the task bar, on macOS in the
+Dock.
 
 `python3 aplot.py --icon aplot.png` writes it out, for a launcher, a
 shortcut or a `.desktop` file of your own.
@@ -129,7 +130,9 @@ sheets together:
 | --- | --- | --- |
 | Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
-| Open / Save data file (icons) | first | The same as the two `File` menu commands. |
+| Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
+| Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
+| Save graph (disc icon) | first | Writes the whole graph - the sheets and the diagrams - into the `.aplt` file.  `Cmd/Ctrl+S`. |
 | (the Plot icon) | first | A picture of the style that will be drawn - it changes with the style chosen from the arrow. |
 | Add row (icon, split button) | first | Inserts an empty row **around the selected cell** and starts editing it. The arrow chooses the place: above, below, or at the end of the sheet. |
 | Delete row (icon) | first | Deletes every row the highlighted block touches. |
@@ -137,7 +140,7 @@ sheets together:
 | Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
 | Settings... | first | Opens the settings editor (see section 4). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
-| **Plot with previous tab** | second | Draws this sheet **and the one before it** in the same diagram.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
+| **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
@@ -170,16 +173,44 @@ works on.
   whether it is drawn with the one before it.  A file written by an older
   version - one single table - opens as a single sheet.
 
-**Two sheets in one diagram.**  Two data files loaded into two sheets are
-often two measurements of the same thing.  Ticking **`Plot with previous
-tab`** on the second sheet draws the two together: the X columns are matched
-up, and every curve is named `column (sheet)` - `Signal (Monday)`,
-`Signal (Tuesday)` - so the legend says which measurement it came from.  The
-chain goes on: a third sheet with the box ticked joins the two before it.
+**Sheets that are drawn together.**  Two data files loaded into two sheets
+are often two measurements of the same thing.  Ticking **`Plot with
+previous tab`** on the second sheet glues it to the first one, and the run
+of sheets that are stuck together is a **group**: the X columns are matched
+up and every curve of the group stands in the same diagram.
+
+The glue holds **in both directions**.  A diagram opened from **any** sheet
+of a group draws the **whole** group, so it makes no difference whether the
+box was ticked before or after the diagram was opened, or which sheet of
+the group was in front at the time.
+
+A sheet whose box is **not** ticked **begins a new group**.  With five
+sheets and the box ticked on the second and on the fifth, the groups are
+`1+2`, `3` alone and `4+5`: the fifth is drawn with the fourth, and not
+with the first three.
+
+Every curve keeps **its own column name**.  Only a name that is already
+taken by an earlier sheet of the group gets the name of its own sheet after
+it - `Signal` and `Signal (Tuesday)` - so that two curves never share one
+name, and ticking the box does not rename (and so does not restyle) a
+single curve that was already drawn.
+
+**Ticking the box changes nothing on the screen.**  It says what the next
+drawing will contain, and the diagrams that are open stay exactly as they
+are until:
+
+* **`Update`** brings every open diagram up to date - each of them from its
+  own group; or
+* **`Plot`** opens a **new** diagram of the group the sheet in front
+  belongs to, as the boxes stand at that moment.
+
+The one exception is a **regression**: the sheet it writes arrives with the
+box already ticked, and the diagram of the measurements is refreshed at
+once, so the fitted curve appears over the points without asking.
 
 Every diagram remembers **which sheet it was opened from**, so `Update`
-brings each of them up to date from its own sheet and a second sheet never
-overwrites the diagram of the first one.
+brings each of them up to date from its own group and one group never
+overwrites the diagram of another.
 
 ### 1.2 Regression: fitting a curve to the data
 
@@ -242,8 +273,9 @@ the program itself, so nothing beyond numpy is needed.
 4. The parameter columns are **not data to draw**: their `y_L` / `y_R` check
    buttons are switched off, so they never become curves.
 5. The new sheet has **`Plot with previous tab` ticked**, and the diagram is
-   refreshed at once: the measurements keep their markers and the fitted
-   curve is drawn over them as a **smooth line**.
+   refreshed at once - the one place where a drawing is brought up to date
+   without the `Update` button: the measurements keep their markers and the
+   fitted curve is drawn over them as a **smooth line**.
 
 Everything in the new sheet is an ordinary sheet: the numbers can be edited,
 copied, saved with the graph and plotted in any style.
@@ -1731,11 +1763,11 @@ come from the `Fonts` tab of the settings.
 
 | Menu item | Key | What it does |
 | --- | --- | --- |
-| Open data file (CSV, TXT, DAT) | `Cmd/Ctrl+Alt+O` | Reads a text data file into the table; the separator is recognised automatically. |
-| Save data file | `Cmd/Ctrl+Alt+S` | Writes the table into a text data file (`.csv`, `.txt`, `.dat`). |
-| Open graph (.aplt) | `Cmd/Ctrl+O` | Loads a complete APlot document: the data and the diagrams. |
-| Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open. |
+| Open graph (.aplt) | `Cmd/Ctrl+O` | Loads a complete APlot document: the data and the diagrams.  This is the **folder button** of the toolbar. |
+| Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open.  This is the **disc button** of the toolbar. |
 | Save graph as... | | The same, always asking for a new name. |
+| Import data (CSV, TXT, DAT)... | `Cmd/Ctrl+I` | Reads a text data file into the sheet; the separator is recognised automatically.  This is the **arrow button** of the toolbar. |
+| Export data (CSV, TXT, DAT)... | `Cmd/Ctrl+Alt+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
 | Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
 | Export as matplotlib script... | `Cmd/Ctrl+Alt+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
@@ -1758,7 +1790,7 @@ changes away, `Cancel` leaves everything as it is.  With several diagrams
 open, closing one of them does not ask - only the **last** one carries the
 whole graph.
 
-**Opening a file never asks.**  `Open graph`, `Open data file` and the
+**Opening a file never asks.**  `Open graph`, `Import data` and the
 random data of the `Data` menu simply replace what is on the screen: the
 question about unsaved work belongs to **leaving** the program (and to
 closing the last diagram), where something really can be lost.
@@ -1816,7 +1848,7 @@ open, then reopens the saved ones exactly as they were saved.
 
 ### Data files with any separator
 
-`Open data file` reads `.csv`, `.txt`, `.dat`, `.tsv` and `.asc` files (and
+`Import data` reads `.csv`, `.txt`, `.dat`, `.tsv` and `.asc` files (and
 anything else, with `All files`).  Nothing has to be prepared by hand:
 
 * the **separator** is recognised from the first lines of the file, in this
@@ -1898,7 +1930,7 @@ that are **already open** as well, so the effect can be seen at once.
 
 ## 5. Typical workflow
 
-1. `Random data` (File menu), `Open data file` or type the numbers by hand.
+1. `Random data` (File menu), `Import data` or type the numbers by hand.
    Untick the columns that should not be drawn.
 2. Rename the columns by clicking their headings - these names become the
    legend texts and the X axis label.
