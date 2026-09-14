@@ -796,8 +796,9 @@ properties at once.
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
-| `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing, picture or arrow with all of its properties and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
+| Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
+| `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
@@ -1015,6 +1016,53 @@ The tip and the tail are kept in the coordinates of the plot area, so the
 arrows follow the diagram when the window is resized, while the head keeps
 its size in pixels.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
+
+### Pictures in the diagram
+
+A picture - a logo, a photograph of the sample, a sketch, a screenshot -
+can be laid on a diagram in three ways:
+
+* **Paste it.**  Copy a picture anywhere (a browser, a photo program, the
+  Finder) and press `Ctrl/Cmd+V` in the diagram window.  If the clipboard
+  holds a picture it is laid in the middle of the plot area; when it holds
+  no picture, the same keys paste the object that was copied inside the
+  program, exactly as before.
+* **Drop it.**  Drag a picture file from the Finder (or from any file
+  manager) onto the diagram: it is laid **where it was dropped**, and
+  several files at once become several pictures, one beside the other.  A
+  file that is not a picture is quietly ignored.
+* **Choose it.**  The **picture button** of the toolbar - the little framed
+  landscape beside the arrow tool - and `Plot > Insert picture...` open a
+  file dialog.
+
+A picture is one of the **drawn objects**, so everything that is true of a
+drawing is true of it:
+
+* one click **selects** it and shows its eight control points, a second
+  click opens its **properties**,
+* dragging it **moves** it, dragging a control point **resizes** it, and
+  the arrow keys move it by one pixel (with `Shift` by ten),
+* `Ctrl/Cmd+C` copies it and `Delete` removes it.
+
+It is laid at its **own proportions** to begin with, taking about a third
+of the width of the plot area; resizing is free, and
+`Its own proportions` in its properties undoes a squeeze, keeping the
+width.  A picture is never rotated, so it has no round handle above it.
+
+Its **properties** are short: `Frame` draws a line around it (style,
+thickness, colour - switched off to begin with) and `Opacity (0-1)` lets
+the diagram show through it, which is what a watermark needs.
+
+The picture itself is **written into the `.aplt` file** and into the
+**exported matplotlib program**, so a saved graph carries its pictures with
+it and the exported program runs anywhere without the original files.  A
+photograph larger than 1600 pixels is made smaller first, which keeps the
+files a sensible size and is still sharper than any screen.
+
+**Dropping needs one extra package.**  Tk itself cannot take a drop; the
+`tkdnd` extension does it, and it comes with `tkinterdnd2`
+(`pip install tkinterdnd2`).  Without it everything else works as usual and
+pictures arrive by pasting or through the button.
 
 ### Selecting, copying, moving and deleting the objects
 

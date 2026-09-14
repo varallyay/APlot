@@ -100,7 +100,9 @@ App                      main window, menus, file I/O
 from __future__ import annotations
 
 import ast
+import base64
 import copy
+import io
 import json
 import math
 import os
@@ -127,6 +129,7 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.colors import to_hex, to_rgba
 from matplotlib.figure import Figure
+from matplotlib.image import BboxImage
 from matplotlib.legend import Legend
 from matplotlib.legend_handler import HandlerTuple
 from matplotlib.lines import Line2D
@@ -134,7 +137,7 @@ from matplotlib.patches import Ellipse, Polygon, Rectangle
 from matplotlib.text import Text
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                MultipleLocator, NullLocator)
-from matplotlib.transforms import Affine2D
+from matplotlib.transforms import Affine2D, Bbox, TransformedBbox
 
 APP_NAME = "APlot"
 PROJECT_SUFFIX = ".aplt"
@@ -1468,6 +1471,25 @@ def _paint_save(draw, box):
 FILE_ICON_PAINTERS = {"open": _paint_open, "save": _paint_save}
 
 
+def _paint_picture(draw, box):
+    """A framed picture: two hills and a sun, as small as it goes."""
+    _bar(draw, box, 0.06, 0.14, 0.94, 0.86, ICON_PAPER, ICON_EDGE, 0.03,
+         radius=0.07)
+    draw.ellipse([0.20 * box, 0.26 * box, 0.36 * box, 0.42 * box],
+                 fill=ICON_SAND, outline=ICON_EDGE,
+                 width=max(1, int(round(0.02 * box))))
+    draw.polygon([(0.10 * box, 0.80 * box), (0.40 * box, 0.46 * box),
+                  (0.64 * box, 0.80 * box)], fill=ICON_SAGE)
+    draw.polygon([(0.46 * box, 0.80 * box), (0.68 * box, 0.54 * box),
+                  (0.90 * box, 0.80 * box)], fill=ICON_BLUE)
+    _bar(draw, box, 0.06, 0.14, 0.94, 0.86, None, ICON_EDGE, 0.03, radius=0.07)
+
+
+def picture_tool_icon(size=ICON_SIZE):
+    """The icon of the "insert picture" button of a diagram window."""
+    return _icon_photo(_paint_picture, size)
+
+
 def file_tool_icon(name, size=ICON_SIZE):
     """The icon of the "open data file" / "save data file" buttons."""
     painter = FILE_ICON_PAINTERS.get(str(name))
@@ -1596,6 +1618,188 @@ class TableToolButton(ttk.Button):
         if self.split:
             text += " (click arrow for options)"
         return text
+
+# --------------------------------------------------------------------------
+# pictures dropped into a diagram
+# --------------------------------------------------------------------------
+
+PICTURE_KIND = "image"          # a drawn object that carries a picture
+PICTURE_MAX_SIDE = 1600         # a picture is kept no larger than this
+PICTURE_START_WIDTH = 0.35      # how wide a new one is, as a part of the axes
+PICTURE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff",
+                    ".webp", ".ppm", ".pgm")
+PICTURE_PATTERNS = [("Pictures", " ".join("*" + one for one in PICTURE_SUFFIXES)),
+                    ("All files", "*.*")]
+
+
+def picture_file(path):
+    """The name of a picture file, or None when it is something else."""
+    try:
+        name = Path(str(path).strip().strip('"').strip("'"))
+    except (TypeError, ValueError):
+        return None
+    if name.suffix.lower() not in PICTURE_SUFFIXES:
+        return None
+    return name if name.is_file() else None
+
+
+def open_picture(source):
+    """A picture from a file, from bytes, or from a picture itself.
+
+    Everything a drop, a paste or a file dialog can hand over ends up here,
+    and what comes back is always a Pillow picture in RGBA - or None when
+    there was no picture in it.
+    """
+    if Image is None or source is None:
+        return None
+    try:
+        if isinstance(source, Image.Image):
+            picture = source
+        elif isinstance(source, (bytes, bytearray)):
+            picture = Image.open(io.BytesIO(bytes(source)))
+        elif isinstance(source, np.ndarray):
+            values = np.asarray(source)
+            if values.dtype != np.uint8:
+                values = np.clip(values * 255.0, 0, 255).astype(np.uint8)
+            picture = Image.fromarray(values)
+        else:
+            name = picture_file(source)
+            if name is None:
+                return None
+            picture = Image.open(name)
+        picture.load()
+        return picture.convert("RGBA")
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def picture_as_text(picture, max_side=PICTURE_MAX_SIDE):
+    """One picture packed into a line of text, for the `.aplt` file.
+
+    A photograph out of a camera is far bigger than any diagram needs, so
+    it is made smaller first: the file stays a sensible size and the
+    picture is still sharper than the screen.
+    """
+    picture = open_picture(picture)
+    if picture is None:
+        return None
+    longest = max(picture.width, picture.height)
+    if longest > int(max_side):
+        scale = float(max_side) / float(longest)
+        picture = picture.resize((max(1, int(picture.width * scale)),
+                                  max(1, int(picture.height * scale))),
+                                 Image.Resampling.LANCZOS)
+    holder = io.BytesIO()
+    picture.save(holder, format="PNG")
+    return base64.b64encode(holder.getvalue()).decode("ascii")
+
+
+def picture_from_text(text):
+    """The picture of a `.aplt` file, as the numbers matplotlib draws."""
+    if not text:
+        return None
+    try:
+        raw = base64.b64decode(str(text), validate=False)
+    except (ValueError, TypeError):
+        return None
+    picture = open_picture(raw)
+    if picture is None:
+        return None
+    return np.asarray(picture, dtype=np.uint8)
+
+
+def clipboard_picture(widget=None):
+    """The picture on the clipboard, or None.
+
+    Pillow reads the clipboard of macOS and of Windows itself (and of X11
+    when `xclip` is there).  A file copied in the Finder arrives as a name
+    instead of pixels, and X11 sometimes offers the picture as a PNG
+    selection - both are taken as well.
+    """
+    grabbed = None
+    try:
+        from PIL import ImageGrab
+        grabbed = ImageGrab.grabclipboard()
+    except (ImportError, OSError, NotImplementedError, AttributeError):
+        grabbed = None
+    if isinstance(grabbed, list):            # names of files, not pixels
+        for one in grabbed:
+            picture = open_picture(one)
+            if picture is not None:
+                return picture
+        grabbed = None
+    picture = open_picture(grabbed)
+    if picture is not None:
+        return picture
+    if widget is None:
+        return None
+    for flavour in ("image/png", "image/PNG", "PNG"):
+        try:
+            raw = widget.tk.call("clipboard", "get", "-type", flavour)
+        except tk.TclError:
+            continue
+        if not raw:
+            continue
+        data = raw if isinstance(raw, (bytes, bytearray)) else \
+            str(raw).encode("latin-1", "ignore")
+        picture = open_picture(data)
+        if picture is not None:
+            return picture
+    try:                                     # a file name as plain text
+        return open_picture(widget.clipboard_get())
+    except (tk.TclError, TypeError):
+        return None
+
+
+def dropped_names(data):
+    """The file names of a drop, which Tk hands over as one Tcl list."""
+    text = str(data or "").strip()
+    if not text:
+        return []
+    names = []
+    rest = text
+    while rest:
+        rest = rest.lstrip()
+        if rest.startswith("{"):
+            end = rest.find("}")
+            if end < 0:
+                names.append(rest[1:])
+                break
+            names.append(rest[1:end])
+            rest = rest[end + 1:]
+        else:
+            piece, _sep, rest = rest.partition(" ")
+            if piece:
+                names.append(piece)
+    return [one for one in names if one]
+
+
+def enable_file_drop(widget, handler):
+    """Let files be dropped on a widget; True when the system allows it.
+
+    Tk itself cannot take a drop.  The `tkdnd` extension can, and it comes
+    with the `tkinterdnd2` package (`pip install tkinterdnd2`); without it
+    the program works exactly as before and pictures arrive by pasting or
+    through the menu.
+    """
+    try:
+        widget.tk.call("package", "require", "tkdnd")
+    except tk.TclError:
+        try:
+            import tkinterdnd2
+            tkinterdnd2.TkinterDnD._require(widget)
+        except (ImportError, AttributeError, tk.TclError, OSError):
+            return False
+    try:
+        widget.tk.call("tkdnd::drop_target", "register", widget, ("DND_Files",))
+        # bound through Tcl, so the names of the files (%D) and the place of
+        # the pointer (%X, %Y) really arrive
+        command = widget.register(handler)
+        widget.tk.call("bind", widget, "<<Drop>>", command + " %D %X %Y")
+    except (tk.TclError, AttributeError):
+        return False
+    return True
+
 
 class ToolDialog(tk.Toplevel):
     """Base class of the small property windows.
@@ -1735,13 +1939,18 @@ class ArrowDialog(ToolDialog):
 
 
 class ShapeDialog(ToolDialog):
-    """Line and fill properties of one drawn object."""
+    """Line and fill properties of one drawn object (or of a picture)."""
 
-    def __init__(self, master, state, on_apply, on_delete=None, on_close=None):
-        super().__init__(master, f"{name_of(SHAPE_KINDS, state['kind'], 'Shape')}"
-                                 " properties", on_close=on_close)
+    def __init__(self, master, state, on_apply, on_delete=None, on_close=None,
+                 on_fit=None):
+        picture = state["kind"] == PICTURE_KIND
+        title = ("Picture" if picture
+                 else name_of(SHAPE_KINDS, state["kind"], "Shape"))
+        super().__init__(master, f"{title} properties", on_close=on_close)
         self.on_apply = on_apply
         self.on_delete = on_delete
+        self.on_fit = on_fit
+        self.picture = picture
 
         self.kind = state["kind"]
         self.line_on_var = tk.BooleanVar(
@@ -1754,7 +1963,7 @@ class ShapeDialog(ToolDialog):
         self.fill_on_var = tk.BooleanVar(value=state["face"] != "none")
         self.angle_var = tk.StringVar(value=f"{float(state.get('angle', 0.0)):g}")
 
-        line = self._section("Line", self.line_on_var)
+        line = self._section("Frame" if picture else "Line", self.line_on_var)
         combo = ttk.Combobox(line, textvariable=self.style_var, state="readonly",
                              values=drawn_names(LINE_STYLES), width=14)
         self.field(line, 0, "Style:", combo)
@@ -1766,9 +1975,22 @@ class ShapeDialog(ToolDialog):
                                       command=lambda _c: self.apply())
         self.field(line, 2, "Colour:", self.edge_color)
 
-        # a line is a stroke: there is nothing to fill in it
+        # a picture fills its own box: it has no colour to choose, only
+        # how much of what is behind it shows through
         self.fill_box = None
-        if self.kind not in OPEN_SHAPES:
+        if picture:
+            box = ttk.LabelFrame(self.body, text="Picture", padding=8)
+            box.pack(fill="x", pady=(10, 0))
+            self.field(box, 0, "Opacity (0-1):",
+                       ttk.Spinbox(box, from_=0, to=1, increment=0.05, width=8,
+                                   textvariable=self.alpha_var,
+                                   command=self.apply))
+            ttk.Button(box, text="Its own proportions",
+                       command=self._fit).grid(row=0, column=2, padx=(8, 0))
+            self.face_color = ColorSwatch(self.body, "#cfe3f7")
+            self.face_color.pack_forget()
+            self.fill_on_var.set(False)
+        elif self.kind not in OPEN_SHAPES:
             fill = self._section("Fill", self.fill_on_var, pady=(10, 0))
             self.fill_box = fill
             self.face_color = ColorSwatch(
@@ -1784,8 +2006,13 @@ class ShapeDialog(ToolDialog):
             self.face_color.pack_forget()
             self.fill_on_var.set(False)
 
-        # a line has no rotation of its own: its two ends give the direction
-        if self.kind not in OPEN_SHAPES:
+        # a line has no rotation of its own: its two ends give the direction,
+        # and a picture is always upright
+        if picture:
+            hint = ("Drag the picture to move it, drag a square handle to\n"
+                    "resize it.  \"Frame\" draws a line around it, and\n"
+                    "\"Its own proportions\" undoes a squeeze.")
+        elif self.kind not in OPEN_SHAPES:
             turn = ttk.LabelFrame(self.body, text="Rotation", padding=8)
             turn.pack(fill="x", pady=(10, 0))
             self.field(turn, 0, "Angle [deg]:",
@@ -1824,6 +2051,11 @@ class ShapeDialog(ToolDialog):
         box.configure(labelwidget=check)
         box.pack(fill="x", **pack)
         return box
+
+    def _fit(self):
+        if self.on_fit:
+            self.on_fit()
+        return None
 
     def values(self):
         return {
@@ -7704,6 +7936,7 @@ class PlotWindow(tk.Toplevel):
         self._pending_text = False
         self.shapes: dict = {}          # key -> drawn patch
         self.shape_state: dict = {}     # key -> {kind, x, y, w, h, line, fill}
+        self.shape_pictures: dict = {}  # key -> the picture drawn in that box
         self._shape_counter = 0
         self._pending_shape = False
         self._shape_drag = None
@@ -7811,6 +8044,8 @@ class PlotWindow(tk.Toplevel):
             plot_menu.add_command(label="Title and fonts...",
                                   command=self.open_title_dialog)
             plot_menu.add_separator()
+            plot_menu.add_command(label="Insert picture...",
+                                  command=self.insert_picture_file)
             plot_menu.add_command(label="Copy object",
                                   accelerator=f"{ACCEL_NAME}+C",
                                   command=self.copy_selection)
@@ -7869,12 +8104,29 @@ class PlotWindow(tk.Toplevel):
         self.arrow_button.bind("<Leave>", lambda _e: toolbar.set_message(""),
                                add="+")
 
+        self._picture_icon = picture_tool_icon(20)
+        self.picture_button = tk.Button(
+            toolbar, image=self._picture_icon, text=("" if self._picture_icon
+                                                     else "Picture"),
+            command=self.insert_picture_file, relief="flat", borderwidth=1,
+            highlightthickness=0)
+        self.picture_button.pack(side="left", padx=(6, 2), pady=2)
+        self.picture_button.bind(
+            "<Enter>", lambda _e: toolbar.set_message(
+                "Picture: choose a file - or paste one, or drop one "
+                "into the diagram"))
+        self.picture_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
+
         try:            # the standard Save button must not save the marks
             save_button = toolbar._buttons.get("Save")
             if save_button is not None:
                 save_button.configure(command=self.save_figure_clean)
         except (AttributeError, tk.TclError):
             pass
+
+        # a picture dropped from the Finder, when the system can do it
+        self.drop_ready = enable_file_drop(self.canvas.get_tk_widget(),
+                                           self.drop_pictures)
 
         self.bind("<Escape>", lambda _e: self.cancel_tools())
         self.canvas.get_tk_widget().bind("<Escape>",
@@ -9666,14 +9918,17 @@ class PlotWindow(tk.Toplevel):
             "It needs numpy and matplotlib and nothing else - the data is",
             "written into the file, so it runs anywhere.",
             '"""',
+            "import base64",
+            "import io",
             "import math",
             "import numpy as np",
             "import matplotlib.pyplot as plt",
             "from matplotlib.legend import Legend",
+            "from matplotlib.image import BboxImage",
             "from matplotlib.patches import Ellipse, Polygon, Rectangle",
             "from matplotlib.ticker import (AutoMinorLocator, MultipleLocator,",
             "                               NullLocator)",
-            "from matplotlib.transforms import Affine2D",
+            "from matplotlib.transforms import Affine2D, Bbox, TransformedBbox",
             "",
         ]
         out += self._script_data()
@@ -10180,6 +10435,22 @@ class PlotWindow(tk.Toplevel):
                 out.append("ax.add_patch(Ellipse((%s, %s), %s, %s, %s))"
                            % (lit(x + w / 2), lit(y + h / 2), lit(w), lit(h),
                               common))
+            elif kind == PICTURE_KIND:
+                # the picture itself travels with the program, in one line
+                out.append("picture_%s = plt.imread(io.BytesIO(base64."
+                           "b64decode(%s)), format='png')" % (key, lit(str(state.get("picture", "")))))
+                out.append("box_%s = TransformedBbox(Bbox.from_bounds(%s, %s, "
+                           "%s, %s), ax.transAxes)"
+                           % (key, lit(x), lit(y), lit(w), lit(h)))
+                out.append("art_%s = BboxImage(box_%s, "
+                           "interpolation='antialiased', zorder=4, alpha=%s)"
+                           % (key, key, lit(float(state.get("alpha", 1.0)))))
+                out.append("art_%s.set_data(picture_%s)" % (key, key))
+                out.append("art_%s.set_clip_on(False)" % key)
+                out.append("ax.add_artist(art_%s)" % key)
+                if state.get("style", "none") != "none":
+                    out.append("ax.add_patch(Rectangle((%s, %s), %s, %s, %s))"
+                               % (lit(x), lit(y), lit(w), lit(h), common))
             else:
                 out.append("ax.add_patch(Rectangle((%s, %s), %s, %s, %s))"
                            % (lit(x), lit(y), lit(w), lit(h), common))
@@ -10284,10 +10555,13 @@ class PlotWindow(tk.Toplevel):
             "frame": dict(self.frame_cfg),
             "text_offsets": {name: [float(value[0]), float(value[1])]
                              for name, value in self.text_offset.items()},
+            # a name beginning with "_" is something the program keeps for
+            # itself (the pixels of a picture), not a part of the graph
             "shapes": [{key_: (float(value) if key_ in ("x", "y", "w", "h", "angle",
                                                         "width", "alpha")
                                 else value)
-                        for key_, value in state.items()}
+                        for key_, value in state.items()
+                        if not str(key_).startswith("_")}
                        for state in self.shape_state.values()],
             "arrows": [{"head": state["head"],
                         "tail": [float(state["tail"][0]), float(state["tail"][1])],
@@ -10746,6 +11020,7 @@ class PlotWindow(tk.Toplevel):
         patch = self.shapes.pop(key, None)
         if patch is not None:
             patch.remove()
+        self._clear_picture(key)
         self.shape_state.pop(key, None)
         if self.selected_shape == key:
             self.select_shape(None)
@@ -10763,6 +11038,7 @@ class PlotWindow(tk.Toplevel):
         patch = self.shapes.pop(key, None)
         if patch is not None:
             patch.remove()
+        self._clear_picture(key)
         state = self.shape_state.get(key)
         if state is None:
             return None
@@ -10798,9 +11074,178 @@ class PlotWindow(tk.Toplevel):
             patch = Rectangle((x, y), w, h, **common)
         self.ax.add_patch(patch)
         self.shapes[key] = patch
+        if state["kind"] == PICTURE_KIND:
+            self._refresh_picture(key, state, patch)
         if self.selected_shape == key:
             self._refresh_handles()
         return patch
+
+    # -- a picture pasted or dropped into the diagram ----------------------
+    def _clear_picture(self, key):
+        artist = self.shape_pictures.pop(key, None)
+        if artist is not None:
+            try:
+                artist.remove()
+            except (ValueError, AttributeError):
+                pass
+        return None
+
+    def _refresh_picture(self, key, state, patch):
+        """Draw the picture of one object in the box of its rectangle."""
+        self._clear_picture(key)
+        values = state.get("_pixels")
+        if values is None:
+            values = picture_from_text(state.get("picture"))
+            state["_pixels"] = values
+        if values is None:
+            return None
+        box = TransformedBbox(
+            Bbox.from_bounds(float(state["x"]), float(state["y"]),
+                             max(MIN_SHAPE_SIZE, float(state["w"])),
+                             max(MIN_SHAPE_SIZE, float(state["h"]))),
+            self.ax.transAxes)
+        artist = BboxImage(box, interpolation="antialiased", zorder=4,
+                           alpha=float(state.get("alpha", 1.0)))
+        artist.set_data(values)
+        artist.set_clip_on(False)
+        artist.set_in_layout(False)
+        self.ax.add_artist(artist)
+        self.shape_pictures[key] = artist
+        patch.set_facecolor("none")        # the picture is the filling
+        patch.set_zorder(5)
+        return artist
+
+    @staticmethod
+    def picture_ratio(state):
+        """Height / width of the picture itself, or None."""
+        values = state.get("_pixels")
+        if values is None:
+            values = picture_from_text(state.get("picture"))
+            state["_pixels"] = values
+        if values is None or not len(np.shape(values)) >= 2:
+            return None
+        height, width = np.shape(values)[0], np.shape(values)[1]
+        return (float(height) / float(width)) if width else None
+
+    def picture_size(self, state, width=None):
+        """The box a picture fills at its own proportions."""
+        ratio = self.picture_ratio(state) or 1.0
+        wide = float(width or PICTURE_START_WIDTH)
+        # the axes are wider than they are tall, so a square picture needs
+        # a taller box in axes coordinates to look square on the screen
+        tall = wide * ratio * self._axes_aspect()
+        if tall > 0.9:                      # never taller than the plot area
+            wide *= 0.9 / tall
+            tall = 0.9
+        return wide, tall
+
+    def add_picture(self, source, centre=None, state=None):
+        """Put a picture into the diagram; it can be moved and resized.
+
+        `source` is anything a drop, a paste or the file dialog hands over:
+        a file name, a picture, or the bytes of one.  `centre` is where it
+        is laid (the middle of the plot area by default).
+        """
+        if state is None:
+            text = picture_as_text(source)
+            if text is None:
+                return None
+            cfg = self.settings.section("shape")
+            state = {
+                "kind": PICTURE_KIND, "picture": text,
+                "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0, "angle": 0.0,
+                "style": "none",          # no frame around it to begin with
+                "width": float(cfg["line_width"]),
+                "edge": safe_hex(cfg["line_color"], "#000000"),
+                "face": "none", "alpha": 1.0,
+            }
+            width, height = self.picture_size(state)
+            middle = centre or (0.5, 0.5)
+            # it is laid around that point, and pulled back inside the plot
+            # area when the point is close to an edge
+            x = min(max(float(middle[0]) - width / 2.0, 0.0), 1.0 - width)
+            y = min(max(float(middle[1]) - height / 2.0, 0.0), 1.0 - height)
+            state["x"], state["y"] = x, y
+            state["w"], state["h"] = width, height
+        self._shape_counter += 1
+        key = f"shape{self._shape_counter}"
+        self.shape_state[key] = state
+        self.refresh_shape(key)
+        self.select_object("shape", key)
+        self.draw()
+        self.flash("Picture added - drag it to move it, "
+                   "drag a corner to resize it")
+        return key
+
+    def fit_picture_ratio(self, key):
+        """Give a picture the shape it really has, keeping its width."""
+        state = self.shape_state.get(key)
+        if state is None or state.get("kind") != PICTURE_KIND:
+            return False
+        width, height = self.picture_size(state, width=state["w"])
+        state["w"], state["h"] = width, height
+        self.refresh_shape(key)
+        self._refresh_handles()
+        self._refresh_highlight()
+        self.draw()
+        return True
+
+    def paste_picture(self, _event=None):
+        """A picture from the clipboard, in the middle of the diagram."""
+        picture = clipboard_picture(self.canvas.get_tk_widget())
+        if picture is None:
+            return None
+        return self.add_picture(picture)
+
+    def insert_picture_file(self, *_args):
+        """`Insert picture...`: choose a picture file and place it."""
+        path = filedialog.askopenfilename(title="Insert picture",
+                                          filetypes=PICTURE_PATTERNS,
+                                          parent=self)
+        if not path:
+            return None
+        key = self.add_picture(path)
+        if key is None:
+            messagebox.showerror("Picture",
+                                 "That file could not be read as a picture.",
+                                 parent=self)
+        return key
+
+    def drop_pictures(self, data, root_x=None, root_y=None):
+        """Pictures dropped on the diagram from the Finder.
+
+        The first one is laid where it was dropped, the others beside it.
+        """
+        keys = []
+        centre = self._axes_point_of(root_x, root_y)
+        for name in dropped_names(data):
+            step = 0.03 * len(keys)
+            spot = None
+            if centre is not None:
+                spot = (centre[0] + step, centre[1] - step)
+            key = self.add_picture(name, centre=spot)
+            if key is not None:
+                keys.append(key)
+        if not keys:
+            self.flash("There was no picture in what was dropped")
+        return keys
+
+    def _axes_point_of(self, root_x, root_y):
+        """A point of the screen in axes coordinates, or None."""
+        if root_x is None or root_y is None:
+            return None
+        try:
+            widget = self.canvas.get_tk_widget()
+            x = float(root_x) - widget.winfo_rootx()
+            y = float(root_y) - widget.winfo_rooty()
+            if not (0 <= x <= widget.winfo_width()
+                    and 0 <= y <= widget.winfo_height()):
+                return None
+            point = self.ax.transAxes.inverted().transform(
+                (x, float(widget.winfo_height()) - y))
+        except (ValueError, TypeError, tk.TclError):
+            return None
+        return (float(point[0]), float(point[1]))
 
     def refresh_shapes(self):
         for key in list(self.shape_state):
@@ -10864,6 +11309,8 @@ class PlotWindow(tk.Toplevel):
         base = self.ax.transAxes
         if kind == "shape":
             state = self.shape_state[key]
+            if state.get("kind") == PICTURE_KIND:
+                return None          # a picture is not turned, only resized
             top = self.shape_handle_positions(state)[6]     # top, middle
             start = np.array(base.transform(centre), dtype=float)
             end = np.array(base.transform(top), dtype=float)
@@ -11569,10 +12016,19 @@ class PlotWindow(tk.Toplevel):
         return kind
 
     def paste_clipboard(self, _event=None):
-        """Ctrl/Cmd+V: another copy of it, a little beside the original."""
+        """Ctrl/Cmd+V: a picture from the clipboard, or the copied object.
+
+        A picture waiting on the clipboard is what the user means nearly
+        always; the object copied inside the program is used when there is
+        no picture to paste.
+        """
+        key = self.paste_picture()
+        if key is not None:
+            return key
         data = PlotWindow._clipboard
         if not data:
-            self.flash("Nothing has been copied yet")
+            self.flash("Nothing has been copied yet - copy an object, or a "
+                       "picture in another program")
             return None
         data["pasted"] += 1                     # repeated pastes cascade
         step = PASTE_STEP * data["pasted"]
@@ -11915,6 +12371,7 @@ class PlotWindow(tk.Toplevel):
 
         return self._show_dialog(f"shape-{key}", lambda: ShapeDialog(
             self, state, apply, on_delete=lambda: self.remove_shape(key),
+            on_fit=lambda: self.fit_picture_ratio(key),
             on_close=lambda _d: self._dialogs.pop(f"shape-{key}", None)))
 
     # -- free text boxes ---------------------------------------------------
@@ -13954,8 +14411,9 @@ properties at once.
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing or arrow with all of its properties and pastes another copy of it. |
-| `Delete` / `Backspace` | Removes the selected text box, drawing or arrow. |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+V` | Copies the selected text box, drawing, picture or arrow with all of its properties and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
+| Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
+| `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
@@ -14173,6 +14631,53 @@ The tip and the tail are kept in the coordinates of the plot area, so the
 arrows follow the diagram when the window is resized, while the head keeps
 its size in pixels.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
+
+### Pictures in the diagram
+
+A picture - a logo, a photograph of the sample, a sketch, a screenshot -
+can be laid on a diagram in three ways:
+
+* **Paste it.**  Copy a picture anywhere (a browser, a photo program, the
+  Finder) and press `Ctrl/Cmd+V` in the diagram window.  If the clipboard
+  holds a picture it is laid in the middle of the plot area; when it holds
+  no picture, the same keys paste the object that was copied inside the
+  program, exactly as before.
+* **Drop it.**  Drag a picture file from the Finder (or from any file
+  manager) onto the diagram: it is laid **where it was dropped**, and
+  several files at once become several pictures, one beside the other.  A
+  file that is not a picture is quietly ignored.
+* **Choose it.**  The **picture button** of the toolbar - the little framed
+  landscape beside the arrow tool - and `Plot > Insert picture...` open a
+  file dialog.
+
+A picture is one of the **drawn objects**, so everything that is true of a
+drawing is true of it:
+
+* one click **selects** it and shows its eight control points, a second
+  click opens its **properties**,
+* dragging it **moves** it, dragging a control point **resizes** it, and
+  the arrow keys move it by one pixel (with `Shift` by ten),
+* `Ctrl/Cmd+C` copies it and `Delete` removes it.
+
+It is laid at its **own proportions** to begin with, taking about a third
+of the width of the plot area; resizing is free, and
+`Its own proportions` in its properties undoes a squeeze, keeping the
+width.  A picture is never rotated, so it has no round handle above it.
+
+Its **properties** are short: `Frame` draws a line around it (style,
+thickness, colour - switched off to begin with) and `Opacity (0-1)` lets
+the diagram show through it, which is what a watermark needs.
+
+The picture itself is **written into the `.aplt` file** and into the
+**exported matplotlib program**, so a saved graph carries its pictures with
+it and the exported program runs anywhere without the original files.  A
+photograph larger than 1600 pixels is made smaller first, which keeps the
+files a sensible size and is still sharper than any screen.
+
+**Dropping needs one extra package.**  Tk itself cannot take a drop; the
+`tkdnd` extension does it, and it comes with `tkinterdnd2`
+(`pip install tkinterdnd2`).  Without it everything else works as usual and
+pictures arrive by pasting or through the button.
 
 ### Selecting, copying, moving and deleting the objects
 
@@ -15661,6 +16166,8 @@ class App:
             plot_menu.add_command(label="Title and fonts...",
                                   command=plot.open_title_dialog)
             plot_menu.add_separator()
+            plot_menu.add_command(label="Insert picture...",
+                                  command=plot.insert_picture_file)
             plot_menu.add_command(label="Copy object (or the whole figure)",
                                   accelerator=f"{ACCEL_NAME}+C",
                                   command=plot.copy_shortcut)
