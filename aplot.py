@@ -145,6 +145,7 @@ from matplotlib.transforms import Affine2D, Bbox, TransformedBbox
 
 APP_NAME = "APlot"
 APP_ID = "hu.feti.aplot"        # what macOS calls the program among its own
+BUNDLE_MARK = "APLOT_APP_BUNDLE"   # set by the launcher of APlot.app
 PROJECT_SUFFIX = ".aplt"
 CONFIG_FILE = Path.home() / ".aplot" / "config.json"
 
@@ -155,6 +156,10 @@ APP_ICON_PANEL = "#eaeaea"      # the rounded square the spectrum lies on
 APP_ICON_FILL = "#0b4f8a"       # the filled body of the spectrum
 APP_ICON_LINE = "#f59f1e"       # and its orange outline
 APP_ICON_ROUNDING = 0.20        # how round the corners of the square are
+# the free border macOS leaves around an icon, as a part of the whole tile:
+# without it the square fills the Dock tile edge to edge and reads bigger
+# than the icons beside it.  0.0 fills the tile completely.
+APP_ICON_MARGIN = 0.06
 APP_ICON_FLOOR = 0.02           # where the foot of the curve lies ...
 APP_ICON_CEILING = 0.94         # ... and how high its tallest peak reaches
 # the peaks the spectrum of the icon is built from: (centre, width, height)
@@ -302,6 +307,9 @@ Z_STACK_BASE = 2.0          # the very back of the stack (a plain curve sits her
 Z_STACK_STEP = 0.02         # the usual distance between two neighbours
 Z_STACK_SPAN = 3.0          # the whole stack stays inside base ... base + span
 Z_PICTURE_GAP = 0.004       # the frame of a picture is just above its pixels
+# an empty cell of a sheet that is drawn together with another one: a real
+# hole in the curve, not a row the other sheet brought along
+GAP_MARK = "<GAP>"
 # One curve is drawn with several artists - the line, the filled area under
 # it, its error bars - which matplotlib lays at distances of a few tenths
 # from each other.  Those distances are squeezed into this much, so that a
@@ -349,7 +357,39 @@ AXIS_TAGS = {
 }
 X_SIDES = {"B": "bottom", "T": "top"}
 Y_SIDES = {"L": "left", "R": "right"}
+# the shades every drawn icon of the program is painted with
+ICON_SIZE = 20             # how big a toolbar icon is drawn, in pixels
+ICON_SCALE = 4             # ... and how much bigger it is painted first
+
+ICON_PAPER = "#eceff3"     # the sheet a row / column icon stands on
+ICON_MUTED = "#c2c8d0"     # the rows and columns that stay where they are
+ICON_EDGE = "#8b93a0"      # the thin outline around everything
+ICON_ADD_COLOR = "#9dc3e6"      # pastel blue: the row or column that appears
+ICON_ADD_EDGE = "#5b8bbd"
+ICON_DELETE_COLOR = "#e6a8a8"   # pastel rose: the one that goes away
+ICON_DELETE_EDGE = "#bd6b6b"
+# the pastel shades the nine plot icons are drawn with
+ICON_INK = "#6f7887"
+ICON_STROKE = "#6f97c4"    # the pastel blue a curve is drawn with
+ICON_BLUE = "#9dc3e6"
+ICON_SAGE = "#a8ccb0"
+ICON_SAND = "#e8cfa0"
+ICON_ROSE = "#e6a8a8"
+ICON_LILAC = "#c3b3dd"
+ICON_ARMED = "#cfe3f6"     # the plate behind a tool that waits for a click
+
+
 AXIS_NAMES = {"x": "X axis", "y": "Left Y axis", "y2": "Right Y axis"}
+# the direction of an axis: away altogether, the usual way, or turned round
+AXIS_DIRECTIONS = ("off", "standard", "reverse")
+AXIS_OFF_NAMES = {"x": "No X axis", "y": "No left Y axis",
+                  "y2": "No right Y axis"}
+# how the numbers are spread along an axis
+AXIS_SCALES = [("Linear", "linear"), ("Log 10", "log10"), ("Log 2", "log2"),
+               ("Log (natural)", "ln")]
+LOG_BASES = {"log10": 10.0, "log2": 2.0, "ln": float(np.e)}
+LOG_FLOOR = 1e-12           # a logarithmic axis never reaches zero
+EMPTY_RANGE = (0.0, 1.0)    # what an axis shows while no curve belongs to it
 # the four sides of the plot area, as the pointer sees them
 FRAME_ENDS = {"bottom": ((0.0, 0.0), (1.0, 0.0)),
               "top": ((0.0, 1.0), (1.0, 1.0)),
@@ -731,6 +771,10 @@ DEFAULTS = {
         "plot_width": 960, "plot_height": 720,
         "dialogs_on_top": False,
     },
+    # not shown in the settings window: what the program remembers by itself
+    "macos": {
+        "ask_app_bundle": True,      # offer to build APlot.app in the Dock
+    },
     "table": {
         "rows": 12,
         "columns": "X,Y1,Y2,Y3",
@@ -957,9 +1001,12 @@ def app_icon_png(size=APP_ICON_SIZE):
     """The icon of the program as the bytes of a PNG file.
 
     It is the spectrum itself and nothing else: the blue body of the curve
-    with its orange outline, filling a rounded square.  It is drawn rather
-    than carried as a picture file, so the one file of the program stays
-    the only thing that has to be copied, and the icon is sharp at whatever
+    with its orange outline, filling a rounded square.  The square does not
+    reach the edge of the picture: `APP_ICON_MARGIN` of free border is left
+    around it, the way macOS draws its own icons, so that APlot sits at the
+    same size as its neighbours in the Dock.  It is drawn rather than
+    carried as a picture file, so the one file of the program stays the
+    only thing that has to be copied, and the icon is sharp at whatever
     size the system asks for.
     """
     size = max(16, int(size))
@@ -969,20 +1016,29 @@ def app_icon_png(size=APP_ICON_SIZE):
     ax.set_axis_off()
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
+    # everything is drawn inside the square, which is itself inside the
+    # picture: `inside` turns a place on the square into a place on it
+    margin = min(0.45, max(0.0, float(APP_ICON_MARGIN)))
+    span = 1.0 - 2.0 * margin
+
+    def inside(value):
+        return margin + span * np.asarray(value, dtype=float)
+
     # the rounded square is the paper the spectrum is drawn on, and it is
     # also what everything is cut to: nothing reaches over its corners
     panel = FancyBboxPatch(
-        (0.0, 0.0), 1.0, 1.0,
-        boxstyle=f"round,pad=0,rounding_size={APP_ICON_ROUNDING}",
+        (margin, margin), span, span,
+        boxstyle=f"round,pad=0,rounding_size={APP_ICON_ROUNDING * span}",
         facecolor=APP_ICON_PANEL, edgecolor="none", zorder=1)
     ax.add_patch(panel)
     # it runs off both sides, the way a spectrum fills a window
     x = np.linspace(-0.12, 1.12, 900)
     y = icon_spectrum(x)
     py = APP_ICON_FLOOR + y * (APP_ICON_CEILING - APP_ICON_FLOOR)
-    body = ax.fill_between(x, -0.2, py, facecolor=APP_ICON_FILL,
-                           edgecolor="none", zorder=2)
-    outline, = ax.plot(x, py, color=APP_ICON_LINE, linewidth=size / 46.0,
+    body = ax.fill_between(inside(x), inside(-0.2), inside(py),
+                           facecolor=APP_ICON_FILL, edgecolor="none", zorder=2)
+    outline, = ax.plot(inside(x), inside(py), color=APP_ICON_LINE,
+                       linewidth=size * span / 46.0,
                        solid_joinstyle="round", solid_capstyle="round",
                        zorder=3)
     for artist in (body, outline):
@@ -1121,6 +1177,7 @@ def make_macos_app(folder=None, name=APP_NAME):
         launcher = macos / name
         launcher.write_text(
             "#!/bin/sh\n"
+            f"export {BUNDLE_MARK}=1\n"     # the program knows it is in a bundle
             f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"\n',
             encoding="utf-8")
         launcher.chmod(0o755)
@@ -1131,30 +1188,65 @@ def make_macos_app(folder=None, name=APP_NAME):
     return bundle
 
 
-def set_macos_app_name(name=APP_NAME):
-    """Make the first (application) menu show `name` instead of "Python".
+def running_from_bundle():
+    """True when this program was started from its own `APlot.app`."""
+    if os.environ.get(BUNDLE_MARK):
+        return True
+    if sys.platform != "darwin":
+        return False
+    try:                       # started by hand from inside the bundle
+        return f"/{APP_NAME}.app/Contents/" in str(Path(sys.argv[0]).resolve())
+    except (OSError, ValueError):
+        return False
 
-    Must run before the first Tk window is created.  It needs pyobjc
-    (`pip install pyobjc-framework-Cocoa`); without it the menu keeps the
-    name of the interpreter, but everything else works unchanged.
+
+def set_macos_app_name(name=APP_NAME):
+    """Make macOS call this program `name` instead of the interpreter.
+
+    Must run before the first Tk window is created.  Two things are told:
+    the **bundle** the process belongs to - which is what the bold
+    application menu reads - and the **process name**, which is one of the
+    things the Dock reads.  It needs pyobjc (`pip install
+    pyobjc-framework-Cocoa`); without it nothing here happens and the
+    program works exactly as before.
+
+    Neither of them is the whole answer: a program started as
+    `python3 aplot.py` is the Python interpreter as far as Launch Services
+    is concerned, and the label under the Dock icon can come from there.
+    `make_macos_app` builds the small bundle that settles it for good.
     """
     if sys.platform != "darwin":
         return False
+    done = False
     try:
         from Foundation import NSBundle  # type: ignore
-    except ImportError:
-        return False
-    try:
         bundle = NSBundle.mainBundle()
         info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
-        if info is None:
-            return False
-        info["CFBundleName"] = name
-        info["CFBundleDisplayName"] = name
-        info["CFBundleExecutable"] = name
-        return True
+        if info is not None:
+            info["CFBundleName"] = name
+            info["CFBundleDisplayName"] = name
+            info["CFBundleExecutable"] = name
+            info["CFBundleIdentifier"] = APP_ID
+            done = True
     except Exception:
-        return False
+        pass
+    try:                    # what the Dock and the Activity Monitor show
+        from Foundation import NSProcessInfo  # type: ignore
+        NSProcessInfo.processInfo().setProcessName_(name)
+        done = True
+    except Exception:
+        pass
+    return done
+
+
+def macos_name_is_borrowed():
+    """True while macOS is still calling this program by another name.
+
+    That is the case whenever it runs as a plain script: the Dock then
+    labels it after the interpreter (`python3.12`).  Inside `APlot.app` the
+    name is the program's own and there is nothing to mend.
+    """
+    return sys.platform == "darwin" and not running_from_bundle()
 
 
 # --------------------------------------------------------------------------
@@ -1391,6 +1483,9 @@ class ShapeToolButton(tk.Canvas):
     """
 
     ARROW_ZONE = 12
+    LINE = ICON_ADD_EDGE            # the outline of the shape it draws
+    FILL = ICON_BLUE                # ...and what stands inside it
+    MENU = ICON_EDGE                # the little arrow that opens the list
 
     def __init__(self, master, kind="rect", size=24, family="shape",
                  background=None, on_draw=None, on_menu=None):
@@ -1413,14 +1508,16 @@ class ShapeToolButton(tk.Canvas):
         pad = 4
         x0, y0 = pad, pad
         x1, y1 = self._size - pad, self._size - pad
-        style = {"outline": "#000000", "width": 2, "fill": "", "tags": "icon"}
+        style = {"outline": self.LINE, "width": 2, "fill": self.FILL,
+                 "tags": "icon"}
         if self.family == "arrow":
             self._draw_arrow_icon(kind, x0, y0, x1, y1)
         elif kind == "triangle":
             self.create_polygon([(x0 + x1) / 2, y0, x0, y1, x1, y1],
-                                outline="#000000", fill="", width=2, tags="icon")
+                                outline=self.LINE, fill=self.FILL, width=2,
+                                tags="icon")
         elif kind == "line":
-            self.create_line(x0, y1, x1, y0, fill="#000000", width=2,
+            self.create_line(x0, y1, x1, y0, fill=self.LINE, width=3,
                              tags="icon")
         elif kind == "circle":
             self.create_oval(x0, y0, x1, y1, **style)
@@ -1435,11 +1532,12 @@ class ShapeToolButton(tk.Canvas):
         middle = (y0 + y1) / 2
         tip, back = x1, x1 - 8
         half = 5
-        self.create_line(x0, middle, back, middle, fill="#000000", width=2,
+        self.create_line(x0, middle, back, middle, fill=self.LINE, width=3,
                          tags="icon")
         if kind == "chevron":
             self.create_line(back, middle - half, tip, middle, back,
-                             middle + half, fill="#000000", width=2, tags="icon")
+                             middle + half, fill=self.LINE, width=3,
+                             tags="icon")
             return
         if kind == "concave":
             points = [tip, middle, back, middle - half,
@@ -1449,8 +1547,8 @@ class ShapeToolButton(tk.Canvas):
                       back - 2, middle, back, middle + half]
         else:                                    # triangle
             points = [tip, middle, back, middle - half, back, middle + half]
-        self.create_polygon(points, fill="#000000", outline="#000000",
-                            tags="icon")
+        self.create_polygon(points, fill=self.FILL, outline=self.LINE,
+                            width=2, tags="icon")
 
     def _draw_menu_arrow(self):
         self.delete("arrow")
@@ -1458,10 +1556,10 @@ class ShapeToolButton(tk.Canvas):
         height = int(self["height"])
         x, y = width - 4, height - 4
         self.create_polygon([x - 7, y - 5, x, y - 5, x - 3.5, y],
-                            fill="#000000", outline="#000000", tags="arrow")
+                            fill=self.MENU, outline=self.MENU, tags="arrow")
 
     def set_active(self, active):
-        self.configure(background="#b8b8b8" if active else self._background)
+        self.configure(background=ICON_ARMED if active else self._background)
 
     # -- behaviour ---------------------------------------------------------
     def _clicked(self, event):
@@ -1523,24 +1621,6 @@ class PlotSplitButton(ttk.Button):
 # the edges smooth.  The colours are pastel and grey so the buttons stay
 # quiet beside the table.
 
-ICON_SIZE = 20             # how big a toolbar icon is drawn, in pixels
-ICON_SCALE = 4             # ... and how much bigger it is painted first
-
-ICON_PAPER = "#eceff3"     # the sheet a row / column icon stands on
-ICON_MUTED = "#c2c8d0"     # the rows and columns that stay where they are
-ICON_EDGE = "#8b93a0"      # the thin outline around everything
-ICON_ADD_COLOR = "#9dc3e6"      # pastel blue: the row or column that appears
-ICON_ADD_EDGE = "#5b8bbd"
-ICON_DELETE_COLOR = "#e6a8a8"   # pastel rose: the one that goes away
-ICON_DELETE_EDGE = "#bd6b6b"
-# the pastel shades the nine plot icons are drawn with
-ICON_INK = "#6f7887"
-ICON_STROKE = "#6f97c4"    # the pastel blue a curve is drawn with
-ICON_BLUE = "#9dc3e6"
-ICON_SAGE = "#a8ccb0"
-ICON_SAND = "#e8cfa0"
-ICON_ROSE = "#e6a8a8"
-ICON_LILAC = "#c3b3dd"
 
 
 def _icon_photo(painter, size=ICON_SIZE):
@@ -1725,6 +1805,90 @@ FILE_ICON_PAINTERS = {"open": _paint_open, "save": _paint_save,
                       "import": _paint_import}
 
 
+# -- the tools of a diagram window, in the very same shades ----------------
+
+def _paint_home(draw, box):
+    """A little house: the whole diagram, back as it was."""
+    width = max(1, int(round(0.03 * box)))
+    draw.polygon([(0.50 * box, 0.08 * box), (0.97 * box, 0.50 * box),
+                  (0.03 * box, 0.50 * box)],
+                 fill=ICON_ADD_COLOR, outline=ICON_ADD_EDGE, width=width)
+    _bar(draw, box, 0.18, 0.46, 0.82, 0.93, ICON_PAPER, ICON_EDGE, 0.028,
+         radius=0.05)
+    _bar(draw, box, 0.41, 0.64, 0.59, 0.93, ICON_MUTED, ICON_EDGE, 0.022)
+
+
+def _paint_step(draw, box, forward=True):
+    """One step back or forward through the views that were looked at."""
+    width = max(1, int(round(0.026 * box)))
+    if forward:
+        _bar(draw, box, 0.10, 0.41, 0.56, 0.59, ICON_ADD_COLOR, ICON_ADD_EDGE,
+             0.026, radius=0.04)
+        points = [(0.94, 0.50), (0.50, 0.20), (0.50, 0.80)]
+    else:
+        _bar(draw, box, 0.44, 0.41, 0.90, 0.59, ICON_ADD_COLOR, ICON_ADD_EDGE,
+             0.026, radius=0.04)
+        points = [(0.06, 0.50), (0.50, 0.20), (0.50, 0.80)]
+    draw.polygon([(x * box, y * box) for x, y in points],
+                 fill=ICON_ADD_COLOR, outline=ICON_ADD_EDGE, width=width)
+
+
+def _paint_back(draw, box):
+    _paint_step(draw, box, forward=False)
+
+
+def _paint_forward(draw, box):
+    _paint_step(draw, box, forward=True)
+
+
+def _paint_pan(draw, box):
+    """Four arrows out of one point: the diagram is pushed about."""
+    width = max(1, int(round(0.026 * box)))
+    _bar(draw, box, 0.42, 0.20, 0.58, 0.80, ICON_ADD_COLOR, ICON_ADD_EDGE, 0.024)
+    _bar(draw, box, 0.20, 0.42, 0.80, 0.58, ICON_ADD_COLOR, ICON_ADD_EDGE, 0.024)
+    for points in (((0.50, 0.03), (0.30, 0.25), (0.70, 0.25)),
+                   ((0.50, 0.97), (0.30, 0.75), (0.70, 0.75)),
+                   ((0.03, 0.50), (0.25, 0.30), (0.25, 0.70)),
+                   ((0.97, 0.50), (0.75, 0.30), (0.75, 0.70))):
+        draw.polygon([(x * box, y * box) for x, y in points],
+                     fill=ICON_ADD_COLOR, outline=ICON_ADD_EDGE, width=width)
+
+
+def _paint_zoom(draw, box):
+    """A magnifier: a piece of the diagram is pulled closer."""
+    draw.line([(0.56 * box, 0.56 * box), (0.92 * box, 0.92 * box)],
+              fill=ICON_EDGE, width=max(2, int(round(0.14 * box))))
+    draw.ellipse([0.06 * box, 0.06 * box, 0.70 * box, 0.70 * box],
+                 fill=ICON_BLUE, outline=ICON_ADD_EDGE,
+                 width=max(1, int(round(0.055 * box))))
+    draw.ellipse([0.17 * box, 0.17 * box, 0.59 * box, 0.59 * box],
+                 fill=ICON_PAPER)
+
+
+def _paint_subplots(draw, box):
+    """The plot area and its two handles: where it sits on the paper."""
+    _bar(draw, box, 0.04, 0.04, 0.96, 0.96, ICON_PAPER, ICON_EDGE, 0.028,
+         radius=0.07)
+    _bar(draw, box, 0.30, 0.16, 0.86, 0.68, ICON_BLUE, ICON_ADD_EDGE, 0.026,
+         radius=0.04)
+    _bar(draw, box, 0.10, 0.16, 0.20, 0.68, ICON_MUTED, ICON_EDGE, 0.022,
+         radius=0.03)
+    _bar(draw, box, 0.30, 0.78, 0.86, 0.90, ICON_MUTED, ICON_EDGE, 0.022,
+         radius=0.03)
+
+
+def _paint_text_tool(draw, box):
+    """A sheet with a T on it: a text box is placed on the diagram."""
+    _bar(draw, box, 0.06, 0.08, 0.94, 0.92, ICON_PAPER, ICON_EDGE, 0.028,
+         radius=0.08)
+    _bar(draw, box, 0.20, 0.22, 0.80, 0.36, ICON_ADD_COLOR, ICON_ADD_EDGE,
+         0.024, radius=0.03)
+    _bar(draw, box, 0.43, 0.30, 0.57, 0.80, ICON_ADD_COLOR, ICON_ADD_EDGE,
+         0.024, radius=0.03)
+
+
+
+
 def _paint_picture(draw, box):
     """A framed picture: two hills and a sun, as small as it goes."""
     _bar(draw, box, 0.06, 0.14, 0.94, 0.86, ICON_PAPER, ICON_EDGE, 0.03,
@@ -1742,6 +1906,38 @@ def _paint_picture(draw, box):
 def picture_tool_icon(size=ICON_SIZE):
     """The icon of the "insert picture" button of a diagram window."""
     return _icon_photo(_paint_picture, size)
+
+
+PLOT_TOOL_PAINTERS = {
+    "home": _paint_home, "back": _paint_back, "forward": _paint_forward,
+    "pan": _paint_pan, "zoom": _paint_zoom, "subplots": _paint_subplots,
+    "save": _paint_save, "text": _paint_text_tool,
+    "picture": _paint_picture,
+}
+# the names matplotlib gives its own buttons, and the icons that replace them
+TOOLBAR_ICONS = {"Home": "home", "Back": "back", "Forward": "forward",
+                 "Pan": "pan", "Zoom": "zoom", "Subplots": "subplots",
+                 "Save": "save"}
+
+
+def plot_tool_icon(name, size=ICON_SIZE, armed=False):
+    """One tool icon of a diagram window, or None without Pillow.
+
+    `armed` paints the pastel plate behind it that says the tool is waiting
+    for a click in the diagram.
+    """
+    painter = PLOT_TOOL_PAINTERS.get(str(name))
+    if painter is None:
+        return None
+    if not armed:
+        return _icon_photo(painter, size)
+
+    def lit(draw, box):
+        _bar(draw, box, 0.0, 0.0, 1.0, 1.0, ICON_ARMED, ICON_ADD_EDGE, 0.03,
+             radius=0.18)
+        painter(draw, box)
+
+    return _icon_photo(lit, size)
 
 
 def file_tool_icon(name, size=ICON_SIZE):
@@ -3424,15 +3620,68 @@ class AxisTab(PairedFields, ttk.Frame):
         self.ticks_on_var = tk.BooleanVar(value=cfg.get("ticks_on", True))
         self.gmajor_var = tk.BooleanVar(value=grid["major"])
         self.gminor_var = tk.BooleanVar(value=grid["minor"])
+        self.direction_var = tk.StringVar(
+            value=self.direction_name(plot.axis_direction(which)))
+        self.scale_var = tk.StringVar(
+            value=name_of(AXIS_SCALES, plot.axis_scale(which), "Linear"))
         self.gstyle_var = tk.StringVar(value=name_of(GRID_STYLES, grid["style"], "Dotted"))
         self.gwidth_var = tk.StringVar(value=f"{grid['width']:g}")
 
+        self._build_top_box()
         self._build_label_box()
         self._build_range_box()
         self._build_grid_box(grid["color"])
         self._align_columns((self.label_box, self.range_box,
                              self.grid_box))
         self._toggle_auto()
+
+    # -- the direction of the axis and the scale of its numbers -----------
+    def direction_names(self):
+        """The three choices of the direction box of this axis."""
+        return [AXIS_OFF_NAMES.get(self.which, "No axis"), "Standard",
+                "Reverse"]
+
+    def direction_name(self, code):
+        """The words of one direction code, for this axis."""
+        names = self.direction_names()
+        return names[AXIS_DIRECTIONS.index(code)] \
+            if code in AXIS_DIRECTIONS else names[1]
+
+    def direction_code(self):
+        """"off", "standard" or "reverse", as the box stands now."""
+        try:
+            return AXIS_DIRECTIONS[self.direction_names().index(
+                self.direction_var.get())]
+        except ValueError:
+            return "standard"
+
+    def _build_top_box(self):
+        """The two choices that decide what the axis looks like at all."""
+        box = ttk.Frame(self)
+        box.pack(fill="x", pady=(0, 10))
+        ttk.Label(box, text="Direction:").grid(row=0, column=0, sticky="w",
+                                               padx=(0, 6))
+        self.direction_box = ttk.Combobox(
+            box, textvariable=self.direction_var, state="readonly",
+            values=self.direction_names(), width=16)
+        self.direction_box.grid(row=0, column=1, sticky="w")
+        ttk.Label(box, text="Scale:").grid(row=0, column=2, sticky="w",
+                                           padx=(18, 6))
+        self.scale_box = ttk.Combobox(
+            box, textvariable=self.scale_var, state="readonly",
+            values=names(AXIS_SCALES), width=14)
+        self.scale_box.grid(row=0, column=3, sticky="w")
+        hint = ("Standard runs the usual way, Reverse turns the axis round.  "
+                if self.which != "y2" else
+                "The right hand axis appears as soon as this is not "
+                '"No right Y axis";\nwithout a curve of its own it shows '
+                "0 ... 1.  ")
+        self._wide(ttk.Label(box, foreground="#666", justify="left",
+                             text=hint + "A logarithmic\nscale never reaches "
+                                         "zero: values at or below it are "
+                                         "left out."), 1, pady=(6, 0))
+        self.top_box = box
+        return box
 
     # -- construction ------------------------------------------------------
     def _section(self, title, variable, **pack):
@@ -3558,6 +3807,8 @@ class AxisTab(PairedFields, ttk.Frame):
             "axis_color": self.axis_color.color,
             "label_on": bool(self.label_on_var.get()),
             "ticks_on": bool(self.ticks_on_var.get()),
+            "direction": self.direction_code(),
+            "scale": code_of(AXIS_SCALES, self.scale_var.get(), "linear"),
             "grid": {
                 "major": self.gmajor_var.get(),
                 "minor": self.gminor_var.get(),
@@ -3718,15 +3969,17 @@ class AxesDialog(ToolDialog):
 
         notebook = ttk.Notebook(self.body)
         notebook.pack(fill="both", expand=True)
+        # the title and the fonts first, then one page per axis
+        self.title_tab = TitleTab(notebook, plot)
+        notebook.add(self.title_tab, text="Title and fonts")
         self.tabs = {}
-        for which in ("x", "y"):
+        for which, words in (("x", "X axis"), ("y", "Left Y axis"),
+                             ("y2", "Right Y axis")):
+            # the right hand page is always there: its Direction box says
+            # whether that axis is drawn at all
             tab = AxisTab(notebook, plot, which)
-            notebook.add(tab, text=f"{which.upper()} axis")
+            notebook.add(tab, text=words)
             self.tabs[which] = tab
-        if plot.right_axis_active():   # only when a curve is drawn there
-            tab = AxisTab(notebook, plot, "y2")
-            notebook.add(tab, text="Right Y axis")
-            self.tabs["y2"] = tab
         self.frame_tab = FrameTab(notebook, plot)
         notebook.add(self.frame_tab, text="Frame and origin")
         self.notebook = notebook
@@ -3740,13 +3993,16 @@ class AxesDialog(ToolDialog):
         self.bind("<Return>", lambda _e: self.apply())
 
     def select_tab(self, which):
-        """which: 'x', 'y', 'y2' or 'frame'."""
+        """which: 'title', 'x', 'y', 'y2' or 'frame'."""
         if which == "frame":
             self.notebook.select(self.frame_tab)
+        elif which == "title":
+            self.notebook.select(self.title_tab)
         else:
             self.notebook.select(self.tabs.get(which, self.tabs["x"]))
 
     def apply(self):
+        self.title_tab.apply()
         for which, tab in self.tabs.items():
             cfg = tab.values()
             if not cfg["auto"] and cfg["min"] == cfg["max"]:
@@ -3881,11 +4137,15 @@ class TextBoxDialog(ToolDialog):
         self.close()
 
 
-class TitleFontDialog(ToolDialog):
-    """Plot title text and the font sizes that do not belong to an axis."""
+class TitleTab(ttk.Frame):
+    """The title of the diagram and the fonts that belong to no axis.
 
-    def __init__(self, master, plot, on_close=None):
-        super().__init__(master, "Title and fonts", on_close=on_close)
+    It is one page of the axes dialog and the whole of the `Title and
+    fonts` window, so that both show exactly the same settings.
+    """
+
+    def __init__(self, master, plot, padding=12):
+        super().__init__(master, padding=padding)
         self.plot = plot
 
         self.title_var = tk.StringVar(value=plot.ax.get_title())
@@ -3893,55 +4153,54 @@ class TitleFontDialog(ToolDialog):
         self.legend_size_var = tk.StringVar(value=str(plot.fonts["legend"]))
         self.legend_loc_var = tk.StringVar(value=plot.legend_loc)
         self.legend_visible_var = tk.BooleanVar(value=plot.legend_visible)
+        self.title_pad_var = tk.StringVar(value=f"{plot.fonts['title_pad']:g}")
 
-        box = ttk.LabelFrame(self.body, text="Title", padding=8)
+        field = ToolDialog.field
+        box = ttk.LabelFrame(self, text="Title", padding=8)
         box.pack(fill="x")
-        self.field(box, 0, "Text:", ttk.Entry(box, textvariable=self.title_var, width=34))
-        self.field(box, 1, "Font size:",
-                   ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
-                               textvariable=self.title_size_var))
+        field(box, 0, "Text:", ttk.Entry(box, textvariable=self.title_var,
+                                         width=34))
+        field(box, 1, "Font size:",
+              ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
+                          textvariable=self.title_size_var))
         self.title_color = ColorSwatch(
             box, safe_hex(plot.fonts["title_color"], "#000000"))
-        self.field(box, 2, "Font colour:", self.title_color)
-        self.title_pad_var = tk.StringVar(value=f"{plot.fonts['title_pad']:g}")
-        self.field(box, 3, "Distance from the axes [px]:",
-                   ttk.Spinbox(box, from_=-200, to=400, increment=1, width=8,
-                               textvariable=self.title_pad_var))
+        field(box, 2, "Font colour:", self.title_color)
+        field(box, 3, "Distance from the axes [px]:",
+              ttk.Spinbox(box, from_=-200, to=400, increment=1, width=8,
+                          textvariable=self.title_pad_var))
+        ttk.Button(box, text="Reset dragged texts",
+                   command=plot.reset_text_offsets).grid(row=4, column=1,
+                                                         sticky="w",
+                                                         pady=(6, 0))
 
-        legend_box = ttk.LabelFrame(self.body, text="Legend boxes", padding=8)
+        legend_box = ttk.LabelFrame(self, text="Legend boxes", padding=8)
         legend_box.pack(fill="x", pady=(10, 0))
-        self.field(legend_box, 0, "", ttk.Checkbutton(legend_box, text="Show legends",
-                                                      variable=self.legend_visible_var))
-        self.field(legend_box, 1, "Font size (all):",
-                   ttk.Spinbox(legend_box, from_=4, to=72, increment=1, width=8,
-                               textvariable=self.legend_size_var))
+        field(legend_box, 0, "",
+              ttk.Checkbutton(legend_box, text="Show legends",
+                              variable=self.legend_visible_var))
+        field(legend_box, 1, "Font size (all):",
+              ttk.Spinbox(legend_box, from_=4, to=72, increment=1, width=8,
+                          textvariable=self.legend_size_var))
         self.legend_color = ColorSwatch(
             legend_box, safe_hex(plot.fonts["legend_color"], "#000000"))
-        self.field(legend_box, 2, "Font colour (all):", self.legend_color)
-        self.field(legend_box, 3, "Start position:",
-                   ttk.Combobox(legend_box, textvariable=self.legend_loc_var,
-                                state="readonly", values=LEGEND_LOCATIONS, width=16))
+        field(legend_box, 2, "Font colour (all):", self.legend_color)
+        field(legend_box, 3, "Start position:",
+              ttk.Combobox(legend_box, textvariable=self.legend_loc_var,
+                           state="readonly", values=LEGEND_LOCATIONS, width=16))
         ttk.Button(legend_box, text="Reset positions",
-                   command=self._reset_positions).grid(row=4, column=1, sticky="w",
-                                                       pady=(6, 0))
-        ttk.Button(box, text="Reset dragged texts",
-                   command=self.plot.reset_text_offsets).grid(row=4, column=1,
-                                                              sticky="w",
-                                                              pady=(6, 0))
+                   command=self._reset_positions).grid(row=4, column=1,
+                                                       sticky="w", pady=(6, 0))
         ttk.Label(legend_box, foreground="#666", justify="left",
                   text="Every curve has its own legend box: drag its frame to move\n"
-                       "it, click its text to change its text, size and colour.").grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
-
-        bar = ttk.Frame(self.body)
-        bar.pack(fill="x", pady=(12, 0))
-        ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
-        ttk.Button(bar, text="Close", command=self.close).pack(side="right")
-        self.bind("<Return>", lambda _e: self.apply())
+                       "it, click its text to change its text, size and colour."
+                  ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.title_box, self.legend_box = box, legend_box
 
     def apply(self):
         plot = self.plot
-        plot.fonts["title"] = to_int(self.title_size_var.get(), plot.fonts["title"])
+        plot.fonts["title"] = to_int(self.title_size_var.get(),
+                                     plot.fonts["title"])
         plot.fonts["title_color"] = self.title_color.color
         size = to_int(self.legend_size_var.get(), plot.fonts["legend"])
         color = self.legend_color.color
@@ -3960,11 +4219,42 @@ class TitleFontDialog(ToolDialog):
         plot.ax.title.set_picker(True)
         plot.apply_text_offset("title")
         plot.refresh_legend()
-        plot.draw()
+        return True
 
     def _reset_positions(self):
         self.plot.legend_loc = self.legend_loc_var.get()
         self.plot.reset_legend_positions()
+
+
+class TitleFontDialog(ToolDialog):
+    """Plot title text and the font sizes that do not belong to an axis."""
+
+    # the fields the window lends from its page, so that everything that
+    # knows the window keeps working
+    SHARED = ("title_var", "title_size_var", "title_pad_var", "title_color",
+              "legend_size_var", "legend_loc_var", "legend_visible_var",
+              "legend_color")
+
+    def __init__(self, master, plot, on_close=None):
+        super().__init__(master, "Title and fonts", on_close=on_close)
+        self.plot = plot
+        self.tab = TitleTab(self.body, plot, padding=0)
+        self.tab.pack(fill="both", expand=True)
+        for name in self.SHARED:
+            setattr(self, name, getattr(self.tab, name))
+
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
+        ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+        self.bind("<Return>", lambda _e: self.apply())
+
+    def apply(self):
+        self.tab.apply()
+        self.plot.draw()
+
+    def _reset_positions(self):
+        self.tab._reset_positions()
 
 
 # --------------------------------------------------------------------------
@@ -8311,9 +8601,13 @@ class PlotWindow(tk.Toplevel):
                     "axis_color": safe_hex(config.get("frame", "color"),
                                            "#000000"),
                     "label_on": True, "ticks_on": True,
+                    # which way the axis runs, and how its numbers are spread
+                    "direction": "standard", "scale": "linear",
                     "grid": dict(grid_defaults)}
             for which in ("x", "y", "y2")
         }
+        # no curve belongs to the right hand scale yet: it is not drawn
+        self.axis_cfg["y2"]["direction"] = "off"
 
         self.fig = Figure(figsize=(plot_cfg["fig_width"], plot_cfg["fig_height"]),
                           dpi=plot_cfg["dpi"])
@@ -8391,9 +8685,10 @@ class PlotWindow(tk.Toplevel):
         toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
         toolbar.update()
         self.toolbar = toolbar
+        self.restyle_toolbar(toolbar)     # pastel icons, as on the sheet
         # "add text" button, a little away from the save button
         tk.Frame(toolbar, width=26, height=1).pack(side="left")
-        self._text_icon = make_letter_icon("T")
+        self._text_icon = plot_tool_icon("text") or make_letter_icon("T")
         self.text_button = tk.Button(toolbar, image=self._text_icon,
                                      command=self.arm_text_placement,
                                      relief="flat", borderwidth=1,
@@ -8404,7 +8699,7 @@ class PlotWindow(tk.Toplevel):
                 "Add text: click in the diagram to place a text box"))
         self.text_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
 
-        button_background = "#999999"
+        button_background = toolbar.cget("background")
         self.shape_button = ShapeToolButton(
             toolbar, kind=self.shape_kind, family="shape",
             background=button_background,
@@ -8463,6 +8758,43 @@ class PlotWindow(tk.Toplevel):
         self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
         ttk.Label(self, text=self.HINT, anchor="center", justify="center",
                   padding=4, foreground="#444").pack(side="bottom", fill="x")
+
+    def restyle_toolbar(self, toolbar):
+        """Give matplotlib's own buttons the pastel icons of the program.
+
+        The standard toolbar carries black pictures read from files, which
+        look nothing like the drawn, pastel buttons of the spreadsheet
+        window.  Emptying `_image_file` is what stops matplotlib from
+        loading its own picture back over them when the resolution of the
+        screen changes; the two tools that stay pressed - `Pan` and `Zoom` -
+        get a second icon on a pale blue plate, so it is plain to see which
+        one is waiting for a click in the diagram.
+        """
+        self._tool_icons = {}
+        buttons = getattr(toolbar, "_buttons", None) or {}
+        for name, button in buttons.items():
+            icon = TOOLBAR_ICONS.get(str(name))
+            if icon is None:
+                continue
+            plain = plot_tool_icon(icon)
+            if plain is None:
+                continue                  # without Pillow nothing is drawn
+            armed = plot_tool_icon(icon, armed=True) or plain
+            self._tool_icons[str(name)] = (plain, armed)
+            try:
+                button._image_file = None
+                button._ntimage = plain
+                button._ntimage_alt = armed
+                if isinstance(button, tk.Checkbutton):
+                    # both at once, or Tk complains about the old picture
+                    button.configure(image=plain, selectimage=armed,
+                                     width=ICON_SIZE, height=ICON_SIZE)
+                else:
+                    button.configure(image=plain, width=ICON_SIZE,
+                                     height=ICON_SIZE)
+            except (tk.TclError, AttributeError):
+                continue
+        return self._tool_icons
 
     def take_focus(self, _event=None):
         """Give the keyboard to the diagram canvas.
@@ -8606,9 +8938,135 @@ class PlotWindow(tk.Toplevel):
         """"left" or "right": the Y axis one curve is drawn against."""
         return self.series_axis.get(column, "left")
 
-    def right_axis_active(self):
-        """True while at least one curve belongs to the right Y axis."""
+    def right_axis_carries_curves(self):
+        """True while at least one curve is drawn against the right scale."""
         return any(side == "right" for side in self.series_axis.values())
+
+    def right_axis_active(self):
+        """True while the right hand Y axis is drawn.
+
+        It is drawn as soon as a curve belongs to it - and also when it was
+        asked for on its own page of the axes dialog, even with no curve on
+        it at all: it then simply carries a scale of its own, 0 ... 1.
+        """
+        return self.axis_direction("y2") != "off"
+
+    def right_axis_wanted(self):
+        """True when the right Y axis was asked for without any curve."""
+        return (self.axis_direction("y2") != "off"
+                and not self.right_axis_carries_curves())
+
+    # -- the direction an axis runs in, and the scale of its numbers -------
+    def axis_direction(self, which):
+        """"off", "standard" or "reverse" for one of the three axes.
+
+        The right hand axis is the special one: as long as a curve belongs
+        to it, it is drawn whatever the setting says - the curve would have
+        no scale to be measured against otherwise.
+        """
+        cfg = self.axis_cfg.get(which) or {}
+        direction = str(cfg.get("direction", "standard"))
+        if direction not in AXIS_DIRECTIONS:
+            direction = "standard"
+        if (which == "y2" and direction == "off"
+                and self.right_axis_carries_curves()):
+            return "standard"
+        return direction
+
+    def axis_scale(self, which):
+        """"linear", "log10", "log2" or "ln" for one of the three axes."""
+        cfg = self.axis_cfg.get(which) or {}
+        scale = str(cfg.get("scale", "linear"))
+        return scale if scale in LOG_BASES or scale == "linear" else "linear"
+
+    def axis_shown(self, which):
+        """True while that axis is drawn at all."""
+        if self.axis_direction(which) == "off":
+            return False
+        if which == "y2":
+            return self.right_axis_active()
+        if which == "y":
+            return self.left_axis_shown()
+        return True
+
+    def axis_scale_matches(self, which):
+        """True while the axis already carries the scale that was asked for.
+
+        Telling matplotlib the scale again throws away the tick locators of
+        the axis, so it is only told when something really changes.
+        """
+        if which == "y2" and self.ax2 is None:
+            return True
+        ax, axis, axis_name = self._axis_pair(which)
+        scale = self.axis_scale(which)
+        now = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
+        if scale == "linear":
+            return now == "linear"
+        if now != "log":
+            return False
+        try:
+            return abs(float(axis.get_scale() == "log"
+                             and axis._scale.base) - LOG_BASES[scale]) < 1e-9
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    def apply_axis_scale(self, which, redraw=False):
+        """Spread the numbers of one axis linearly or logarithmically."""
+        if which == "y2" and self.ax2 is None:
+            return "linear"        # there is no right hand axis to set
+        ax, axis, axis_name = self._axis_pair(which)
+        scale = self.axis_scale(which)
+        setter = ax.set_xscale if axis_name == "x" else ax.set_yscale
+        if not self.axis_scale_matches(which):
+            try:
+                if scale == "linear":
+                    setter("linear")
+                else:
+                    setter("log", base=LOG_BASES[scale])
+            except (ValueError, TypeError, AttributeError):
+                setter("linear")
+                scale = "linear"
+        if scale != "linear":
+            # a logarithmic axis cannot start at zero or below it
+            low, high = self.current_limits(which)
+            if min(low, high) <= 0.0:
+                top = max(low, high, LOG_FLOOR * 10.0)
+                bottom = top / 1000.0
+                (ax.set_xlim if axis_name == "x" else ax.set_ylim)(bottom, top)
+        self.apply_axis_direction(which)
+        if redraw:
+            self.draw()
+        return scale
+
+    def apply_axis_direction(self, which):
+        """Turn one axis round, or put it back the usual way."""
+        if which == "y2" and self.ax2 is None:
+            return False           # there is no right hand axis to turn
+        ax, _axis, axis_name = self._axis_pair(which)
+        reverse = self.axis_direction(which) == "reverse"
+        try:
+            inverted = (ax.xaxis_inverted() if axis_name == "x"
+                        else ax.yaxis_inverted())
+            if bool(inverted) != bool(reverse):
+                (ax.invert_xaxis if axis_name == "x" else ax.invert_yaxis)()
+        except (AttributeError, ValueError):
+            return False
+        return reverse
+
+    def empty_axis_range(self, which):
+        """Give an axis without any curve something to show: 0 ... 1."""
+        if which != "y2" or not self.right_axis_wanted():
+            return False
+        cfg = self.axis_cfg.get("y2") or {}
+        if not cfg.get("auto", True):
+            return False
+        ax = self.ensure_right_axis()
+        low, high = EMPTY_RANGE
+        if self.axis_scale("y2") != "linear":
+            low = max(LOG_FLOOR, 0.1)
+        ax.set_ylim(low, high)
+        self.apply_axis_direction("y2")
+        return True
 
     def axes_for_side(self, side):
         return self.ensure_right_axis() if side == "right" else self.ax
@@ -8715,6 +9173,8 @@ class PlotWindow(tk.Toplevel):
 
     def left_axis_shown(self):
         """True while the left Y axis carries a scale worth drawing."""
+        if self.axis_direction("y") == "off":
+            return False           # the user asked for no left Y axis
         return self.left_axis_active() or not self.right_axis_active()
 
     def _apply_axis_sides(self):
@@ -8726,12 +9186,17 @@ class PlotWindow(tk.Toplevel):
         """
         top = self.x_side == "top"
         both = self.frame_cfg.get("style") in ("box_in", "box_out")
+        if self.axis_direction("y2") != "off" and self.ax2 is None:
+            self.ensure_right_axis()     # asked for, without a curve on it
         right = self.right_axis_active()
         left = self.left_axis_shown()
+        # "No X axis" / "No left Y axis" / "No right Y axis" of the pages
+        x_shown = self.axis_direction("x") != "off"
         # the "Tick range, labels and fonts" switch of each axis page
-        x_ticks = bool(self.axis_cfg["x"].get("ticks_on", True))
+        x_ticks = bool(self.axis_cfg["x"].get("ticks_on", True)) and x_shown
         y_ticks = bool(self.axis_cfg["y"].get("ticks_on", True))
         y2_ticks = bool(self.axis_cfg["y2"].get("ticks_on", True))
+        self.ax.xaxis.set_visible(x_shown)
         self.ax.xaxis.set_ticks_position("top" if top else "bottom")
         self.ax.xaxis.set_label_position("top" if top else "bottom")
         self.ax.tick_params(axis="x", which="both",
@@ -8755,6 +9220,10 @@ class PlotWindow(tk.Toplevel):
                                  labelleft=False, labelright=right and y2_ticks)
         self._apply_y_grid()
         self._apply_axis_colors()
+        # an automatic range straightens an axis out again: the ones that
+        # were turned round are turned back, last of all
+        for which in ("x", "y", "y2"):
+            self.apply_axis_direction(which)
         return None
 
     def spine_owner(self, name):
@@ -8888,7 +9357,7 @@ class PlotWindow(tk.Toplevel):
         # When plotting multiple tabs merged together, pd.merge(how="outer")
         # introduces np.nan for rows that only exist in the other tab. We MUST
         # drop those so they don't break our lines. Original gaps were marked
-        # with "<GAP>" before the merge, so ~pd.isna() preserves them.
+        # with GAP_MARK before the merge, so ~pd.isna() preserves them.
         valid = ~pd.isna(data["y"])
         data = data[valid].copy()
         
@@ -10387,12 +10856,19 @@ class PlotWindow(tk.Toplevel):
                            % (name, "x" if which == "x" else "y"))
             axis_name = "x" if which == "x" else "y"
             ticks_on = bool(axis_cfg.get("ticks_on", True))
+            # the numbers are spread linearly or logarithmically
+            scale = self.axis_scale(which)
+            if scale != "linear":
+                out.append("%s.set_%sscale('log', base=%s)"
+                           % (name, axis_name, lit(LOG_BASES[scale])))
             out.append("%s.tick_params(axis=%s, which='both', labelsize=%s, "
                        "labelcolor=%s, pad=%s * PT, color=%s)"
                        % (name, lit(axis_name), lit(axis_cfg["tick_size"]),
                           lit(axis_cfg["tick_color"]), lit(axis_cfg["tick_pad"]),
                           lit(self.axis_color(which))))
             if which == "x":
+                if not self.axis_shown("x"):
+                    out.append("ax.xaxis.set_visible(False)")
                 out.append("ax.xaxis.set_ticks_position(%s)"
                            % lit("top" if top else "bottom"))
                 out.append("ax.xaxis.set_label_position(%s)"
@@ -10415,18 +10891,24 @@ class PlotWindow(tk.Toplevel):
                 out.append("ax2.tick_params(axis='y', which='both', left=False, "
                            "right=%s, labelleft=False, labelright=%s)"
                            % (ticks_on, ticks_on))
+            # the limits are read as they stand: a reversed axis already
+            # hands them over the other way round
             low, high = self.current_limits(which)
             out.append("%s.set_%slim(%s, %s)"
                        % (name, axis_name, lit(float(low)), lit(float(high))))
             step = axis_cfg.get("step")
-            if not axis_cfg.get("auto", True) and step:
-                out.append("%s.%saxis.set_major_locator(MultipleLocator(%s))"
-                           % (name, axis_name, lit(float(step))))
             minor = int(axis_cfg.get("minor", 0) or 0)
-            out.append("%s.%saxis.set_minor_locator(%s)"
-                       % (name, axis_name,
-                          f"AutoMinorLocator({minor + 1})" if minor
-                          else "NullLocator()"))
+            if scale != "linear":
+                # a logarithmic axis spaces its own ticks
+                pass
+            else:
+                if not axis_cfg.get("auto", True) and step:
+                    out.append("%s.%saxis.set_major_locator(MultipleLocator(%s))"
+                               % (name, axis_name, lit(float(step))))
+                out.append("%s.%saxis.set_minor_locator(%s)"
+                           % (name, axis_name,
+                              f"AutoMinorLocator({minor + 1})" if minor
+                              else "NullLocator()"))
             grid = axis_cfg["grid"]
             owner = (which == "x") or (which == ("y" if left else "y2"))
             for kind, on, factor in (("major", grid["major"], 1.0),
@@ -10868,6 +11350,8 @@ class PlotWindow(tk.Toplevel):
                 "axis_color": self.axis_color(which),
                 "label_on": bool(cfg.get("label_on", True)),
                 "ticks_on": bool(cfg.get("ticks_on", True)),
+                "direction": self.axis_direction(which),
+                "scale": self.axis_scale(which),
                 "grid": dict(cfg["grid"]),
             }
         series = []
@@ -11058,7 +11542,9 @@ class PlotWindow(tk.Toplevel):
             cfg = (state.get("axes") or {}).get(which)
             if cfg is None:
                 continue
-            if which == "y2" and self.ax2 is None and not self.right_axis_active():
+            if (which == "y2" and self.ax2 is None
+                    and str(cfg.get("direction", "off")) == "off"
+                    and not self.right_axis_active()):
                 continue          # no curve on the right: nothing to restore
             if "axis_color" not in cfg and old_color:
                 cfg = {**cfg, "axis_color": old_color}
@@ -13762,6 +14248,29 @@ class PlotWindow(tk.Toplevel):
 
     def apply_axis(self, which, cfg, redraw=True):
         """Range / ticks / minor ticks / grid / fonts of one axis."""
+        stored = self.axis_cfg.get(which, {})
+        chosen = str(cfg.get("direction", stored.get("direction", "standard")))
+        if chosen not in AXIS_DIRECTIONS:
+            chosen = "standard"
+        # what is remembered is what was chosen; a curve on the right hand
+        # scale draws that axis anyway, without changing the choice - so it
+        # disappears again by itself when its last curve leaves
+        wanted = chosen
+        if which == "y2" and wanted == "off" and self.right_axis_carries_curves():
+            wanted = "standard"
+        if which == "y2" and wanted == "off" and self.ax2 is None:
+            # there is no right hand axis and none is wanted: the settings
+            # are only remembered, ready for the day one is asked for
+            keep = {name: value for name, value in cfg.items()
+                    if name not in ("label", "min", "max")}
+            keep["direction"] = "off"
+            if "grid" in keep:
+                keep["grid"] = dict(keep["grid"])
+            self.axis_cfg["y2"] = {**stored, **keep}
+            self._apply_axis_sides()
+            if redraw:
+                self.draw()
+            return None
         ax, axis, axis_name = self._axis_pair(which)
 
         if "label" in cfg:
@@ -13776,12 +14285,16 @@ class PlotWindow(tk.Toplevel):
                                       self.fonts["tick_label_color"]), "#000000")
         label_pad = to_float(cfg.get("label_pad"), self.fonts["axis_label_pad"])
         tick_pad = to_float(cfg.get("tick_pad"), self.fonts["tick_label_pad"])
-        stored = self.axis_cfg.get(which, {})
         axis_color = safe_hex(cfg.get("axis_color",
                                       stored.get("axis_color", "#000000")),
                               "#000000")
         label_on = bool(cfg.get("label_on", stored.get("label_on", True)))
         ticks_on = bool(cfg.get("ticks_on", stored.get("ticks_on", True)))
+        direction = chosen
+        scale = str(cfg.get("scale", stored.get("scale", "linear")))
+        if scale != "linear" and scale not in LOG_BASES:
+            scale = "linear"
+
         axis.label.set_fontsize(label_size)
         axis.label.set_color(label_color)
         axis.label.set_visible(label_on)     # the section switch of the dialog
@@ -13790,8 +14303,19 @@ class PlotWindow(tk.Toplevel):
         ax.tick_params(axis=axis_name, which="both", labelsize=tick_size,
                        labelcolor=tick_color, pad=self.points(tick_pad))
 
+        # the scale comes first: telling matplotlib about it throws away
+        # the tick locators, which the range below sets
+        self.axis_cfg[which] = {**stored, "scale": scale}
+        if not self.axis_scale_matches(which):
+            self.apply_axis_scale(which)
+
+        # a logarithmic axis brings its own tick locators, which are the
+        # only ones that make sense on it: the settings below are for the
+        # plain, linear spacing
+        log = scale != "linear"
         if cfg["auto"]:
-            axis.set_major_locator(AutoLocator())
+            if not log:
+                axis.set_major_locator(AutoLocator())
             ax.autoscale(enable=True, axis=axis_name)
             self.measure_data(ax)
         else:
@@ -13799,9 +14323,14 @@ class PlotWindow(tk.Toplevel):
             low = cfg.get("min") if cfg.get("min") is not None else now_low
             high = cfg.get("max") if cfg.get("max") is not None else now_high
             low, high = sorted((low, high))
+            if log:                      # it never reaches zero
+                high = max(high, LOG_FLOOR * 10.0)
+                low = low if low > 0.0 else high / 1000.0
             (ax.set_xlim if which == "x" else ax.set_ylim)(low, high)
             step = cfg.get("step")
-            if step and step > 0:
+            if log:
+                pass                     # the scale spaces its own ticks
+            elif step and step > 0:
                 count = int(round((high - low) / step)) + 1
                 if 1 < count <= 1000:
                     axis.set_major_locator(FixedLocator(low + step * np.arange(count)))
@@ -13811,7 +14340,9 @@ class PlotWindow(tk.Toplevel):
                 axis.set_major_locator(AutoLocator())
 
         minor = max(0, int(cfg.get("minor", 0)))
-        axis.set_minor_locator(AutoMinorLocator(minor + 1) if minor else NullLocator())
+        if not log:
+            axis.set_minor_locator(AutoMinorLocator(minor + 1) if minor
+                                   else NullLocator())
 
         grid = cfg.get("grid", self.axis_cfg[which]["grid"])
         if which == "x":
@@ -13833,9 +14364,13 @@ class PlotWindow(tk.Toplevel):
             "label_color": label_color, "tick_color": tick_color,
             "label_pad": label_pad, "tick_pad": tick_pad,
             "axis_color": axis_color, "label_on": label_on,
-            "ticks_on": ticks_on,
+            "ticks_on": ticks_on, "direction": direction, "scale": scale,
             "grid": dict(grid),
         }
+        # the axis runs the usual way or backwards, and a range that could
+        # not be shown on a logarithmic scale is lifted off zero
+        self.apply_axis_scale(which)
+        self.empty_axis_range(which)
         if which in ("y", "y2"):  # fills reaching the bottom follow the range
             for column, fill_cfg in self.fill_state.items():
                 if (fill_cfg.get("on") and fill_cfg.get("base") == "bottom"
@@ -14457,7 +14992,7 @@ quietly or simply leaves that one thing out.
 | **`tkinterdnd2`** | **dropping a picture** from the Finder onto a diagram (it brings the `tkdnd` extension of Tk, which Tk itself has no drop support without) | pictures still arrive by pasting (`Ctrl/Cmd+V`), through the picture button of the toolbar and through `Plot > Insert picture...` |
 | `pillow` (`PIL`) | the drawn **toolbar icons**, reading a **picture** that is pasted or dropped, and the clipboard of the system | the buttons carry their names in words and pictures cannot be inserted |
 | `openpyxl` | opening and saving **Excel** (`.xlsx`) files, one sheet per tab | CSV, TXT, DAT and the program's own `.aplt` files work as usual |
-| `pyobjc-framework-Cocoa` | the bold application menu on **macOS** is called `APlot` | that menu keeps the name of the Python interpreter |
+| `pyobjc-framework-Cocoa` | the bold application menu on **macOS** is called `APlot` | that menu keeps the name of the Python interpreter (the Dock label is settled by `--make-app` either way) |
 
     pip install tkinterdnd2 pillow openpyxl
     pip install pyobjc-framework-Cocoa        # macOS only
@@ -14488,33 +15023,64 @@ file.
 ### The icon, and the name in the Dock
 
 The program **draws its own icon**: a spectrum, its blue body under an
-orange outline, filling a rounded square and nothing else on it.  It is
-drawn, not carried as a picture file, so it is sharp at whatever size the
-system asks for and the single file stays the only thing to copy.  Every
-window wears it - on Linux and Windows in the task bar, on macOS in the
-Dock.
+orange outline, on a rounded square and nothing else on it.  It is drawn,
+not carried as a picture file, so it is sharp at whatever size the system
+asks for and the single file stays the only thing to copy.  Every window
+wears it - on Linux and Windows in the task bar, on macOS in the Dock.
+
+Three constants at the top of `aplot.py` decide how it is drawn:
+
+| Constant | What it sets |
+| --- | --- |
+| `APP_ICON_SIZE` (512) | the number of pixels the icon is drawn at - how **sharp** it is, not how big it appears. |
+| `APP_ICON_SIZES` | the sizes written into `APlot.app`'s `.icns`, each also at `@2x`. |
+| `APP_ICON_MARGIN` (0.06) | the **free border** left around the rounded square, as a part of the whole picture. |
+
+How large the icon *appears* in the Dock is not the program's to decide: it
+is the size of the Dock tile, which is a setting of macOS itself.  What the
+margin does is leave the same free border around the square that Apple's
+own icons have, so APlot sits at the same size as its neighbours instead of
+filling its tile edge to edge.  Setting it to `0.0` fills the tile
+completely; the whole drawing - the square, its rounded corners and the
+spectrum on it - scales with it.
 
 `python3 aplot.py --icon aplot.png` writes it out, for a launcher, a
 shortcut or a `.desktop` file of your own.
 
-On **macOS** one thing cannot be reached from inside a running program: a
-program started as `python3 aplot.py` *is* the Python interpreter as far as
-the system is concerned, so the Dock calls it `Python 3.12`.  The cure is a
-small application bundle, and APlot builds one for itself:
+#### The name under the icon on macOS
 
-    python3 aplot.py --make-app
+The Dock shows the icon at once, but the **name above it** is a different
+matter: a program started as `python3 aplot.py` *is* the Python interpreter
+as far as macOS is concerned, so the label reads `python3.12`.  No setting
+inside a running program changes that - the name comes from the application
+the system thinks it launched.
 
-This writes `~/Applications/APlot.app`.  It is a folder, not a copy: it
-holds the icon, the name and a two-line launcher that starts **this same
-`aplot.py`**, wherever it lies.  Start the program from there (or drag it
-onto the Dock) and the Dock shows the APlot icon and the name `APlot`.
-Give the command a folder of your own to put it somewhere else:
+The cure is a small **application bundle**, and APlot builds one for
+itself.  The first time it is started on a Mac it offers to do so, and the
+offer is made **once**, whatever the answer.  It can also be asked at any
+time:
+
+* the **`APlot > Install APlot in the Dock...`** menu item (it is there
+  only while the name is still borrowed), or
+* from a terminal:
+
+        python3 aplot.py --make-app
+
+Either way `~/Applications/APlot.app` is written.  It is a folder, not a
+copy: it holds the icon, the name and a three-line launcher that starts
+**this same `aplot.py`**, wherever it lies - nothing is compiled and
+nothing is duplicated.  Start APlot from there (and keep it in the Dock)
+and the label says `APlot`.  Give the command a folder of your own to put
+the bundle somewhere else:
 
     python3 aplot.py --make-app /Applications
 
 Run it again after moving `aplot.py`, so that the launcher points at the
-new place.  With `pyobjc-framework-Cocoa` installed the bold application
-menu says `APlot` even without the bundle.
+new place.
+
+With `pyobjc-framework-Cocoa` installed the program also tells macOS its
+name and its bundle directly, which is what the **bold application menu**
+reads; the Dock label, though, only the bundle settles for good.
 
 
 ## 0. The name
@@ -14594,6 +15160,14 @@ are often two measurements of the same thing.  Ticking **`Plot with
 previous tab`** on the second sheet glues it to the first one, and the run
 of sheets that are stuck together is a **group**: the X columns are matched
 up and every curve of the group stands in the same diagram.
+
+The X columns do not have to agree.  Whole numbers in one sheet and
+fractions in the other are compared as fractions, X values that are words
+are compared as words, and an X value that only one of the sheets has
+simply carries **no point** for the other one - its curve is not broken
+there.  An **empty cell inside** a sheet is a different matter: it stays a
+real hole in that curve, exactly as it would be if the sheet were drawn on
+its own.
 
 The glue holds **in both directions**.  A diagram opened from **any** sheet
 of a group draws the **whole** group, so it makes no difference whether the
@@ -14721,8 +15295,20 @@ small badge in the corner:
 * **Pastel rose and a `-` delete.**  The rose band in the middle is the row
   or column that goes away.
 
-The two file tools beside them - an open folder and a disk - are drawn in
-the same shades.
+The three file tools beside them - an open folder, an arrow running into a
+sheet and a disk - are drawn in the same shades.
+
+**The diagram window uses the very same set.**  The buttons matplotlib
+brings with it - `Home`, `Back`, `Forward`, `Pan`, `Zoom`, `Subplots` and
+`Save` - carried small black pictures of their own; they are replaced, one
+for one, with drawn pastel ones: a little house, two arrows, the four-way
+arrow, a magnifier, the plot area with its two handles, and the same disk
+as on the spreadsheet.  `Pan` and `Zoom` stay pressed while they are in
+use, and then show their icon on a **pale blue plate**, so it is plain
+which of them is waiting for a click in the diagram.  The `T` of the text
+tool, the drawing tool, the arrow tool and the picture button are painted
+in the same shades, and the two split buttons stand on the toolbar itself
+instead of on a grey block.
 
 Resting the pointer on any of them brings a **popup text** that spells the
 operation out in words - *"Insert row below (click arrow for options)"*,
@@ -15350,10 +15936,10 @@ properties at once.
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
-| Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
+| Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
 | Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, `Move forward` and `Move backward`, plus closing this diagram. |
-| Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
+| Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn pastel icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
@@ -15460,10 +16046,13 @@ plotted, and against which axis`) give the diagram two more axes:
 
 Everything else works exactly as on the two original axes:
 
-* `Axes properties` grows a **`Right Y axis`** page next to `X axis` and
-  `Y axis` whenever the right axis is in use - range, step, minor ticks,
-  label, fonts, colours and distances, all of it separately from the left
-  axis.  Its grid is left to the main axes, so no line is drawn twice.
+* `Axes properties` always carries a **`Right Y axis`** page beside
+  `X axis` and `Left Y axis` - range, step, minor ticks, label, fonts,
+  colours, direction, scale and distances, all of it separately from the
+  left axis.  While no curve is drawn there its `Direction` box reads
+  `No right Y axis`; choosing `Standard` brings the axis out with a free
+  0 ... 1 scale.  Its grid is left to the main axes, so no line is drawn
+  twice.
 * a **double click** next to the right hand numbers opens that page, just
   as a double click under the X numbers opens the `X axis` page; with `x_T`
   the X region is above the plot area instead of below it.
@@ -16041,10 +16630,50 @@ perfectly possible.  The legend always mirrors what the curve looks like.
 
 ### Axes properties
 
-One window with an **X axis** tab, a **Y axis** tab, a **Right Y axis** tab
-(whenever a curve is drawn there) and a **Frame and origin** tab.  Every
-axis tab has the same three sections, and **the name of each section is its
-own check button**:
+One window with five tabs: **Title and fonts**, **X axis**, **Left Y
+axis**, **Right Y axis** and **Frame and origin**.  All of them are always
+there - the right hand page too, even while no curve is drawn against it.
+
+The first page, **Title and fonts**, is exactly the window that
+`Plot > Title and fonts...` opens: the title with its font, colour and
+distance, and the legend boxes.  Whichever of the two is used, the settings
+are the same ones.
+
+#### Direction and Scale
+
+Every axis page begins, just under the tabs, with **two drop-down boxes
+side by side** that decide what the axis is at all:
+
+| Direction | What it does |
+| --- | --- |
+| `No X axis` / `No left Y axis` / `No right Y axis` | That axis is not drawn: no line, no numbers, no label. |
+| `Standard` | The usual direction, values growing to the right and upwards. |
+| `Reverse` | The axis runs the other way - useful for a wavelength that falls, a depth that grows downwards, an inverted scale. |
+
+| Scale | The spacing of the numbers |
+| --- | --- |
+| `Linear` | Equal steps (the usual one). |
+| `Log 10` | Powers of ten. |
+| `Log 2` | Powers of two. |
+| `Log (natural)` | Powers of `e`. |
+
+A logarithmic axis cannot reach zero: a range that starts at or below it is
+lifted onto the first positive decade, and the ticks are spaced by the
+scale itself rather than by `Step` and `Minor ticks`.
+
+The **right hand Y axis** is the one whose Direction says the most:
+
+* while nothing is drawn against it the box reads `No right Y axis`,
+* choosing `Standard` or `Reverse` **makes it appear** even with no curve
+  of its own - it then simply carries a free scale from **0 to 1**, ready
+  for an arrow, a text box or a second reading,
+* a curve moved to `y_R` draws that axis whatever the box said, and taking
+  the last such curve away lets it disappear again.
+
+#### The three sections of an axis page
+
+Every axis tab has the same three sections, and **the name of each section
+is its own check button**:
 
 The three sections share their column widths - the labels **and** the
 boxes behind them - so every second setting of a shared line (`To`,
@@ -16086,7 +16715,7 @@ place on the page.
 
 ### Frame and origin
 
-The third tab of the axes dialog, also reachable with
+The last tab of the axes dialog, also reachable with
 `Plot > Frame and origin...`.
 
 **Frame**
@@ -16158,8 +16787,9 @@ of the figure, so a distance of 10 px really is ten pixels on the screen.
 Font **size**, font **colour** and **distance** can be set in three places,
 always together:
 
-* the **title**: click it on the diagram, or use
-  `Plot > Title and fonts...`,
+* the **title**: click it on the diagram, use
+  `Plot > Title and fonts...`, or open the **first tab of the axes
+  dialog** - the same page under another roof,
 * the **axis labels** and the **axis numbers**: click the label (label text,
   size and colour), or use the matching tab of the axes dialog (label and
   numbers, size and colour),
@@ -16481,6 +17111,9 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
         self._saved_signature = self.project_signature()
         self.root.after_idle(self._focus)
+        # macOS calls a plain script after its interpreter: asked once,
+        # the program can build the little bundle that carries its own name
+        self.root.after(600, self._offer_app_bundle)
 
     # -- helpers -----------------------------------------------------------
     def _empty_frame(self):
@@ -17130,6 +17763,11 @@ class App:
             # so no separate APlot cascade is added on macOS
             apple = tk.Menu(menubar, name="apple", tearoff=0)
             apple.add_command(label=f"About {APP_NAME}", command=self.show_about)
+            if macos_name_is_borrowed():
+                # the Dock is calling this program after the interpreter
+                apple.add_command(
+                    label=f"Install {APP_NAME} in the Dock...",
+                    command=lambda: self.install_app_bundle(ask_first=True))
             apple.add_separator()
             menubar.add_cascade(menu=apple)
             try:  # interpreter wide, so only the first window registers it
@@ -17231,6 +17869,72 @@ class App:
             return self._help_window
         self._help_window = HelpWindow(self.root, load_documentation())
         return self._help_window
+
+    # -- the name macOS shows under the icon -------------------------------
+    def install_app_bundle(self, ask_first=False):
+        """Build `APlot.app`, so that the Dock says APlot and not python3.
+
+        A program started as `python3 aplot.py` belongs to the interpreter
+        as far as macOS is concerned, and the label under its Dock icon is
+        the interpreter's name.  The only thing that changes that is a real
+        application bundle - a folder holding the name, the icon and a
+        two-line launcher that starts this same file.  Nothing is copied
+        and nothing is compiled.
+        """
+        if sys.platform != "darwin":
+            messagebox.showinfo(
+                APP_NAME,
+                "An application bundle belongs to macOS; on this system the "
+                "task bar shows the icon and the name already.",
+                parent=self.root)
+            return None
+        if ask_first and not messagebox.askyesno(
+                f"{APP_NAME} in the Dock",
+                f"macOS is calling this program {Path(sys.executable).name}, "
+                f"because it was started as a plain script.\n\n"
+                f"Shall I build {APP_NAME}.app in your Applications folder?  "
+                f"It is a small folder that starts this same aplot.py and "
+                f"gives it its own name and icon in the Dock.",
+                parent=self.root):
+            return None
+        bundle = make_macos_app()
+        if bundle is None:
+            messagebox.showerror(
+                APP_NAME, f"{APP_NAME}.app could not be built.",
+                parent=self.root)
+            return None
+        if messagebox.askyesno(
+                f"{APP_NAME} in the Dock",
+                f"{bundle} is ready.\n\n"
+                f"Start {APP_NAME} from it now?  This one closes, and the "
+                f"new window carries the name {APP_NAME} in the Dock - where "
+                f"you can keep it.",
+                parent=self.root):
+            try:
+                subprocess.Popen(["open", "-a", str(bundle)])
+            except (OSError, subprocess.SubprocessError):
+                pass
+            else:
+                self.root.after(400, self.root.destroy)
+        return bundle
+
+    def _offer_app_bundle(self):
+        """Ask once whether the Dock should say APlot instead of python3."""
+        if not macos_name_is_borrowed():
+            return False
+        try:
+            if not self.settings.get("macos", "ask_app_bundle"):
+                return False
+        except KeyError:
+            return False
+        # it is asked exactly once, whatever the answer
+        self.settings.set("macos", "ask_app_bundle", False)
+        try:
+            self.settings.save()
+        except OSError:
+            pass
+        self.install_app_bundle(ask_first=True)
+        return True
 
     def show_about(self):
         messagebox.showinfo(
@@ -18016,6 +18720,43 @@ class App:
             parts.append((number, own_x, names))
         return base_x, parts
 
+    @staticmethod
+    def all_numbers(values):
+        """True when every value that is there at all is a number."""
+        numbers = pd.to_numeric(values, errors="coerce")
+        return int(numbers.notna().sum()) == int(values.notna().sum())
+
+    @staticmethod
+    def merge_key(values, numeric):
+        """The X column of one sheet, in the dtype the whole group shares.
+
+        Two sheets are matched up on their X values, and pandas only does
+        that quietly when both columns hold the same kind of value: whole
+        numbers in one sheet and fractions in the other are made fractions
+        in both, and anything that is not a number is compared as text.
+        """
+        if numeric:
+            return pd.to_numeric(values, errors="coerce").astype(float)
+        return values.astype(object).where(values.notna(), None).astype(str)
+
+    @staticmethod
+    def mark_holes(frame, columns):
+        """Fill the empty cells of a sheet with the mark of a real hole.
+
+        After the merge a cell can be empty for two different reasons: the
+        sheet had nothing there, or the sheet has no such row at all - the
+        other one brought it along.  The first kind is marked here, so that
+        it stays a hole in the curve while the second kind is simply left
+        out.  `mask` is used rather than `fillna`, which pandas warns about
+        because it would quietly change the type of the column.
+        """
+        if not columns:
+            return frame
+        holes = frame[columns].isna()
+        if bool(holes.to_numpy().any()):
+            frame[columns] = frame[columns].astype(object).mask(holes, GAP_MARK)
+        return frame
+
     def plot_data(self, _style=None, index=None):
         """The data that goes to the diagrams: the ticked columns only."""
         idx = (self.active_tab_index if index is None
@@ -18025,13 +18766,16 @@ class App:
             return self.tables[idx].plot_dataframe(1).copy()
 
         base_x, parts = self.chain_columns(chain)
+        pieces = [(own_x, names, self.tables[number].plot_dataframe(1).copy())
+                  for number, own_x, names in parts]
+        # the whole group is matched up on one kind of X value
+        numeric = all(self.all_numbers(frame[own_x])
+                      for own_x, _names, frame in pieces)
         merged = None
-        for number, own_x, names in parts:
-            frame = self.tables[number].plot_dataframe(1).copy()
+        for own_x, names, frame in pieces:
             columns = [one for one in frame.columns if one != own_x]
-            # a hole inside a sheet is marked, so that it stays a hole and
-            # is not confused with the rows the other sheet brought along
-            frame[columns] = frame[columns].fillna("<GAP>")
+            self.mark_holes(frame, columns)
+            frame[own_x] = self.merge_key(frame[own_x], numeric)
             frame = frame.rename(columns={**names, own_x: base_x})
             if merged is None:
                 merged = frame

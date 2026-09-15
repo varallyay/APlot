@@ -41,7 +41,7 @@ quietly or simply leaves that one thing out.
 | **`tkinterdnd2`** | **dropping a picture** from the Finder onto a diagram (it brings the `tkdnd` extension of Tk, which Tk itself has no drop support without) | pictures still arrive by pasting (`Ctrl/Cmd+V`), through the picture button of the toolbar and through `Plot > Insert picture...` |
 | `pillow` (`PIL`) | the drawn **toolbar icons**, reading a **picture** that is pasted or dropped, and the clipboard of the system | the buttons carry their names in words and pictures cannot be inserted |
 | `openpyxl` | opening and saving **Excel** (`.xlsx`) files, one sheet per tab | CSV, TXT, DAT and the program's own `.aplt` files work as usual |
-| `pyobjc-framework-Cocoa` | the bold application menu on **macOS** is called `APlot` | that menu keeps the name of the Python interpreter |
+| `pyobjc-framework-Cocoa` | the bold application menu on **macOS** is called `APlot` | that menu keeps the name of the Python interpreter (the Dock label is settled by `--make-app` either way) |
 
     pip install tkinterdnd2 pillow openpyxl
     pip install pyobjc-framework-Cocoa        # macOS only
@@ -72,33 +72,64 @@ file.
 ### The icon, and the name in the Dock
 
 The program **draws its own icon**: a spectrum, its blue body under an
-orange outline, filling a rounded square and nothing else on it.  It is
-drawn, not carried as a picture file, so it is sharp at whatever size the
-system asks for and the single file stays the only thing to copy.  Every
-window wears it - on Linux and Windows in the task bar, on macOS in the
-Dock.
+orange outline, on a rounded square and nothing else on it.  It is drawn,
+not carried as a picture file, so it is sharp at whatever size the system
+asks for and the single file stays the only thing to copy.  Every window
+wears it - on Linux and Windows in the task bar, on macOS in the Dock.
+
+Three constants at the top of `aplot.py` decide how it is drawn:
+
+| Constant | What it sets |
+| --- | --- |
+| `APP_ICON_SIZE` (512) | the number of pixels the icon is drawn at - how **sharp** it is, not how big it appears. |
+| `APP_ICON_SIZES` | the sizes written into `APlot.app`'s `.icns`, each also at `@2x`. |
+| `APP_ICON_MARGIN` (0.06) | the **free border** left around the rounded square, as a part of the whole picture. |
+
+How large the icon *appears* in the Dock is not the program's to decide: it
+is the size of the Dock tile, which is a setting of macOS itself.  What the
+margin does is leave the same free border around the square that Apple's
+own icons have, so APlot sits at the same size as its neighbours instead of
+filling its tile edge to edge.  Setting it to `0.0` fills the tile
+completely; the whole drawing - the square, its rounded corners and the
+spectrum on it - scales with it.
 
 `python3 aplot.py --icon aplot.png` writes it out, for a launcher, a
 shortcut or a `.desktop` file of your own.
 
-On **macOS** one thing cannot be reached from inside a running program: a
-program started as `python3 aplot.py` *is* the Python interpreter as far as
-the system is concerned, so the Dock calls it `Python 3.12`.  The cure is a
-small application bundle, and APlot builds one for itself:
+#### The name under the icon on macOS
 
-    python3 aplot.py --make-app
+The Dock shows the icon at once, but the **name above it** is a different
+matter: a program started as `python3 aplot.py` *is* the Python interpreter
+as far as macOS is concerned, so the label reads `python3.12`.  No setting
+inside a running program changes that - the name comes from the application
+the system thinks it launched.
 
-This writes `~/Applications/APlot.app`.  It is a folder, not a copy: it
-holds the icon, the name and a two-line launcher that starts **this same
-`aplot.py`**, wherever it lies.  Start the program from there (or drag it
-onto the Dock) and the Dock shows the APlot icon and the name `APlot`.
-Give the command a folder of your own to put it somewhere else:
+The cure is a small **application bundle**, and APlot builds one for
+itself.  The first time it is started on a Mac it offers to do so, and the
+offer is made **once**, whatever the answer.  It can also be asked at any
+time:
+
+* the **`APlot > Install APlot in the Dock...`** menu item (it is there
+  only while the name is still borrowed), or
+* from a terminal:
+
+        python3 aplot.py --make-app
+
+Either way `~/Applications/APlot.app` is written.  It is a folder, not a
+copy: it holds the icon, the name and a three-line launcher that starts
+**this same `aplot.py`**, wherever it lies - nothing is compiled and
+nothing is duplicated.  Start APlot from there (and keep it in the Dock)
+and the label says `APlot`.  Give the command a folder of your own to put
+the bundle somewhere else:
 
     python3 aplot.py --make-app /Applications
 
 Run it again after moving `aplot.py`, so that the launcher points at the
-new place.  With `pyobjc-framework-Cocoa` installed the bold application
-menu says `APlot` even without the bundle.
+new place.
+
+With `pyobjc-framework-Cocoa` installed the program also tells macOS its
+name and its bundle directly, which is what the **bold application menu**
+reads; the Dock label, though, only the bundle settles for good.
 
 
 ## 0. The name
@@ -178,6 +209,14 @@ are often two measurements of the same thing.  Ticking **`Plot with
 previous tab`** on the second sheet glues it to the first one, and the run
 of sheets that are stuck together is a **group**: the X columns are matched
 up and every curve of the group stands in the same diagram.
+
+The X columns do not have to agree.  Whole numbers in one sheet and
+fractions in the other are compared as fractions, X values that are words
+are compared as words, and an X value that only one of the sheets has
+simply carries **no point** for the other one - its curve is not broken
+there.  An **empty cell inside** a sheet is a different matter: it stays a
+real hole in that curve, exactly as it would be if the sheet were drawn on
+its own.
 
 The glue holds **in both directions**.  A diagram opened from **any** sheet
 of a group draws the **whole** group, so it makes no difference whether the
@@ -305,8 +344,20 @@ small badge in the corner:
 * **Pastel rose and a `-` delete.**  The rose band in the middle is the row
   or column that goes away.
 
-The two file tools beside them - an open folder and a disk - are drawn in
-the same shades.
+The three file tools beside them - an open folder, an arrow running into a
+sheet and a disk - are drawn in the same shades.
+
+**The diagram window uses the very same set.**  The buttons matplotlib
+brings with it - `Home`, `Back`, `Forward`, `Pan`, `Zoom`, `Subplots` and
+`Save` - carried small black pictures of their own; they are replaced, one
+for one, with drawn pastel ones: a little house, two arrows, the four-way
+arrow, a magnifier, the plot area with its two handles, and the same disk
+as on the spreadsheet.  `Pan` and `Zoom` stay pressed while they are in
+use, and then show their icon on a **pale blue plate**, so it is plain
+which of them is waiting for a click in the diagram.  The `T` of the text
+tool, the drawing tool, the arrow tool and the picture button are painted
+in the same shades, and the two split buttons stand on the toolbar itself
+instead of on a grey block.
 
 Resting the pointer on any of them brings a **popup text** that spells the
 operation out in words - *"Insert row below (click arrow for options)"*,
@@ -934,10 +985,10 @@ properties at once.
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
-| Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis. |
+| Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
 | Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, `Move forward` and `Move backward`, plus closing this diagram. |
-| Toolbar | The standard Matplotlib toolbar (pan, zoom, saving the figure as an image), the **T** button that adds a text box, the drawing tool and the arrow tool. |
+| Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn pastel icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
@@ -1044,10 +1095,13 @@ plotted, and against which axis`) give the diagram two more axes:
 
 Everything else works exactly as on the two original axes:
 
-* `Axes properties` grows a **`Right Y axis`** page next to `X axis` and
-  `Y axis` whenever the right axis is in use - range, step, minor ticks,
-  label, fonts, colours and distances, all of it separately from the left
-  axis.  Its grid is left to the main axes, so no line is drawn twice.
+* `Axes properties` always carries a **`Right Y axis`** page beside
+  `X axis` and `Left Y axis` - range, step, minor ticks, label, fonts,
+  colours, direction, scale and distances, all of it separately from the
+  left axis.  While no curve is drawn there its `Direction` box reads
+  `No right Y axis`; choosing `Standard` brings the axis out with a free
+  0 ... 1 scale.  Its grid is left to the main axes, so no line is drawn
+  twice.
 * a **double click** next to the right hand numbers opens that page, just
   as a double click under the X numbers opens the `X axis` page; with `x_T`
   the X region is above the plot area instead of below it.
@@ -1625,10 +1679,50 @@ perfectly possible.  The legend always mirrors what the curve looks like.
 
 ### Axes properties
 
-One window with an **X axis** tab, a **Y axis** tab, a **Right Y axis** tab
-(whenever a curve is drawn there) and a **Frame and origin** tab.  Every
-axis tab has the same three sections, and **the name of each section is its
-own check button**:
+One window with five tabs: **Title and fonts**, **X axis**, **Left Y
+axis**, **Right Y axis** and **Frame and origin**.  All of them are always
+there - the right hand page too, even while no curve is drawn against it.
+
+The first page, **Title and fonts**, is exactly the window that
+`Plot > Title and fonts...` opens: the title with its font, colour and
+distance, and the legend boxes.  Whichever of the two is used, the settings
+are the same ones.
+
+#### Direction and Scale
+
+Every axis page begins, just under the tabs, with **two drop-down boxes
+side by side** that decide what the axis is at all:
+
+| Direction | What it does |
+| --- | --- |
+| `No X axis` / `No left Y axis` / `No right Y axis` | That axis is not drawn: no line, no numbers, no label. |
+| `Standard` | The usual direction, values growing to the right and upwards. |
+| `Reverse` | The axis runs the other way - useful for a wavelength that falls, a depth that grows downwards, an inverted scale. |
+
+| Scale | The spacing of the numbers |
+| --- | --- |
+| `Linear` | Equal steps (the usual one). |
+| `Log 10` | Powers of ten. |
+| `Log 2` | Powers of two. |
+| `Log (natural)` | Powers of `e`. |
+
+A logarithmic axis cannot reach zero: a range that starts at or below it is
+lifted onto the first positive decade, and the ticks are spaced by the
+scale itself rather than by `Step` and `Minor ticks`.
+
+The **right hand Y axis** is the one whose Direction says the most:
+
+* while nothing is drawn against it the box reads `No right Y axis`,
+* choosing `Standard` or `Reverse` **makes it appear** even with no curve
+  of its own - it then simply carries a free scale from **0 to 1**, ready
+  for an arrow, a text box or a second reading,
+* a curve moved to `y_R` draws that axis whatever the box said, and taking
+  the last such curve away lets it disappear again.
+
+#### The three sections of an axis page
+
+Every axis tab has the same three sections, and **the name of each section
+is its own check button**:
 
 The three sections share their column widths - the labels **and** the
 boxes behind them - so every second setting of a shared line (`To`,
@@ -1670,7 +1764,7 @@ place on the page.
 
 ### Frame and origin
 
-The third tab of the axes dialog, also reachable with
+The last tab of the axes dialog, also reachable with
 `Plot > Frame and origin...`.
 
 **Frame**
@@ -1742,8 +1836,9 @@ of the figure, so a distance of 10 px really is ten pixels on the screen.
 Font **size**, font **colour** and **distance** can be set in three places,
 always together:
 
-* the **title**: click it on the diagram, or use
-  `Plot > Title and fonts...`,
+* the **title**: click it on the diagram, use
+  `Plot > Title and fonts...`, or open the **first tab of the axes
+  dialog** - the same page under another roof,
 * the **axis labels** and the **axis numbers**: click the label (label text,
   size and colour), or use the matching tab of the axes dialog (label and
   numbers, size and colour),
