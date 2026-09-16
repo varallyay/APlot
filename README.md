@@ -169,13 +169,14 @@ sheets together:
 | Delete row (icon) | first | Deletes every row the highlighted block touches. |
 | Add column (icon, split button) | first | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
 | Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
-| Settings... | first | Opens the settings editor (see section 4). |
+| Settings... | first | Opens the settings editor (see section 5). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
 | **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
-`Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
-`File` menu.
+`Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`) or with the `Edit` menu, which
+also takes a change back (`Ctrl/Cmd+Z`, see section 3); `Random data` is in
+the `File` menu.
 
 ### 1.1 Sheets (tabs)
 
@@ -456,8 +457,9 @@ capabilities similar to Excel:
 The bar carries nothing else: **filling down** and the **column operations**
 live where they are needed and do not take room above the sheet.
 
-* **Fill down**: `Ctrl/Cmd+D`, the black fill handle of the selection, or
-  `Fill Down` in the right click menu of a cell or a heading.  It copies the
+* **Fill down**: the black fill handle of the selection, or `Fill Down` in
+  the right click menu of a cell or a heading (`Ctrl/Cmd+D` now belongs to
+  `Edit > Duplicate`, see section 3).  It copies the
   top cell's formula or value down across the selected block of rows,
   automatically adjusting relative row references (e.g. `=A1+B1` becomes
   `=A2+B2`, `=A3+B3`) while preserving absolute references (e.g. `$A$1`).
@@ -547,9 +549,9 @@ way, so a whole line of the table is always one click away:
   numbers of the rows it touches are - so it is always visible what the
   block covers, even where it has scrolled out of sight.
 * What is selected is an ordinary block, so everything works on it:
-  `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D` fills it
-  down, and the arrow keys walk on from the cell the click left the cursor
-  in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
+  `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D`
+  duplicates it under itself, and the arrow keys walk on from the cell the
+  click left the cursor in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
 * **Right clicking** a letter opens the menu of that column -
   `Calculate Column...`, `Sort`, `Insert Column Before / After...`,
   `Rename...`, `Delete Column` - the same menu as a right click on the
@@ -630,8 +632,9 @@ cells:
 #### Right-click context menus
 
 Right-clicking inside the table opens a context menu:
-* On any **cell**: `Cut`, `Copy`, `Paste`, `Clear Cells`, `Fill Down`,
-  `Column Math...`, `Insert Row Above`, `Insert Row Below`, `Delete Row(s)`.
+* On any **cell**: `Cut`, `Copy`, `Paste`, `Fill Down`, `Duplicate`,
+  `Column Math...`, `Clear Cells`, `Insert Row Above`, `Insert Row Below`,
+  `Delete Row(s)`.
 * On any **column header**: `Calculate Column '<name>'...`, `Sort Ascending`,
   `Sort Descending`, `Fill Down`, `Insert Column Before...`,
   `Insert Column After...`, `Rename '<name>'...`, `Delete Column '<name>'`.
@@ -897,6 +900,8 @@ The block is what the data operations work on:
 | `Ctrl/Cmd+C` | Copies the block as tab separated text - several rows and columns at once, ready for a spreadsheet program. |
 | `Ctrl/Cmd+V` | Writes tab separated text (from this program or another one) into the table, starting at the **top left cell of the block**; the shape of the text decides the shape of what is written, so a block of two columns fills two columns even when only one cell is selected.  The table grows if the text has more rows.  This also works while a cell is being edited - only a single value (no tabs, no line breaks) is pasted into the text of that cell. |
 | `Ctrl/Cmd+X` | Copies the block and empties it (inside a cell editor it cuts the selected text instead). |
+| `Ctrl/Cmd+D` | `Edit > Duplicate`: the block again, in the rows just under it.  (Filling down keeps the fill handle and the `Fill Down` line of the right click menu.) |
+| `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
 | `Delete` or `Backspace` | Empties the cells of the block. |
 | `Delete row` button | Removes every row of the block. |
 
@@ -978,8 +983,10 @@ properties at once.
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Move forward`, `Move backward` (see `Which object is in front`). |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`). |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
+| `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
+| `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
@@ -987,7 +994,7 @@ properties at once.
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
-| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, `Move forward` and `Move backward`, plus closing this diagram. |
+| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, the four stacking commands, plus closing this diagram. |
 | Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn pastel icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
 
 The blue veil and the control points are only on the screen: they are left
@@ -1007,10 +1014,11 @@ another one.
   found under the pointer - `Curve`, `Drawing`, `Picture`, `Arrow`,
   `Text box`, or `The paper of the diagram` when the pointer was on the
   empty paper.
-* **Move forward** lifts it past exactly **one** neighbour, **Move
-  backward** pushes it one behind.  Clicking the same line again and again
-  walks it through the whole stack, and the toolbar says at every step what
-  it has just passed.  The same two commands are in the **Plot** menu, for
+* Four commands move it: **Bring to front** and **Send to back** take it
+  the whole way in one click, while **Bring forward** and **Send backward**
+  lift it past exactly **one** neighbour - clicking the same line again and
+  again walks it through the stack, and the toolbar says at every step what
+  it has just passed.  All four are in the **Plot** menu as well, for
   whatever is selected.
 * **Copy** and **Cut** put a text box, a drawing, a picture or an arrow
   aside - `Cut` takes it out of the diagram as well.  A **curve** belongs
@@ -1025,6 +1033,13 @@ another one.
 * A newly drawn object always appears in front of everything, and the whole
   order is written into the `.aplt` file and into the exported matplotlib
   program.
+* The stack reaches **across both Y scales**.  Matplotlib draws one set of
+  axes completely before the other, so a drawing could otherwise never
+  stand over a curve of the **right hand** scale, whatever its place in the
+  stack said.  APlot therefore lays the two axes themselves in the order
+  the stack asks for and hands every drawn object to the one it has to be
+  on - all of it by itself, so an ellipse really does come out in front of
+  a curve of the right scale, and that curve really does go behind it.
 * A curve is more than one drawn thing - its line, the **filled area**
   under it, its error bars, its bars.  They keep their own order among
   themselves but move as **one** object, so something pushed behind a
@@ -1330,6 +1345,19 @@ The clipboard belongs to the program, not to one window, so an object can
 be copied in one diagram and pasted into another one.  It is not the
 clipboard of the operating system: `Ctrl/Cmd+C` in the diagram does not
 disturb text that was copied elsewhere.
+
+`Edit > Duplicate` (`Ctrl/Cmd+D`) is the short way of the same thing: one
+key makes the copy, places it a little to the lower right and selects it,
+and what was on the clipboard before stays there.
+
+**Two things can be waiting, and the newer one wins.**  `File > Copy figure
+to the clipboard` puts a picture of the whole diagram on the clipboard of
+the system, while copying an object keeps it inside the program.  When both
+have happened, `Ctrl/Cmd+V` takes whichever was copied **last** - so
+copying the figure and then an object pastes the object, and the other way
+round pastes the picture.  A picture copied in another program carries no
+time of its own and is taken whenever the program's own copy is not the
+newer one.
 
 ### Writing a text in place
 
@@ -1801,9 +1829,11 @@ the pointer becomes a hand over the frame.
 ### The menu bar of the diagram window
 
 A diagram window carries the same menu bar as the spreadsheet window
-(`APlot`, `File`, `Plot`, `Help`), so files can be opened and saved and the
-settings and the documentation can be reached without going back to the
-main window.  This matters on macOS, where the menu bar always belongs to
+(`APlot`, `File`, `Edit`, `Plot`, `Help`), so files can be opened and saved
+and the settings and the documentation can be reached without going back to
+the main window.  The `Edit` menu acts on the window it was opened from, so
+the very same `Cut`, `Copy`, `Paste` and `Duplicate` work on the selected
+object here and on the block of cells there (section 3).  This matters on macOS, where the menu bar always belongs to
 the window that has the focus.  In a diagram window the `Plot` menu holds
 the commands of that diagram after a separator: `Axes properties...`,
 `Frame and origin...`, `Title and fonts...` and `Close this diagram`.
@@ -1854,7 +1884,44 @@ The starting colours of all four (title, axis labels, axis numbers, legend)
 come from the `Fonts` tab of the settings.
 
 
-## 3. Files
+## 3. Taking a step back
+
+Every command that changes something can be taken back, in the sheet and in
+the diagram alike.  The `Edit` menu is the same in both windows and always
+works on the window it was opened from.
+
+| Menu item | Key | What it does |
+| --- | --- | --- |
+| Undo | `Cmd/Ctrl+Z` | Takes back the last change - a cell that was written, a drawing that was added, an object that was moved, a whole block that was pasted. |
+| Redo | `Shift+Cmd/Ctrl+Z` | Does it again. |
+| Cut | `Cmd/Ctrl+X` | The selected object of the diagram, or the highlighted block of cells, goes to the clipboard and away. |
+| Copy | `Cmd/Ctrl+C` | The same, without removing anything.  With **nothing** selected in a diagram this copies a picture of the whole diagram. |
+| Paste | `Cmd/Ctrl+V` | Puts back what was copied. |
+| Duplicate | `Cmd/Ctrl+D` | A second copy at once: in the diagram a little to the lower right of the original, in the sheet in the rows just under the block.  The clipboard is left alone. |
+
+**The line says what it will take back.**  With something on the list the
+first line of the menu reads `Undo the drawing`, `Undo the sheet`,
+`Undo pasting` and so on, so it is clear beforehand what is about to
+happen.  With nothing on the list both lines are grey.
+
+**One command, one step.**  Pasting an object, duplicating it or bringing
+it to the front is a single step even though the program does several
+things for it, so one `Undo` puts everything back as it was.  The last
+60 steps are kept; opening a file starts a fresh, empty list, because the
+file itself is the state to go back to.
+
+**What a step remembers.**  A change in a sheet remembers that sheet - its
+values, its formulas and its column names; a change in a diagram remembers
+that diagram - every curve, axis, drawing, text box and arrow with all of
+its properties.  Objects keep their names through `Undo` and `Redo`, so
+whatever was selected is still the same object afterwards.
+
+**A cell that is open keeps the keys for its text.**  While a cell or a
+text box is being written in, `Cmd/Ctrl+C`, `Cmd/Ctrl+V` and `Cmd/Ctrl+X`
+belong to the characters of that text, exactly as everywhere else.
+
+
+## 4. Files
 
 | Menu item | Key | What it does |
 | --- | --- | --- |
@@ -1862,9 +1929,9 @@ come from the `Fonts` tab of the settings.
 | Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open.  This is the **disc button** of the toolbar. |
 | Save graph as... | | The same, always asking for a new name. |
 | Import data (CSV, TXT, DAT)... | `Cmd/Ctrl+I` | Reads a text data file into the sheet; the separator is recognised automatically.  This is the **arrow button** of the toolbar. |
-| Export data (CSV, TXT, DAT)... | `Cmd/Ctrl+Alt+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
+| Export data (CSV, TXT, DAT)... | `Shift+Cmd/Ctrl+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
 | Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
-| Export as matplotlib script... | `Cmd/Ctrl+Alt+E` | Writes the diagram as a Python program. |
+| Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
 
 **Saving with one key.**  `Cmd/Ctrl+S` asks for a name only the **first**
@@ -1907,7 +1974,7 @@ nothing was changed since the last save.
   so both uses of `Cmd/Ctrl+C` live side by side.  If the system has no
   tool for pictures on the clipboard, the program says where it wrote the
   file instead.
-* **Export as matplotlib script...** (`Cmd/Ctrl+Alt+E`) writes a
+* **Export as matplotlib script...** (`Shift+Cmd/Ctrl+E`) writes a
   **stand-alone Python program** that draws the very same diagram.  It
   needs nothing but numpy and matplotlib: the data is written into the file
   as plain lists, and so is everything else - the two or three axes with
@@ -1971,7 +2038,7 @@ If a file is unusual, the recognition can be overridden in the settings:
 used when a data file is written.
 
 
-## 4. Settings
+## 5. Settings
 
 `Settings...` on the toolbar, in the `APlot` menu, or `Cmd+,` in the
 application menu on macOS.  The values are written to
@@ -2023,7 +2090,7 @@ that are **already open** as well, so the effect can be seen at once.
   one is kept.
 
 
-## 5. Typical workflow
+## 6. Typical workflow
 
 1. `Random data` (File menu), `Import data` or type the numbers by hand.
    Untick the columns that should not be drawn.
@@ -2044,7 +2111,7 @@ that are **already open** as well, so the effect can be seen at once.
    the Matplotlib toolbar to export a PNG/PDF image.
 
 
-## 6. Notes
+## 7. Notes
 
 * On macOS the first (bold) menu is named after the running program.  APlot
   renames it to "APlot" through the Cocoa bundle information, which needs

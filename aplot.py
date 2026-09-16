@@ -148,6 +148,7 @@ APP_ID = "hu.feti.aplot"        # what macOS calls the program among its own
 BUNDLE_MARK = "APLOT_APP_BUNDLE"   # set by the launcher of APlot.app
 PROJECT_SUFFIX = ".aplt"
 CONFIG_FILE = Path.home() / ".aplot" / "config.json"
+UNDO_STEPS = 60                 # how many changes can be taken back
 
 # the picture of the program itself: a spectrum under its own name
 APP_ICON_SIZE = 512             # the icon is drawn this large and scaled down
@@ -1197,6 +1198,153 @@ def running_from_bundle():
     try:                       # started by hand from inside the bundle
         return f"/{APP_NAME}.app/Contents/" in str(Path(sys.argv[0]).resolve())
     except (OSError, ValueError):
+        return False
+
+
+# --------------------------------------------------------------------------
+# taking a step back, and taking it again
+# --------------------------------------------------------------------------
+
+class UndoStep:
+    """One change: what there was before it, and what there is after it.
+
+    `restore` is the function that puts one of the two back, so a step
+    knows nothing about what it holds - a whole sheet, one diagram - and
+    the same list can carry every kind of change.
+    """
+
+    __slots__ = ("label", "before", "after", "restore")
+
+    def __init__(self, label, before, after, restore):
+        self.label = str(label)
+        self.before = before
+        self.after = after
+        self.restore = restore
+
+
+class UndoStack:
+    """The steps that can be taken back, and the ones taken back already.
+
+    Doing something new throws the second list away, as everywhere else:
+    once the work has gone another way there is nothing to redo.
+    """
+
+    def __init__(self, limit=UNDO_STEPS):
+        self.limit = max(1, int(limit))
+        self.done = []
+        self.undone = []
+        self.blocked = 0        # while a step is applied nothing is recorded
+
+    # -- recording ---------------------------------------------------------
+    def busy(self):
+        """True while a step is being applied, or recording is switched off."""
+        return self.blocked > 0
+
+    def hold(self):
+        """Switch recording off; `release` switches it on again."""
+        self.blocked += 1
+        return self
+
+    def release(self):
+        self.blocked = max(0, self.blocked - 1)
+        return self
+
+    def __enter__(self):
+        return self.hold()
+
+    def __exit__(self, *_error):
+        self.release()
+        return False
+
+    def push(self, step):
+        if self.busy() or step is None:
+            return None
+        self.done.append(step)
+        del self.done[:-self.limit]
+        self.undone.clear()
+        return step
+
+    def clear(self):
+        self.done.clear()
+        self.undone.clear()
+        return True
+
+    # -- using it ----------------------------------------------------------
+    def can_undo(self):
+        return bool(self.done)
+
+    def can_redo(self):
+        return bool(self.undone)
+
+    def undo_label(self):
+        return self.done[-1].label if self.done else ""
+
+    def redo_label(self):
+        return self.undone[-1].label if self.undone else ""
+
+    def undo(self):
+        if not self.done:
+            return None
+        step = self.done.pop()
+        self.hold()
+        try:
+            step.restore(step.before)
+        finally:
+            self.release()
+        self.undone.append(step)
+        return step
+
+    def redo(self):
+        if not self.undone:
+            return None
+        step = self.undone.pop()
+        self.hold()
+        try:
+            step.restore(step.after)
+        finally:
+            self.release()
+        self.done.append(step)
+        return step
+
+
+class PlotChange:
+    """One command on a diagram, remembered so that it can be taken back.
+
+    It is used as `with window.changed("the drawing"):` around whatever
+    changes the diagram.  Commands that call one another nest: only the
+    outermost one becomes a step, so pasting an object is one step and not
+    two.
+    """
+
+    def __init__(self, window, label):
+        self.window = window
+        self.label = str(label)
+        self.before = None
+
+    def _app(self):
+        return getattr(self.window, "app", None)
+
+    def __enter__(self):
+        window = self.window
+        window._change_depth = getattr(window, "_change_depth", 0) + 1
+        app = self._app()
+        if window._change_depth == 1 and app is not None and not app.undo.busy():
+            try:
+                self.before = app.plot_document(window)
+            except (AttributeError, tk.TclError, ValueError):
+                self.before = None
+        return self
+
+    def __exit__(self, *_error):
+        window = self.window
+        window._change_depth = max(0, getattr(window, "_change_depth", 1) - 1)
+        if window._change_depth == 0 and self.before is not None:
+            app = self._app()
+            if app is not None:
+                try:
+                    app.record_plot(window, self.label, self.before)
+                except (AttributeError, tk.TclError, ValueError):
+                    pass
         return False
 
 
@@ -6239,8 +6387,10 @@ class DataTable(ttk.Frame):
             tree.bind(f"<{modifier}-V>", wrap(self.paste_block))
             tree.bind(f"<{modifier}-x>", wrap(self.cut_block))
             tree.bind(f"<{modifier}-X>", wrap(self.cut_block))
-            tree.bind(f"<{modifier}-d>", wrap(self.fill_down))
-            tree.bind(f"<{modifier}-D>", wrap(self.fill_down))
+            # Duplicate, as in the Edit menu; filling down keeps its own
+            # button in the formula bar
+            tree.bind(f"<{modifier}-d>", wrap(self.duplicate_block))
+            tree.bind(f"<{modifier}-D>", wrap(self.duplicate_block))
             tree.bind(f"<{modifier}-space>", wrap(self.select_columns_of_block))
         tree.bind("<Shift-space>", wrap(self.select_rows_of_block))
         for sequence in ("<Delete>", "<BackSpace>"):
@@ -7927,6 +8077,24 @@ class DataTable(ttk.Frame):
             return False
         return self.clear_block()
 
+    def duplicate_block(self, _event=None):
+        """Ctrl/Cmd+D: the block again, in the rows just under it.
+
+        The clipboard of the system is left alone: what was copied before
+        is still there afterwards.
+        """
+        bounds = self.block_bounds()
+        text = self.block_text()
+        if bounds is None or not text:
+            return False
+        r0, c0, r1, _c1 = bounds
+        rows = r1 - r0 + 1
+        while len(self.df) < r1 + rows + 1:      # room for the second copy
+            self.add_row()
+        self.select_cell(r1 + 1, c0)
+        self.paste_block(text)
+        return True
+
     def paste_block(self, text=None, _event=None):
         """Ctrl/Cmd+V: write tab separated text starting at the block.
 
@@ -8241,7 +8409,11 @@ class DataTable(ttk.Frame):
                     self.tree.set(str(r), col_name, "" if val == "" else str(val))
 
     def fill_down(self):
-        """Excel-style Fill Down (Ctrl+D): replicate top cell formula/value down the selection."""
+        """Excel-style Fill Down: repeat the top cell down the block.
+
+        It has the button of the formula bar and the right-click menu;
+        `Ctrl/Cmd+D` belongs to `Edit > Duplicate`.
+        """
         bounds = self.block_bounds()
         if bounds is None:
             return False
@@ -8412,7 +8584,9 @@ class DataTable(ttk.Frame):
         menu.add_command(label=f"Copy ({MODIFIER}+C)", command=self.copy_block)
         menu.add_command(label=f"Paste ({MODIFIER}+V)", command=self.paste_block)
         menu.add_separator()
-        menu.add_command(label=f"Fill Down ({MODIFIER}+D)", command=self.fill_down)
+        menu.add_command(label="Fill Down", command=self.fill_down)
+        menu.add_command(label=f"Duplicate ({MODIFIER}+D)",
+                         command=self.duplicate_block)
         menu.add_command(label="Column Math...", command=self.open_column_math)
         menu.add_separator()
         menu.add_command(label="Clear Cells (Delete)", command=self.clear_block)
@@ -8449,7 +8623,7 @@ class DataTable(ttk.Frame):
         menu.add_command(label="Sort Ascending (A → Z)", command=lambda: self.sort_column(col_idx, ascending=True))
         menu.add_command(label="Sort Descending (Z → A)", command=lambda: self.sort_column(col_idx, ascending=False))
         menu.add_separator()
-        menu.add_command(label="Fill Down (Ctrl+D)", command=self.fill_down)
+        menu.add_command(label="Fill Down", command=self.fill_down)
         menu.add_separator()
         menu.add_command(
             label="Insert Column Before...",
@@ -8475,6 +8649,10 @@ class PlotWindow(tk.Toplevel):
 
     # the copied object, shared by every diagram window of the program
     _clipboard = None
+    # when each of the two kinds of copy last happened, so that pasting
+    # takes whichever was copied more recently
+    _clipboard_stamp = 0.0
+    _figure_stamp = 0.0
 
     HINT = ("One click selects (a text turns blue), a slow second click "
             "writes the text, a double click opens its properties   |   "
@@ -8545,9 +8723,15 @@ class PlotWindow(tk.Toplevel):
         self._shape_counter = 0
         self._pending_shape = False
         self._shape_drag = None
+        self._drag_before = None        # the diagram before the drag started
+        self._change_depth = 0          # commands that call one another
         # where each curve stands in the stack; the drawings, the arrows and
         # the text boxes keep theirs in their own state, under "z"
         self.series_z: dict = {}        # Y column name -> its place in the stack
+        # (kind, key) -> "left" / "right": which of the two axes a drawn
+        # object is on, so that it can stand between the curves of both
+        self._object_side: dict = {}
+        self._top_side = "right"        # the axes that is drawn over the other
         self._object_menu = None        # the menu of the right click, while open
         # ("shape"|"arrow"|"note"|"legend"|"text", key) - one click selects,
         # a second click opens the properties of the selected object
@@ -8671,10 +8855,14 @@ class PlotWindow(tk.Toplevel):
             plot_menu.add_command(label="Delete object", accelerator="Del",
                                   command=self.delete_selection)
             plot_menu.add_separator()
-            plot_menu.add_command(label="Move forward",
+            plot_menu.add_command(label="Bring to front",
+                                  command=self.front_selection)
+            plot_menu.add_command(label="Bring forward",
                                   command=self.raise_selection)
-            plot_menu.add_command(label="Move backward",
+            plot_menu.add_command(label="Send backward",
                                   command=self.lower_selection)
+            plot_menu.add_command(label="Send to back",
+                                  command=self.back_selection)
             plot_menu.add_separator()
             plot_menu.add_command(label="Close", command=self.destroy)
             menubar.add_cascade(label="Plot", menu=plot_menu)
@@ -8897,6 +9085,9 @@ class PlotWindow(tk.Toplevel):
                 bind_both(f"<{modifier}-{letter}>", wrap(self.paste_clipboard))
             for letter in ("x", "X"):
                 bind_both(f"<{modifier}-{letter}>", wrap(self.cut_selection))
+            for letter in ("d", "D"):
+                bind_both(f"<{modifier}-{letter}>",
+                          wrap(self.duplicate_selection))
         for sequence in ("<Delete>", "<BackSpace>"):
             bind_both(sequence, wrap(self.delete_selection))
 
@@ -9220,6 +9411,9 @@ class PlotWindow(tk.Toplevel):
                                  labelleft=False, labelright=right and y2_ticks)
         self._apply_y_grid()
         self._apply_axis_colors()
+        # a curve that moved to the other scale changes which axes lies
+        # over which, and so where the drawn objects have to be
+        self.apply_stack_layers()
         # an automatic range straightens an axis out again: the ones that
         # were turned round are turned back, last of all
         for which in ("x", "y", "y2"):
@@ -10831,7 +11025,17 @@ class PlotWindow(tk.Toplevel):
             axis_cfg = self.axis_cfg[which]
             name = {"x": "ax", "y": "ax", "y2": "ax2"}[which]
             if which == "y2":
-                out += ["", "ax2 = ax.twinx()", "ax2.patch.set_visible(False)",
+                # which of the two axes is drawn last is what decides
+                # whether a drawing can stand over a curve of the other one
+                top = getattr(self, "_top_side", "right")
+                out += ["", "ax2 = ax.twinx()",
+                        "ax.set_zorder(%s)" % lit(0.0 if top == "right" else 1.0),
+                        "ax2.set_zorder(%s)" % lit(1.0 if top == "right" else 0.0),
+                        "ax.patch.set_visible(%s)" % (top == "right"),
+                        "ax2.patch.set_visible(%s)" % (top != "right"),
+                        "ax2.set_facecolor(%s)"
+                        % lit((self.frame_cfg or {}).get("background",
+                                                         "#ffffff")),
                         "for spine in ax2.spines.values():",
                         "    spine.set_visible(False)",
                         "ax2.tick_params(which='both', width=%s, direction=%s)"
@@ -11222,18 +11426,25 @@ class PlotWindow(tk.Toplevel):
                        % (artist, artist, lit(float(dx)), lit(float(dy))))
         return out
 
+    def script_host(self, kind, key):
+        """"ax" or "ax2": the axes one object is drawn on in the script."""
+        if not self.right_axis_active() or self.ax2 is None:
+            return "ax"                    # the script builds no second axes
+        return "ax2" if self.stack_side(kind, key) == "right" else "ax"
+
     def _script_objects(self):
         """The text boxes, the drawings and the arrows, as they are drawn."""
         lit = self._literal
         out = []
         if self.note_state:
             out += ["", "# ------------------------------------- the text boxes"]
-        for state in self.note_state.values():
+        for key, state in self.note_state.items():
+            host = self.script_host("note", key)
             edge, face = state.get("edge", "none"), state.get("face", "none")
             out.append(
-                "ax.text(%s, %s, %s, transform=ax.transAxes, fontsize=%s, "
+                "%s.text(%s, %s, %s, transform=ax.transAxes, fontsize=%s, "
                 "color=%s, ha='left', va='center', rotation=%s,"
-                % (lit(float(state["pos"][0])), lit(float(state["pos"][1])),
+                % (host, lit(float(state["pos"][0])), lit(float(state["pos"][1])),
                    lit(str(state["text"])), lit(int(state["size"])),
                    lit(state["color"]), lit(float(state.get("angle", 0.0) or 0.0))))
             out.append(
@@ -11247,6 +11458,7 @@ class PlotWindow(tk.Toplevel):
         if self.shape_state:
             out += ["", "# --------------------------------------- the drawings"]
         for key, state in self.shape_state.items():
+            host = self.script_host("shape", key)
             kind = state["kind"]
             x, y = float(state["x"]), float(state["y"])
             w, h = float(state["w"]), float(state["h"])
@@ -11266,16 +11478,16 @@ class PlotWindow(tk.Toplevel):
             if kind == "line":
                 ends = ([[x, y + h], [x + w, y]] if state.get("flip")
                         else [[x, y], [x + w, y + h]])
-                out.append("ax.add_patch(Polygon(%s, closed=False, fill=False, %s))"
-                           % (lit(ends), common))
+                out.append("%s.add_patch(Polygon(%s, closed=False, fill=False, %s))"
+                           % (host, lit(ends), common))
             elif kind == "triangle":
                 points = [[x + w / 2, y + h], [x, y], [x + w, y]]
-                out.append("ax.add_patch(Polygon(%s, closed=True, %s))"
-                           % (lit(points), common))
+                out.append("%s.add_patch(Polygon(%s, closed=True, %s))"
+                           % (host, lit(points), common))
             elif kind in ("circle", "ellipse"):
-                out.append("ax.add_patch(Ellipse((%s, %s), %s, %s, %s))"
-                           % (lit(x + w / 2), lit(y + h / 2), lit(w), lit(h),
-                              common))
+                out.append("%s.add_patch(Ellipse((%s, %s), %s, %s, %s))"
+                           % (host, lit(x + w / 2), lit(y + h / 2), lit(w),
+                              lit(h), common))
             elif kind == PICTURE_KIND:
                 # the picture itself travels with the program, in one line
                 out.append("picture_%s = plt.imread(io.BytesIO(base64."
@@ -11289,24 +11501,25 @@ class PlotWindow(tk.Toplevel):
                               lit(float(state.get("alpha", 1.0)))))
                 out.append("art_%s.set_data(picture_%s)" % (key, key))
                 out.append("art_%s.set_clip_on(False)" % key)
-                out.append("ax.add_artist(art_%s)" % key)
+                out.append("%s.add_artist(art_%s)" % (host, key))
                 if state.get("style", "none") != "none":
-                    out.append("ax.add_patch(Rectangle((%s, %s), %s, %s, %s))"
-                               % (lit(x), lit(y), lit(w), lit(h), common))
+                    out.append("%s.add_patch(Rectangle((%s, %s), %s, %s, %s))"
+                               % (host, lit(x), lit(y), lit(w), lit(h), common))
             else:
-                out.append("ax.add_patch(Rectangle((%s, %s), %s, %s, %s))"
-                           % (lit(x), lit(y), lit(w), lit(h), common))
+                out.append("%s.add_patch(Rectangle((%s, %s), %s, %s, %s))"
+                           % (host, lit(x), lit(y), lit(w), lit(h), common))
 
         if self.arrow_state:
             out += ["", "# ----------------------------------------- the arrows"]
         for key, state in self.arrow_state.items():
+            host = self.script_host("arrow", key)
             points, shaft_end = self._head_polygon(state)
             height = float(state.get("z") or Z_DEFAULT["arrow"])
             out.append(
-                "ax.plot([%s, %s], [%s, %s], transform=ax.transAxes, color=%s, "
+                "%s.plot([%s, %s], [%s, %s], transform=ax.transAxes, color=%s, "
                 "linestyle=%s, linewidth=%s, solid_capstyle='butt', "
                 "clip_on=False, zorder=%s, label='_nolegend_')"
-                % (lit(float(state["tail"][0])), lit(float(shaft_end[0])),
+                % (host, lit(float(state["tail"][0])), lit(float(shaft_end[0])),
                    lit(float(state["tail"][1])), lit(float(shaft_end[1])),
                    lit(state["color"]), lit(state["style"]),
                    lit(float(state["width"])), lit(height)))
@@ -11315,19 +11528,20 @@ class PlotWindow(tk.Toplevel):
             corners = [[float(one[0]), float(one[1])] for one in points]
             if state["head"] == "chevron":
                 out.append(
-                    "ax.plot(%s, %s, transform=ax.transAxes, color=%s, "
+                    "%s.plot(%s, %s, transform=ax.transAxes, color=%s, "
                     "linestyle='-', linewidth=%s, solid_joinstyle='miter', "
                     "clip_on=False, zorder=%s, label='_nolegend_')"
-                    % (lit([one[0] for one in corners]),
+                    % (host, lit([one[0] for one in corners]),
                        lit([one[1] for one in corners]),
                        lit(state["color"]), lit(float(state["width"])),
                        lit(height)))
             else:
                 out.append(
-                    "ax.add_patch(Polygon(%s, closed=True, "
+                    "%s.add_patch(Polygon(%s, closed=True, "
                     "transform=ax.transAxes, facecolor=%s, edgecolor=%s, "
                     "linewidth=%s, clip_on=False, zorder=%s))"
-                    % (lit(corners), lit(state["color"]), lit(state["color"]),
+                    % (host, lit(corners), lit(state["color"]),
+                       lit(state["color"]),
                        lit(max(0.2, float(state["width"]) * 0.5)), lit(height)))
         return out
 
@@ -11404,26 +11618,28 @@ class PlotWindow(tk.Toplevel):
                              for name, value in self.text_offset.items()},
             # a name beginning with "_" is something the program keeps for
             # itself (the pixels of a picture), not a part of the graph
-            "shapes": [{key_: (float(value) if key_ in ("x", "y", "w", "h", "angle",
-                                                        "width", "alpha")
-                                else value)
-                        for key_, value in state.items()
-                        if not str(key_).startswith("_")}
-                       for state in self.shape_state.values()],
-            "arrows": [{"head": state["head"],
+            "shapes": [{**{key_: (float(value)
+                                  if key_ in ("x", "y", "w", "h", "angle",
+                                              "width", "alpha")
+                                  else value)
+                           for key_, value in state.items()
+                           if not str(key_).startswith("_")},
+                        "name": str(name)}
+                       for name, state in self.shape_state.items()],
+            "arrows": [{"name": str(name), "head": state["head"],
                         "tail": [float(state["tail"][0]), float(state["tail"][1])],
                         "tip": [float(state["tip"][0]), float(state["tip"][1])],
                         "size": float(state["size"]), "style": state["style"],
                         "width": float(state["width"]), "color": state["color"],
                         "z": float(state.get("z") or Z_DEFAULT["arrow"])}
-                       for state in self.arrow_state.values()],
-            "notes": [{"text": state["text"],
+                       for name, state in self.arrow_state.items()],
+            "notes": [{"name": str(name), "text": state["text"],
                        "pos": [float(state["pos"][0]), float(state["pos"][1])],
                        "angle": float(state.get("angle", 0.0) or 0.0),
                        "size": int(state["size"]), "color": state["color"],
                        "edge": state["edge"], "face": state["face"],
                        "z": float(state.get("z") or Z_DEFAULT["note"])}
-                      for state in self.note_state.values()],
+                      for name, state in self.note_state.items()],
             "axes": axes,
             "series": series,
             "x_side": self.x_side,
@@ -11576,7 +11792,10 @@ class PlotWindow(tk.Toplevel):
         for shape in state.get("shapes") or []:
             kind = shape.get("kind", "rect")
             base = self.default_shape_state(kind, 0.4, 0.4, 0.2, 0.15)
-            self.add_shape(state={**base, **shape, "kind": kind})
+            saved = {key_: value for key_, value in shape.items()
+                     if key_ != "name"}
+            self.add_shape(state={**base, **saved, "kind": kind},
+                           key=shape.get("name"))
 
         for key in list(self.arrow_state):           # replace the arrows
             self.remove_arrow(key)
@@ -11587,7 +11806,8 @@ class PlotWindow(tk.Toplevel):
             merged = {**base, **arrow, "head": head}
             merged["tail"] = (float(merged["tail"][0]), float(merged["tail"][1]))
             merged["tip"] = (float(merged["tip"][0]), float(merged["tip"][1]))
-            self.add_arrow(state=merged)
+            self.add_arrow(state={key_: value for key_, value in merged.items()
+                                  if key_ != "name"}, key=arrow.get("name"))
 
         for key in list(self.note_state):          # replace the text boxes
             self.remove_note(key)
@@ -11595,8 +11815,9 @@ class PlotWindow(tk.Toplevel):
             position = note.get("pos") or (0.5, 0.5)
             self.add_note(position, state={
                 **self.default_note_state(position),
-                **{k: v for k, v in note.items() if k != "pos"},
-                "pos": (float(position[0]), float(position[1]))})
+                **{k: v for k, v in note.items() if k not in ("pos", "name")},
+                "pos": (float(position[0]), float(position[1]))},
+                key=note.get("name"))
 
         geometry = state.get("geometry")
         if geometry:
@@ -11607,6 +11828,9 @@ class PlotWindow(tk.Toplevel):
         self.refresh_fills()
         self.refresh_legend()
         self.apply_font_family()     # after everything has been drawn again
+        # everything is there now: the two axes can be laid in the order the
+        # stack asks for, and the drawn objects handed to the right one
+        self.apply_stack_layers()
         self.draw()
 
     def matching_series(self, name):
@@ -11899,10 +12123,14 @@ class PlotWindow(tk.Toplevel):
             "alpha": float(cfg["fill_alpha"]),
         }
 
-    def add_shape(self, kind=None, position=(0.4, 0.4), size=(0.2, 0.15),
-                  state=None):
-        self._shape_counter += 1
-        key = f"shape{self._shape_counter}"
+    def add_shape(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the drawing'):
+            return self._add_shape(*args, **kwargs)
+
+    def _add_shape(self, kind=None, position=(0.4, 0.4), size=(0.2, 0.15),
+                  state=None, key=None):
+        key = self.claim_key("shape", key)
         state = state or self.default_shape_state(
             kind or self.shape_kind, position[0], position[1], size[0], size[1])
         if state.get("z") is None:
@@ -11912,7 +12140,12 @@ class PlotWindow(tk.Toplevel):
         self.draw()
         return key
 
-    def remove_shape(self, key):
+    def remove_shape(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the drawing'):
+            return self._remove_shape(*args, **kwargs)
+
+    def _remove_shape(self, key):
         patch = self.shapes.pop(key, None)
         if patch is not None:
             patch.remove()
@@ -11948,6 +12181,7 @@ class PlotWindow(tk.Toplevel):
             h = w * self._axes_aspect()
             state["h"] = h
         face = state.get("face", "none")
+        host = self.object_axes("shape", key)
         common = {
             "transform": self._shape_transform(state),
             "clip_on": False,
@@ -11969,7 +12203,7 @@ class PlotWindow(tk.Toplevel):
             patch = Ellipse((x + w / 2, y + h / 2), w, h, **common)
         else:
             patch = Rectangle((x, y), w, h, **common)
-        self.ax.add_patch(patch)
+        host.add_patch(patch)
         self.shapes[key] = patch
         if state["kind"] == PICTURE_KIND:
             self._refresh_picture(key, state, patch)
@@ -12008,7 +12242,7 @@ class PlotWindow(tk.Toplevel):
         artist.set_data(values)
         artist.set_clip_on(False)
         artist.set_in_layout(False)
-        self.ax.add_artist(artist)
+        self.object_axes("shape", key).add_artist(artist)
         self.shape_pictures[key] = artist
         patch.set_facecolor("none")        # the picture is the filling
         patch.set_zorder(height)
@@ -12038,7 +12272,12 @@ class PlotWindow(tk.Toplevel):
             tall = 0.9
         return wide, tall
 
-    def add_picture(self, source, centre=None, state=None):
+    def add_picture(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the picture'):
+            return self._add_picture(*args, **kwargs)
+
+    def _add_picture(self, source, centre=None, state=None):
         """Put a picture into the diagram; it can be moved and resized.
 
         `source` is anything a drop, a paste or the file dialog hands over:
@@ -12066,8 +12305,7 @@ class PlotWindow(tk.Toplevel):
             y = min(max(float(middle[1]) - height / 2.0, 0.0), 1.0 - height)
             state["x"], state["y"] = x, y
             state["w"], state["h"] = width, height
-        self._shape_counter += 1
-        key = f"shape{self._shape_counter}"
+        key = self.claim_key("shape")
         self.shape_state[key] = state
         self.refresh_shape(key)
         self.select_object("shape", key)
@@ -12309,9 +12547,14 @@ class PlotWindow(tk.Toplevel):
             "color": safe_hex(cfg["color"], "#000000"),
         }
 
-    def add_arrow(self, head=None, tail=(0.3, 0.3), tip=(0.5, 0.5), state=None):
-        self._arrow_counter += 1
-        key = f"arrow{self._arrow_counter}"
+    def add_arrow(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the arrow'):
+            return self._add_arrow(*args, **kwargs)
+
+    def _add_arrow(self, head=None, tail=(0.3, 0.3), tip=(0.5, 0.5),
+                   state=None, key=None):
+        key = self.claim_key("arrow", key)
         state = state or self.default_arrow_state(
             head or self.arrow_head, tail, tip)
         if state.get("z") is None:
@@ -12321,7 +12564,12 @@ class PlotWindow(tk.Toplevel):
         self.draw()
         return key
 
-    def remove_arrow(self, key):
+    def remove_arrow(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the arrow'):
+            return self._remove_arrow(*args, **kwargs)
+
+    def _remove_arrow(self, key):
         for artist in self.arrows.pop(key, ()):
             artist.remove()
         self.arrow_state.pop(key, None)
@@ -12369,7 +12617,8 @@ class PlotWindow(tk.Toplevel):
             return None
         points, shaft_end = self._head_polygon(state)
         height = float(state.get("z") or Z_DEFAULT["arrow"])
-        shaft, = self.ax.plot(
+        host = self.object_axes("arrow", key)
+        shaft, = host.plot(
             [state["tail"][0], shaft_end[0]], [state["tail"][1], shaft_end[1]],
             transform=self.ax.transAxes, color=state["color"],
             linestyle=state["style"], linewidth=state["width"],
@@ -12378,7 +12627,7 @@ class PlotWindow(tk.Toplevel):
         artists = [shaft]
         if points is not None:
             if state["head"] == "chevron":
-                head, = self.ax.plot(
+                head, = host.plot(
                     [p[0] for p in points], [p[1] for p in points],
                     transform=self.ax.transAxes, color=state["color"],
                     linestyle="-", linewidth=state["width"],
@@ -12390,7 +12639,7 @@ class PlotWindow(tk.Toplevel):
                                edgecolor=state["color"],
                                linewidth=max(0.2, state["width"] * 0.5),
                                clip_on=False, zorder=height)
-                self.ax.add_patch(head)
+                host.add_patch(head)
             artists.append(head)
         self.arrows[key] = artists
         if self.selection == ("arrow", key):
@@ -12902,6 +13151,35 @@ class PlotWindow(tk.Toplevel):
         return moved
 
     # -- which object is in front of which ---------------------------------
+    def changed(self, label="the diagram"):
+        """`with window.changed("..."):` remembers a command for Undo."""
+        return PlotChange(self, label)
+
+    def claim_key(self, kind, wanted=None):
+        """The name a new object gets.
+
+        Normally it is the next free one - `shape7`, `arrow2`, `note3`.
+        When a diagram is rebuilt (opening a file, Undo, Redo) the names
+        that were saved with it are asked for by `wanted`, so that an
+        object keeps its name and stays the same object for everything
+        that refers to it.
+        """
+        store = self.stack_store(kind) or {}
+        counter = f"_{kind}_counter"
+        if wanted:
+            wanted = str(wanted)
+            if wanted not in store:
+                if wanted.startswith(kind) and wanted[len(kind):].isdigit():
+                    number = int(wanted[len(kind):])
+                    if number > getattr(self, counter, 0):
+                        setattr(self, counter, number)
+                return wanted
+        while True:                      # never step on a name in use
+            setattr(self, counter, getattr(self, counter, 0) + 1)
+            key = f"{kind}{getattr(self, counter)}"
+            if key not in store:
+                return key
+
     def stack_store(self, kind):
         """The dictionary that keeps the state of one kind of object."""
         return {"shape": self.shape_state, "arrow": self.arrow_state,
@@ -13025,6 +13303,116 @@ class PlotWindow(tk.Toplevel):
                 artist.set_zorder(float(z))
         return True
 
+    # -- the two axes lie one over the other -------------------------------
+    def stack_side(self, kind, key):
+        """"left" or "right": which of the two axes a member is drawn on.
+
+        A curve belongs to the axes that carries its scale.  A drawing, a
+        picture, an arrow or a text box belongs wherever the stack needs it
+        to be - `stack_layers` works that out.
+        """
+        if kind == "series":
+            return self.series_side(key)
+        return (self._object_side or {}).get((kind, key), "left")
+
+    def stack_layers(self, order=None):
+        """Work out how the two axes have to lie for one stacking order.
+
+        matplotlib draws one **axes** completely before the next one, and
+        the per-artist heights only order the artists inside one of them.
+        With a right hand Y axis in use the curves live on two axes, so an
+        object could never be drawn between a curve of the one and a curve
+        of the other - and that is why a drawing could not be brought in
+        front of a curve of the right hand scale.
+
+        The cure is to lay the two axes themselves in the right order and
+        to hand every drawn object to the axes it has to be on: the ones
+        below the first curve of the upper axes stay on the lower one, the
+        ones above it are moved up.  It returns
+        `(order, "left"/"right" on top, where each object goes)`.
+        """
+        order = self.stack_members() if order is None else list(order)
+        sides = {}
+        if self.ax2 is None:                 # one axes only: nothing to do
+            return order, "right", {one: "left" for one in order
+                                    if one[0] != "series"}
+        last = {"left": -1, "right": -1}
+        first = {"left": len(order), "right": len(order)}
+        for index, (kind, key) in enumerate(order):
+            if kind != "series":
+                continue
+            side = self.series_side(key)
+            last[side] = max(last[side], index)
+            first[side] = min(first[side], index)
+        # the axes whose topmost curve is higher up is the one on top
+        top = "right" if last["right"] >= last["left"] else "left"
+        split = first[top]                   # its first curve
+        bottom = "left" if top == "right" else "right"
+        for index, (kind, key) in enumerate(order):
+            if kind == "series":
+                continue
+            sides[(kind, key)] = bottom if index < split else top
+        return order, top, sides
+
+    def apply_stack_layers(self, order=None):
+        """Lay the two axes in the order the stack asks for."""
+        order, top, sides = self.stack_layers(order)
+        previous = dict(self._object_side or {})
+        self._object_side = sides
+        self._top_side = top
+        if self.ax2 is not None:
+            # matplotlib draws the axes of a figure in the order of their
+            # own height, and the one that is drawn last is on top
+            self.ax.set_zorder(0.0 if top == "right" else 1.0)
+            self.ax2.set_zorder(1.0 if top == "right" else 0.0)
+            self.apply_axes_background()
+        moved = [one for one in sides
+                 if previous.get(one, "left") != sides[one]]
+        for kind, key in moved:              # drawn again, on the other axes
+            if kind == "shape":
+                self.refresh_shape(key)
+            elif kind == "arrow":
+                self.refresh_arrow(key)
+            elif kind == "note":
+                self.refresh_note(key)
+        if moved:
+            self._refresh_handles()
+        return top, sides
+
+    def object_axes(self, kind=None, key=None):
+        """The axes one drawn object has to be added to."""
+        if self.ax2 is None:
+            return self.ax
+        side = (self._object_side or {}).get((kind, key), "left")
+        return self.ax2 if side == "right" else self.ax
+
+    def top_axes(self):
+        """The one of the two axes that is drawn last, over the other."""
+        if self.ax2 is None:
+            return self.ax
+        return self.ax2 if getattr(self, "_top_side", "right") == "right" \
+            else self.ax
+
+    def apply_axes_background(self, colour=None):
+        """The colour of the plot area belongs to the axes at the bottom.
+
+        Whichever of the two is drawn first carries it; the other one must
+        stay clear, or it would paint over everything below it.
+        """
+        if colour is None:
+            colour = (getattr(self, "frame_cfg", None) or {}).get("background",
+                                                                  "#ffffff")
+        colour = "none" if colour == "none" else colour
+        axes = self.plot_axes()
+        top = self.top_axes()
+        # with one axes it carries the colour; with two, the lower of them
+        lower = axes[0] if len(axes) < 2 else next(
+            (one for one in axes if one is not top), axes[0])
+        for one in axes:
+            one.patch.set_visible(True)
+            one.set_facecolor(colour if one is lower else "none")
+        return lower
+
     def stack_members(self):
         """Every object that can change places, from the back to the front."""
         entries = []
@@ -13039,9 +13427,17 @@ class PlotWindow(tk.Toplevel):
         entries.sort(key=lambda one: (one[0], one[1], one[2]))
         return [(kind, key) for _z, _rank, _order, kind, key in entries]
 
-    def restack(self, order=None, redraw=True):
+    def restack(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the order of the objects'):
+            return self._restack(*args, **kwargs)
+
+    def _restack(self, order=None, redraw=True):
         """Lay the whole stack out again, evenly, from the back forward."""
         order = self.stack_members() if order is None else list(order)
+        # first which axes lies over which, and where every drawn object
+        # belongs; then the heights inside each of them
+        self.apply_stack_layers(order)
         if order:
             step = min(Z_STACK_STEP, Z_STACK_SPAN / float(len(order)))
             for index, (kind, key) in enumerate(order):
@@ -13076,10 +13472,16 @@ class PlotWindow(tk.Toplevel):
             return False
         order.insert(target, order.pop(index))
         self.restack(order)
-        neighbour = order[index]         # the one it changed places with
-        self.flash(f"{self.object_name(kind, key)} moved "
-                   + ("in front of " if step > 0 else "behind ")
-                   + self.object_name(*neighbour).lower())
+        name = self.object_name(kind, key)
+        if target == len(order) - 1:
+            self.flash(f"{name} is in front of everything now")
+        elif target == 0:
+            self.flash(f"{name} is behind everything now")
+        else:
+            neighbour = order[index]     # the one it changed places with
+            self.flash(f"{name} moved "
+                       + ("in front of " if step > 0 else "behind ")
+                       + self.object_name(*neighbour).lower())
         return True
 
     def bring_to_front(self, kind, key):
@@ -13145,10 +13547,14 @@ class PlotWindow(tk.Toplevel):
         menu.add_command(label="Paste", accelerator=f"{ACCEL_NAME}+V",
                          command=lambda: self.paste_clipboard(at=point))
         menu.add_separator()
-        menu.add_command(label="Move forward", state=stackable,
+        menu.add_command(label="Bring to front", state=stackable,
+                         command=lambda: self.bring_to_front(kind, key))
+        menu.add_command(label="Bring forward", state=stackable,
                          command=lambda: self.move_in_stack(kind, key, 1))
-        menu.add_command(label="Move backward", state=stackable,
+        menu.add_command(label="Send backward", state=stackable,
                          command=lambda: self.move_in_stack(kind, key, -1))
+        menu.add_command(label="Send to back", state=stackable,
+                         command=lambda: self.send_to_back(kind, key))
         self._object_menu = menu                # kept, or Tk lets it go
         if root_x is None or root_y is None:
             widget = self.canvas.get_tk_widget()
@@ -13189,11 +13595,17 @@ class PlotWindow(tk.Toplevel):
             "kind": kind, "pasted": 0,
             "state": {name: value for name, value in copy.deepcopy(state).items()
                       if not str(name).startswith("_")}}
+        PlotWindow._clipboard_stamp = time.monotonic()
         self.flash(f"{self.object_name(kind, key)} copied - "
                    f"paste it with {PASTE_HINT}")
         return kind
 
-    def cut_object(self, kind, key):
+    def cut_object(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('cutting out'):
+            return self._cut_object(*args, **kwargs)
+
+    def _cut_object(self, kind, key):
         """Copy one object and take it out of the diagram."""
         if self.copy_object(kind, key) is None:
             return None
@@ -13206,6 +13618,38 @@ class PlotWindow(tk.Toplevel):
         self.flash(f"{name} cut out - paste it with {PASTE_HINT}")
         return kind
 
+    def duplicate_object(self, kind=None, key=None):
+        """A second copy of one object, a little beside the first one.
+
+        It does not touch the clipboard: what was copied before is still
+        there to be pasted afterwards.
+        """
+        if kind is None:
+            kind, key = self.selection or (None, None)
+        store = self.stack_store(kind) if kind in COPYABLE else None
+        state = None if store is None else store.get(key)
+        if state is None:
+            self.flash("Select a text box, a drawing, a picture or an arrow "
+                       "to duplicate it")
+            return None
+        with self.changed("the copy"):
+            clean = {name: value
+                     for name, value in copy.deepcopy(state).items()
+                     if not str(name).startswith("_")}
+            dx, dy = self._axes_delta(PASTE_STEP, -PASTE_STEP)
+            moved = self._shifted_state(kind, clean, dx, dy)
+            moved.pop("z", None)          # the copy goes in front
+            if kind == "shape":
+                made = self.add_shape(state=moved)
+            elif kind == "arrow":
+                made = self.add_arrow(state=moved)
+            else:
+                made = self.add_note(moved["pos"], state=moved)
+            self.select_object(kind, made)
+            self.draw()
+        self.flash(f"{self.object_name(kind, made)} duplicated")
+        return made
+
     def copy_selection(self, _event=None):
         """Ctrl/Cmd+C: keep the selected object with all of its properties."""
         kind, key = self.selection or (None, None)
@@ -13215,6 +13659,10 @@ class PlotWindow(tk.Toplevel):
             return None
         return self.copy_object(kind, key)
 
+    def duplicate_selection(self, _event=None):
+        """Ctrl/Cmd+D: a second copy of the selected object."""
+        return self.duplicate_object()
+
     def cut_selection(self, _event=None):
         """Ctrl/Cmd+X: the selected object goes to the clipboard and away."""
         kind, key = self.selection or (None, None)
@@ -13223,34 +13671,54 @@ class PlotWindow(tk.Toplevel):
             return None
         return self.cut_object(kind, key)
 
-    def raise_selection(self, _event=None):
-        """The menu: one step forward with the selected object."""
+    def _stack_command(self, step):
+        """One of the four stacking commands, on whatever is selected."""
         kind, key = self.selection or (None, None)
         if kind is None:
             self.flash("Select an object first, or use the right button on it")
             return False
-        return self.move_in_stack(kind, key, 1)
+        return self.move_in_stack(kind, key, step)
+
+    def front_selection(self, _event=None):
+        """The menu: the selected object in front of everything."""
+        return self._stack_command(len(self.stack_members()) or 1)
+
+    def raise_selection(self, _event=None):
+        """The menu: one step forward with the selected object."""
+        return self._stack_command(1)
 
     def lower_selection(self, _event=None):
         """The menu: one step backward with the selected object."""
-        kind, key = self.selection or (None, None)
-        if kind is None:
-            self.flash("Select an object first, or use the right button on it")
-            return False
-        return self.move_in_stack(kind, key, -1)
+        return self._stack_command(-1)
 
-    def paste_clipboard(self, _event=None, at=None):
-        """Ctrl/Cmd+V: a picture from the clipboard, or the copied object.
+    def back_selection(self, _event=None):
+        """The menu: the selected object behind everything."""
+        return self._stack_command(-(len(self.stack_members()) or 1))
 
-        A picture waiting on the clipboard is what the user means nearly
-        always; the object copied inside the program is used when there is
-        no picture to paste.  `at` is a point of the plot area - the menu of
-        a right click pastes where the pointer was.
+    def paste_clipboard(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('pasting'):
+            return self._paste_clipboard(*args, **kwargs)
+
+    def _paste_clipboard(self, _event=None, at=None):
+        """Ctrl/Cmd+V: the copied object, or a picture from the clipboard.
+
+        Two things can be waiting: an object copied inside the program, and
+        a picture on the clipboard of the system.  **The newer of the two
+        wins** - so copying the whole figure and then copying an object
+        pastes the object, and the other way round pastes the picture.  A
+        picture copied in *another* program carries no time of its own, so
+        it is taken whenever the program's own copy is not the newer one.
+        `at` is a point of the plot area - the menu of a right click pastes
+        where the pointer was.
         """
-        key = self.paste_picture(centre=at)
-        if key is not None:
-            return key
         data = PlotWindow._clipboard
+        mine_is_newer = bool(data) and (PlotWindow._clipboard_stamp
+                                        >= PlotWindow._figure_stamp)
+        if not mine_is_newer:
+            key = self.paste_picture(centre=at)
+            if key is not None:
+                return key
         if not data:
             self.flash("Nothing has been copied yet - copy an object, or a "
                        "picture in another program")
@@ -13287,7 +13755,12 @@ class PlotWindow(tk.Toplevel):
             now = (float(state["pos"][0]), float(state["pos"][1]))
         return (float(point[0]) - now[0], float(point[1]) - now[1])
 
-    def nudge_selection(self, dx_pixels, dy_pixels):
+    def nudge_selection(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('moving the object'):
+            return self._nudge_selection(*args, **kwargs)
+
+    def _nudge_selection(self, dx_pixels, dy_pixels):
         """Move the selected object with the arrow keys."""
         kind, key = self.selection or (None, None)
         state = self.selected_state()
@@ -13380,6 +13853,7 @@ class PlotWindow(tk.Toplevel):
                                  parent=self)
             return False
         if copy_png_to_clipboard(path):
+            PlotWindow._figure_stamp = time.monotonic()
             self.flash("The diagram is on the clipboard as a picture")
             return True
         messagebox.showinfo(
@@ -13442,8 +13916,18 @@ class PlotWindow(tk.Toplevel):
 
     def _refresh_handles(self):
         points = self.selected_handle_positions()
+        # the control points belong on the axes that is drawn last, or the
+        # curves of the upper one would be painted over them
+        host = self.top_axes()
+        if (self._handles is not None
+                and getattr(self._handles, "axes", None) is not host):
+            try:
+                self._handles.remove()
+            except (ValueError, AttributeError):
+                pass
+            self._handles = None
         if self._handles is None and points is not None:
-            self._handles, = self.ax.plot(
+            self._handles, = host.plot(
                 [], [], linestyle="none", marker="s", markersize=7,
                 markerfacecolor="#ffffff", markeredgecolor="#1a5fb4",
                 markeredgewidth=1.2, transform=self.ax.transAxes,
@@ -13462,10 +13946,18 @@ class PlotWindow(tk.Toplevel):
     def _refresh_rotation_handle(self):
         """The round control point that turns a drawing or a text box."""
         point = self.rotation_handle_position()
+        host = self.top_axes()
+        if (self._rotator is not None
+                and getattr(self._rotator, "axes", None) is not host):
+            try:
+                self._rotator.remove()
+            except (ValueError, AttributeError):
+                pass
+            self._rotator = None
         if self._rotator is None:
             if point is None:
                 return
-            self._rotator, = self.ax.plot(
+            self._rotator, = host.plot(
                 [], [], linestyle="-", linewidth=0.8, color="#1a5fb4",
                 marker="o", markersize=8, markerfacecolor="#ffffff",
                 markeredgecolor="#1a5fb4", markeredgewidth=1.2,
@@ -13686,10 +14178,14 @@ class PlotWindow(tk.Toplevel):
                      else safe_hex(cfg["background"], "#ffffff")),
         }
 
-    def add_note(self, position, text=None, state=None):
+    def add_note(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the text box'):
+            return self._add_note(*args, **kwargs)
+
+    def _add_note(self, position, text=None, state=None, key=None):
         """Create a text box at `position` (axes coordinates)."""
-        self._note_counter += 1
-        key = f"note{self._note_counter}"
+        key = self.claim_key("note", key)
         state = state or self.default_note_state(position)
         if state.get("z") is None:
             state["z"] = self.top_z()      # a new text box stands in front
@@ -13700,7 +14196,12 @@ class PlotWindow(tk.Toplevel):
         self.draw()
         return key
 
-    def remove_note(self, key):
+    def remove_note(self, *args, **kwargs):
+        """One command: it can be taken back with Undo."""
+        with self.changed('the text box'):
+            return self._remove_note(*args, **kwargs)
+
+    def _remove_note(self, key):
         artist = self.notes.pop(key, None)
         if artist is not None:
             artist.remove()
@@ -13726,7 +14227,8 @@ class PlotWindow(tk.Toplevel):
                "facecolor": "none" if face == "none" else face,
                "edgecolor": "none" if edge == "none" else edge,
                "linewidth": 0.0 if edge == "none" else 0.8}
-        artist = self.ax.text(state["pos"][0], state["pos"][1], state["text"],
+        host = self.object_axes("note", key)
+        artist = host.text(state["pos"][0], state["pos"][1], state["text"],
                               transform=self.ax.transAxes,
                               fontsize=state["size"], color=state["color"],
                               ha="left", va="center", bbox=box,
@@ -14040,8 +14542,13 @@ class PlotWindow(tk.Toplevel):
         self.draw()
 
     def _on_release(self, event=None):
+        dragged = self._shape_drag is not None or self._drag is not None
         self._finish_drag(event)
         self._open_pending_rename()
+        before, self._drag_before = getattr(self, "_drag_before", None), None
+        app = getattr(self, "app", None)
+        if dragged and before is not None and app is not None:
+            app.record_plot(self, "moving the object", before)
 
     def _finish_drag(self, _event=None):
         self._drag = None
@@ -14219,7 +14726,8 @@ class PlotWindow(tk.Toplevel):
 
         background = cfg.get("background", "#ffffff")
         figure_background = cfg.get("figure_background", "#ffffff")
-        self.ax.set_facecolor("none" if background == "none" else background)
+        # the lower of the two axes carries the colour of the plot area
+        self.apply_axes_background(background)
         self.fig.set_facecolor("none" if figure_background == "none"
                                else figure_background)
 
@@ -14527,6 +15035,12 @@ class PlotWindow(tk.Toplevel):
                 self.select_object("arrow", key)
             return
 
+        # a drag is one single step: what the diagram looked like before
+        # the button went down is what Undo puts back
+        app = getattr(self, "app", None)
+        self._drag_before = (app.plot_document(self)
+                             if app is not None and not app.undo.busy()
+                             else None)
         index = self.handle_at(event.x, event.y)
         if index == ROTATE_HANDLE:        # turn the selected object
             kind, key = self.selection
@@ -15120,13 +15634,14 @@ sheets together:
 | Delete row (icon) | first | Deletes every row the highlighted block touches. |
 | Add column (icon, split button) | first | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
 | Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
-| Settings... | first | Opens the settings editor (see section 4). |
+| Settings... | first | Opens the settings editor (see section 5). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
 | **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
-`Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`), and `Random data` is in the
-`File` menu.
+`Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`) or with the `Edit` menu, which
+also takes a change back (`Ctrl/Cmd+Z`, see section 3); `Random data` is in
+the `File` menu.
 
 ### 1.1 Sheets (tabs)
 
@@ -15407,8 +15922,9 @@ capabilities similar to Excel:
 The bar carries nothing else: **filling down** and the **column operations**
 live where they are needed and do not take room above the sheet.
 
-* **Fill down**: `Ctrl/Cmd+D`, the black fill handle of the selection, or
-  `Fill Down` in the right click menu of a cell or a heading.  It copies the
+* **Fill down**: the black fill handle of the selection, or `Fill Down` in
+  the right click menu of a cell or a heading (`Ctrl/Cmd+D` now belongs to
+  `Edit > Duplicate`, see section 3).  It copies the
   top cell's formula or value down across the selected block of rows,
   automatically adjusting relative row references (e.g. `=A1+B1` becomes
   `=A2+B2`, `=A3+B3`) while preserving absolute references (e.g. `$A$1`).
@@ -15498,9 +16014,9 @@ way, so a whole line of the table is always one click away:
   numbers of the rows it touches are - so it is always visible what the
   block covers, even where it has scrolled out of sight.
 * What is selected is an ordinary block, so everything works on it:
-  `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D` fills it
-  down, and the arrow keys walk on from the cell the click left the cursor
-  in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
+  `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D`
+  duplicates it under itself, and the arrow keys walk on from the cell the
+  click left the cursor in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
 * **Right clicking** a letter opens the menu of that column -
   `Calculate Column...`, `Sort`, `Insert Column Before / After...`,
   `Rename...`, `Delete Column` - the same menu as a right click on the
@@ -15581,8 +16097,9 @@ cells:
 #### Right-click context menus
 
 Right-clicking inside the table opens a context menu:
-* On any **cell**: `Cut`, `Copy`, `Paste`, `Clear Cells`, `Fill Down`,
-  `Column Math...`, `Insert Row Above`, `Insert Row Below`, `Delete Row(s)`.
+* On any **cell**: `Cut`, `Copy`, `Paste`, `Fill Down`, `Duplicate`,
+  `Column Math...`, `Clear Cells`, `Insert Row Above`, `Insert Row Below`,
+  `Delete Row(s)`.
 * On any **column header**: `Calculate Column '<name>'...`, `Sort Ascending`,
   `Sort Descending`, `Fill Down`, `Insert Column Before...`,
   `Insert Column After...`, `Rename '<name>'...`, `Delete Column '<name>'`.
@@ -15848,6 +16365,8 @@ The block is what the data operations work on:
 | `Ctrl/Cmd+C` | Copies the block as tab separated text - several rows and columns at once, ready for a spreadsheet program. |
 | `Ctrl/Cmd+V` | Writes tab separated text (from this program or another one) into the table, starting at the **top left cell of the block**; the shape of the text decides the shape of what is written, so a block of two columns fills two columns even when only one cell is selected.  The table grows if the text has more rows.  This also works while a cell is being edited - only a single value (no tabs, no line breaks) is pasted into the text of that cell. |
 | `Ctrl/Cmd+X` | Copies the block and empties it (inside a cell editor it cuts the selected text instead). |
+| `Ctrl/Cmd+D` | `Edit > Duplicate`: the block again, in the rows just under it.  (Filling down keeps the fill handle and the `Fill Down` line of the right click menu.) |
+| `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
 | `Delete` or `Backspace` | Empties the cells of the block. |
 | `Delete row` button | Removes every row of the block. |
 
@@ -15929,8 +16448,10 @@ properties at once.
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Move forward`, `Move backward` (see `Which object is in front`). |
-| `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  `Ctrl/Cmd+V` pastes a **picture** waiting on the clipboard first. |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`). |
+| `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
+| `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
+| `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
@@ -15938,7 +16459,7 @@ properties at once.
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
-| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, `Move forward` and `Move backward`, plus closing this diagram. |
+| Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, the four stacking commands, plus closing this diagram. |
 | Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn pastel icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
 
 The blue veil and the control points are only on the screen: they are left
@@ -15958,10 +16479,11 @@ another one.
   found under the pointer - `Curve`, `Drawing`, `Picture`, `Arrow`,
   `Text box`, or `The paper of the diagram` when the pointer was on the
   empty paper.
-* **Move forward** lifts it past exactly **one** neighbour, **Move
-  backward** pushes it one behind.  Clicking the same line again and again
-  walks it through the whole stack, and the toolbar says at every step what
-  it has just passed.  The same two commands are in the **Plot** menu, for
+* Four commands move it: **Bring to front** and **Send to back** take it
+  the whole way in one click, while **Bring forward** and **Send backward**
+  lift it past exactly **one** neighbour - clicking the same line again and
+  again walks it through the stack, and the toolbar says at every step what
+  it has just passed.  All four are in the **Plot** menu as well, for
   whatever is selected.
 * **Copy** and **Cut** put a text box, a drawing, a picture or an arrow
   aside - `Cut` takes it out of the diagram as well.  A **curve** belongs
@@ -15976,6 +16498,13 @@ another one.
 * A newly drawn object always appears in front of everything, and the whole
   order is written into the `.aplt` file and into the exported matplotlib
   program.
+* The stack reaches **across both Y scales**.  Matplotlib draws one set of
+  axes completely before the other, so a drawing could otherwise never
+  stand over a curve of the **right hand** scale, whatever its place in the
+  stack said.  APlot therefore lays the two axes themselves in the order
+  the stack asks for and hands every drawn object to the one it has to be
+  on - all of it by itself, so an ellipse really does come out in front of
+  a curve of the right scale, and that curve really does go behind it.
 * A curve is more than one drawn thing - its line, the **filled area**
   under it, its error bars, its bars.  They keep their own order among
   themselves but move as **one** object, so something pushed behind a
@@ -16281,6 +16810,19 @@ The clipboard belongs to the program, not to one window, so an object can
 be copied in one diagram and pasted into another one.  It is not the
 clipboard of the operating system: `Ctrl/Cmd+C` in the diagram does not
 disturb text that was copied elsewhere.
+
+`Edit > Duplicate` (`Ctrl/Cmd+D`) is the short way of the same thing: one
+key makes the copy, places it a little to the lower right and selects it,
+and what was on the clipboard before stays there.
+
+**Two things can be waiting, and the newer one wins.**  `File > Copy figure
+to the clipboard` puts a picture of the whole diagram on the clipboard of
+the system, while copying an object keeps it inside the program.  When both
+have happened, `Ctrl/Cmd+V` takes whichever was copied **last** - so
+copying the figure and then an object pastes the object, and the other way
+round pastes the picture.  A picture copied in another program carries no
+time of its own and is taken whenever the program's own copy is not the
+newer one.
 
 ### Writing a text in place
 
@@ -16752,9 +17294,11 @@ the pointer becomes a hand over the frame.
 ### The menu bar of the diagram window
 
 A diagram window carries the same menu bar as the spreadsheet window
-(`APlot`, `File`, `Plot`, `Help`), so files can be opened and saved and the
-settings and the documentation can be reached without going back to the
-main window.  This matters on macOS, where the menu bar always belongs to
+(`APlot`, `File`, `Edit`, `Plot`, `Help`), so files can be opened and saved
+and the settings and the documentation can be reached without going back to
+the main window.  The `Edit` menu acts on the window it was opened from, so
+the very same `Cut`, `Copy`, `Paste` and `Duplicate` work on the selected
+object here and on the block of cells there (section 3).  This matters on macOS, where the menu bar always belongs to
 the window that has the focus.  In a diagram window the `Plot` menu holds
 the commands of that diagram after a separator: `Axes properties...`,
 `Frame and origin...`, `Title and fonts...` and `Close this diagram`.
@@ -16805,7 +17349,44 @@ The starting colours of all four (title, axis labels, axis numbers, legend)
 come from the `Fonts` tab of the settings.
 
 
-## 3. Files
+## 3. Taking a step back
+
+Every command that changes something can be taken back, in the sheet and in
+the diagram alike.  The `Edit` menu is the same in both windows and always
+works on the window it was opened from.
+
+| Menu item | Key | What it does |
+| --- | --- | --- |
+| Undo | `Cmd/Ctrl+Z` | Takes back the last change - a cell that was written, a drawing that was added, an object that was moved, a whole block that was pasted. |
+| Redo | `Shift+Cmd/Ctrl+Z` | Does it again. |
+| Cut | `Cmd/Ctrl+X` | The selected object of the diagram, or the highlighted block of cells, goes to the clipboard and away. |
+| Copy | `Cmd/Ctrl+C` | The same, without removing anything.  With **nothing** selected in a diagram this copies a picture of the whole diagram. |
+| Paste | `Cmd/Ctrl+V` | Puts back what was copied. |
+| Duplicate | `Cmd/Ctrl+D` | A second copy at once: in the diagram a little to the lower right of the original, in the sheet in the rows just under the block.  The clipboard is left alone. |
+
+**The line says what it will take back.**  With something on the list the
+first line of the menu reads `Undo the drawing`, `Undo the sheet`,
+`Undo pasting` and so on, so it is clear beforehand what is about to
+happen.  With nothing on the list both lines are grey.
+
+**One command, one step.**  Pasting an object, duplicating it or bringing
+it to the front is a single step even though the program does several
+things for it, so one `Undo` puts everything back as it was.  The last
+60 steps are kept; opening a file starts a fresh, empty list, because the
+file itself is the state to go back to.
+
+**What a step remembers.**  A change in a sheet remembers that sheet - its
+values, its formulas and its column names; a change in a diagram remembers
+that diagram - every curve, axis, drawing, text box and arrow with all of
+its properties.  Objects keep their names through `Undo` and `Redo`, so
+whatever was selected is still the same object afterwards.
+
+**A cell that is open keeps the keys for its text.**  While a cell or a
+text box is being written in, `Cmd/Ctrl+C`, `Cmd/Ctrl+V` and `Cmd/Ctrl+X`
+belong to the characters of that text, exactly as everywhere else.
+
+
+## 4. Files
 
 | Menu item | Key | What it does |
 | --- | --- | --- |
@@ -16813,9 +17394,9 @@ come from the `Fonts` tab of the settings.
 | Save graph (.aplt) | `Cmd/Ctrl+S` | Saves the data together with every diagram that is open.  This is the **disc button** of the toolbar. |
 | Save graph as... | | The same, always asking for a new name. |
 | Import data (CSV, TXT, DAT)... | `Cmd/Ctrl+I` | Reads a text data file into the sheet; the separator is recognised automatically.  This is the **arrow button** of the toolbar. |
-| Export data (CSV, TXT, DAT)... | `Cmd/Ctrl+Alt+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
+| Export data (CSV, TXT, DAT)... | `Shift+Cmd/Ctrl+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
 | Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
-| Export as matplotlib script... | `Cmd/Ctrl+Alt+E` | Writes the diagram as a Python program. |
+| Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
 
 **Saving with one key.**  `Cmd/Ctrl+S` asks for a name only the **first**
@@ -16858,7 +17439,7 @@ nothing was changed since the last save.
   so both uses of `Cmd/Ctrl+C` live side by side.  If the system has no
   tool for pictures on the clipboard, the program says where it wrote the
   file instead.
-* **Export as matplotlib script...** (`Cmd/Ctrl+Alt+E`) writes a
+* **Export as matplotlib script...** (`Shift+Cmd/Ctrl+E`) writes a
   **stand-alone Python program** that draws the very same diagram.  It
   needs nothing but numpy and matplotlib: the data is written into the file
   as plain lists, and so is everything else - the two or three axes with
@@ -16922,7 +17503,7 @@ If a file is unusual, the recognition can be overridden in the settings:
 used when a data file is written.
 
 
-## 4. Settings
+## 5. Settings
 
 `Settings...` on the toolbar, in the `APlot` menu, or `Cmd+,` in the
 application menu on macOS.  The values are written to
@@ -16974,7 +17555,7 @@ that are **already open** as well, so the effect can be seen at once.
   one is kept.
 
 
-## 5. Typical workflow
+## 6. Typical workflow
 
 1. `Random data` (File menu), `Import data` or type the numbers by hand.
    Untick the columns that should not be drawn.
@@ -16995,7 +17576,7 @@ that are **already open** as well, so the effect can be seen at once.
    the Matplotlib toolbar to export a PNG/PDF image.
 
 
-## 6. Notes
+## 7. Notes
 
 * On macOS the first (bold) menu is named after the running program.  APlot
   renames it to "APlot" through the Cocoa bundle information, which needs
@@ -17073,6 +17654,9 @@ class App:
         # every window this one opens later
         apply_app_icon(self.root)
         self.plot_windows: list[PlotWindow] = []
+        # every change worth taking back again, newest last
+        self.undo = UndoStack()
+        self._edit_menus = []           # the Edit menus of every window
         self._help_window = None
         # the .aplt file this graph belongs to, and how it looked when it was
         # last written: everything else is "edited but not saved"
@@ -17168,6 +17752,7 @@ class App:
         """A new sheet, at the end or (with `at`) in the middle."""
         frame = ttk.Frame(self.notebook)
         table = DataTable(frame, self.settings,
+                          on_change=lambda one=None: self._table_changed(table),
                           on_rename=self._column_renamed,
                           on_add_column=self.add_column,
                           on_delete_column=self.delete_column)
@@ -17184,6 +17769,7 @@ class App:
             if where is not None and int(where) >= last:
                 window.source_tab = int(where) + 1
         self.tables.insert(last, table)
+        table._undo_document = None     # filled in as soon as it has data
         if hasattr(self, "plus_frame") and str(self.plus_frame) in self.notebook.tabs():
             end = self.notebook.index(self.plus_frame)
             self.notebook.insert(min(last, end), frame, text=name)
@@ -17797,13 +18383,13 @@ class App:
                               accelerator=f"{ACCEL_NAME}+I",
                               command=self.load_csv)
         file_menu.add_command(label="Export data (CSV, TXT, DAT)...",
-                              accelerator=f"{ACCEL_NAME}+{alt}+S",
+                              accelerator=f"Shift+{ACCEL_NAME}+S",
                               command=self.save_csv)
         file_menu.add_command(label="Export figure (image)...",
                               accelerator=f"{ACCEL_NAME}+E",
                               command=lambda: self.export_figure(plot))
         file_menu.add_command(label="Export as matplotlib script...",
-                              accelerator=f"{ACCEL_NAME}+{alt}+E",
+                              accelerator=f"Shift+{ACCEL_NAME}+E",
                               command=lambda: self.export_script(plot))
         file_menu.add_command(label="Copy figure to the clipboard",
                               command=lambda: self.copy_figure(plot))
@@ -17812,6 +18398,31 @@ class App:
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.quit_app)
         menubar.add_cascade(label="File", menu=file_menu)
+
+        # the Edit menu works on whichever window it belongs to: the
+        # commands of a diagram act on the object that is selected there,
+        # the ones of the spreadsheet on the block of cells
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        edit_menu.add_command(label="Undo", accelerator=f"{ACCEL_NAME}+Z",
+                              command=self.undo_step)
+        edit_menu.add_command(label="Redo",
+                              accelerator=f"Shift+{ACCEL_NAME}+Z",
+                              command=self.redo_step)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Cut", accelerator=f"{ACCEL_NAME}+X",
+                              command=lambda: self.edit_command("cut", plot))
+        edit_menu.add_command(label="Copy", accelerator=f"{ACCEL_NAME}+C",
+                              command=lambda: self.edit_command("copy", plot))
+        edit_menu.add_command(label="Paste", accelerator=f"{ACCEL_NAME}+V",
+                              command=lambda: self.edit_command("paste", plot))
+        edit_menu.add_command(label="Duplicate", accelerator=f"{ACCEL_NAME}+D",
+                              command=lambda: self.edit_command("duplicate",
+                                                                plot))
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+        self._edit_menus = [one for one in getattr(self, "_edit_menus", [])
+                            if one.winfo_exists()]
+        self._edit_menus.append(edit_menu)
+        self.refresh_edit_menus()
 
         plot_menu = tk.Menu(menubar, tearoff=0)
         plot_menu.add_command(label="Open diagram", command=self.open_plot)
@@ -17844,10 +18455,14 @@ class App:
             plot_menu.add_command(label="Delete object", accelerator="Del",
                                   command=plot.delete_selection)
             plot_menu.add_separator()
-            plot_menu.add_command(label="Move forward",
+            plot_menu.add_command(label="Bring to front",
+                                  command=plot.front_selection)
+            plot_menu.add_command(label="Bring forward",
                                   command=plot.raise_selection)
-            plot_menu.add_command(label="Move backward",
+            plot_menu.add_command(label="Send backward",
                                   command=plot.lower_selection)
+            plot_menu.add_command(label="Send to back",
+                                  command=plot.back_selection)
             plot_menu.add_separator()
             plot_menu.add_command(label="Close this diagram",
                                   command=plot.close_window)
@@ -18290,23 +18905,40 @@ class App:
                 return "break"
             return handler
 
+        # the plain key: only the small letter is bound, so that holding
+        # Shift as well reaches the command below and not this one
         commands = {
             "o": wrap(self.open_graph),
             "s": wrap(self.save_graph),
             "e": wrap(self.export_figure, plot),
             "r": wrap(self.open_regression),
             "i": wrap(self.load_csv),
+            "z": wrap(self.undo_step),
+            "d": wrap(self.edit_command, "duplicate", plot),
+        }
+        # ...and with Shift held, the key carries the second command
+        shifted = {
+            "s": wrap(self.save_csv),                   # export the data
+            "e": wrap(self.export_script, plot),        # export the program
+            "z": wrap(self.redo_step),
         }
         with_alt = {
-            "o": wrap(self.load_csv),       # what it used to be, still there
+            "o": wrap(self.load_csv),       # what they used to be, still there
             "s": wrap(self.save_csv),
             "e": wrap(self.export_script, plot),
         }
         for modifier in ("Control", "Command"):
             for letter, handler in commands.items():
-                for name in (letter, letter.upper()):
+                try:
+                    window.bind(f"<{modifier}-{letter}>", handler)
+                except tk.TclError:
+                    pass
+            for letter, handler in shifted.items():
+                # with Shift the key arrives as the capital letter, but
+                # not on every system: both spellings are bound
+                for name in (letter.upper(), letter):
                     try:
-                        window.bind(f"<{modifier}-{name}>", handler)
+                        window.bind(f"<Shift-{modifier}-{name}>", handler)
                     except tk.TclError:
                         pass
             for letter, handler in with_alt.items():
@@ -18316,6 +18948,208 @@ class App:
                             window.bind(f"<{modifier}-{extra}-{name}>", handler)
                         except tk.TclError:
                             pass
+
+    # -- taking a step back ------------------------------------------------
+    def tab_document(self, index):
+        """Everything one sheet holds, as the `.aplt` file would write it."""
+        index = int(index)
+        if not (0 <= index < len(self.tables)):
+            return None
+        table = self.tables[index]
+        frame = table.df
+        return {
+            "index": index,
+            "name": str(self.notebook.tab(index, "text")),
+            "columns": [str(name) for name in frame.columns],
+            "rows": [[value for value in row]
+                     for row in frame.itertuples(index=False, name=None)],
+            "color": getattr(table, "tab_color", None),
+            "axes": {str(name): table.column_axis(name)
+                     for name in frame.columns},
+            "formulas": dict(getattr(table, "cell_formulas", {})),
+            "plot_with_previous": bool(
+                getattr(table, "plot_with_previous_var", None)
+                and table.plot_with_previous_var.get()),
+            "cursor": tuple(getattr(table, "cursor", (0, 0))),
+        }
+
+    def apply_tab_document(self, snapshot):
+        """Put one sheet back as it was."""
+        if not snapshot:
+            return False
+        index = int(snapshot.get("index", 0))
+        if not (0 <= index < len(self.tables)):
+            return False
+        table = self.tables[index]
+        frame = pd.DataFrame(snapshot.get("rows") or [],
+                             columns=snapshot.get("columns") or [])
+        frame = frame.where(frame.notna(), "")
+        table.set_dataframe(frame)
+        table.cell_formulas = dict(snapshot.get("formulas") or {})
+        for name, code in (snapshot.get("axes") or {}).items():
+            table.set_column_axis(name, code)
+        if snapshot.get("plot_with_previous") is not None:
+            table.plot_with_previous_var.set(
+                bool(snapshot.get("plot_with_previous")))
+        self.set_tab_color(index, snapshot.get("color"))
+        self.notebook.tab(index, text=snapshot.get("name",
+                                                   f"Data {index + 1}"))
+        row, column = snapshot.get("cursor") or (0, 0)
+        table.select_cell(int(row), int(column))
+        self.notebook.select(index)
+        table.recalculate_all()
+        return True
+
+    def plot_document(self, window):
+        """The whole look of one diagram, for a step that can be taken back."""
+        if window is None or not window.winfo_exists():
+            return None
+        return {"window": id(window), "state": window.to_state()}
+
+    def apply_plot_document(self, snapshot):
+        """Put one diagram back as it was."""
+        if not snapshot:
+            return False
+        for window in self.open_windows():
+            if id(window) == snapshot.get("window"):
+                window.apply_state(snapshot.get("state") or {})
+                return True
+        return False
+
+    def _table_changed(self, table):
+        """One sheet has changed: remember the step that changed it."""
+        if self.undo.busy():
+            return False
+        try:
+            index = self.tables.index(table)
+        except ValueError:
+            return False
+        before = getattr(table, "_undo_document", None)
+        after = self.tab_document(index)
+        table._undo_document = after
+        if before is None or before == after:
+            return False
+        self.undo.push(UndoStep("the sheet", before, after,
+                                self.apply_tab_document))
+        self.refresh_edit_menus()
+        return True
+
+    def forget_undo(self, tables=True):
+        """Start the list of steps again - after a file was opened."""
+        self.undo.clear()
+        if tables:
+            for index, table in enumerate(self.tables):
+                table._undo_document = self.tab_document(index)
+        self.refresh_edit_menus()
+        return True
+
+    def record_plot(self, window, label, before):
+        """Remember what one command did to a diagram."""
+        if window is None or self.undo.busy():
+            return False
+        after = self.plot_document(window)
+        if before is None or after is None or before == after:
+            return False
+        self.undo.push(UndoStep(label, before, after,
+                                self.apply_plot_document))
+        self.refresh_edit_menus()
+        return True
+
+    # -- the four commands of the Edit menu --------------------------------
+    def edit_command(self, what, plot=None):
+        """Cut / Copy / Paste / Duplicate, on the window they belong to.
+
+        In a diagram they act on the object that is selected there; in the
+        spreadsheet on the highlighted block of cells.  A cell that is open
+        for writing keeps them for its own text, as everywhere else.
+        """
+        if plot is not None and plot.winfo_exists():
+            return {"cut": plot.cut_selection,
+                    "copy": plot.copy_shortcut,
+                    "paste": plot.paste_clipboard,
+                    "duplicate": plot.duplicate_selection}[str(what)]()
+        table = self.table
+        if table is None:
+            return False
+        editor = getattr(table, "_editor", None)
+        if editor is not None:            # a cell is open: its own text
+            widget = editor[0]
+            event = {"cut": "<<Cut>>", "copy": "<<Copy>>",
+                     "paste": "<<Paste>>"}.get(str(what))
+            if event is not None:
+                widget.event_generate(event)
+                return True
+            table._commit_edit()
+        return {"cut": table.cut_block,
+                "copy": table.copy_block,
+                "paste": table.paste_block,
+                "duplicate": table.duplicate_block}[str(what)]()
+
+    def undo_step(self, _event=None):
+        """Edit > Undo."""
+        if not self.undo.can_undo():
+            self.say("There is nothing to take back")
+            return False
+        step = self.undo.undo()
+        self._after_step(step, "taken back")
+        return True
+
+    def redo_step(self, _event=None):
+        """Edit > Redo."""
+        if not self.undo.can_redo():
+            self.say("There is nothing to do again")
+            return False
+        step = self.undo.redo()
+        self._after_step(step, "done again")
+        return True
+
+    def _after_step(self, step, what):
+        """Say what happened, and bring the sheets up to date afterwards."""
+        for index, table in enumerate(self.tables):
+            table._undo_document = self.tab_document(index)
+        self.refresh_edit_menus()
+        if step is not None:
+            self.say(f"{step.label.capitalize()}: {what}")
+        return True
+
+    def say(self, message):
+        """A short note: in the status bar of the sheet and in every diagram.
+
+        A step taken back may have happened in a window that is not in
+        front, so the note is put everywhere and nobody has to look for it.
+        """
+        table = self.table
+        label = getattr(table, "status_label", None) if table is not None else None
+        if label is not None:
+            try:
+                label.configure(text=str(message))
+            except tk.TclError:
+                pass
+        for window in self.open_windows():
+            window.flash(message)
+        return message
+
+    def refresh_edit_menus(self):
+        """Grey the two lines out, and say what they would take back.
+
+        With a step on the list the line reads `Undo the drawing`, so that
+        it is clear beforehand what is about to happen; with nothing on the
+        list it reads plain `Undo` and cannot be chosen.
+        """
+        back, again = self.undo.undo_label(), self.undo.redo_label()
+        for menu in list(getattr(self, "_edit_menus", [])):
+            try:
+                if not menu.winfo_exists():
+                    continue
+                menu.entryconfigure(
+                    0, state="normal" if self.undo.can_undo() else "disabled",
+                    label=f"Undo {back}" if back else "Undo")
+                menu.entryconfigure(
+                    1, state="normal" if self.undo.can_redo() else "disabled",
+                    label=f"Redo {again}" if again else "Redo")
+            except tk.TclError:
+                continue
+        return True
 
     def project_document(self):
         """Data plus the full state of every open diagram."""
@@ -18398,6 +19232,7 @@ class App:
             messagebox.showerror(
                 "Error", f"This is not an {APP_NAME} ({PROJECT_SUFFIX}) file.")
             return False
+        self.undo.hold()      # opening a file is not a step to be taken back
 
         tabs_data = document.get("tabs")
         data = document.get("data") or {}
@@ -18405,6 +19240,7 @@ class App:
         rows = data.get("rows") or []
         
         if not columns and not tabs_data:
+            self.undo.release()
             messagebox.showerror("Error", "The file contains no data.")
             return False
             
@@ -18466,6 +19302,8 @@ class App:
             window.apply_state(state)
             self.plot_windows.append(window)
         self._remember_saved(path)
+        self.undo.release()
+        self.forget_undo()            # a fresh file, a fresh list of steps
         # a file without a diagram leaves the sheet in front: it may be
         # typed into at once (a diagram that opened keeps the keyboard)
         self.root.after_idle(self.focus_sheet)
