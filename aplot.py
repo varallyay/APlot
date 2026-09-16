@@ -102,6 +102,7 @@ from __future__ import annotations
 import ast
 import base64
 import copy
+import hashlib
 import io
 import json
 import math
@@ -160,7 +161,7 @@ APP_ICON_ROUNDING = 0.20        # how round the corners of the square are
 # the free border macOS leaves around an icon, as a part of the whole tile:
 # without it the square fills the Dock tile edge to edge and reads bigger
 # than the icons beside it.  0.0 fills the tile completely.
-APP_ICON_MARGIN = 0.06
+APP_ICON_MARGIN = 0.1
 APP_ICON_FLOOR = 0.02           # where the foot of the curve lies ...
 APP_ICON_CEILING = 0.94         # ... and how high its tallest peak reaches
 # the peaks the spectrum of the icon is built from: (centre, width, height)
@@ -253,7 +254,12 @@ FRAME_STYLES = [
 
 # matplotlib's own subplot position: left, bottom, width, height
 DEFAULT_POSITION = (0.13, 0.125, 0.775, 0.77)
-SIZE_UNITS = ["Fraction of window", "cm", "inch"]
+# the room the texts around the plot area really need, in inches: the tick
+# numbers and the axis label on the left and below, a little air on the
+# right, and the title above.  The fractions of the page are worked out
+# from these, so that the labels fit whatever size the page is given.
+FIT_MARGINS = {"left": 1.25, "bottom": 0.85, "right": 0.35, "top": 0.55}
+SIZE_UNITS = ["Fraction of page", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
                     "lower right", "right", "center left", "center right",
@@ -324,6 +330,16 @@ STACK_CONTAINERS = ("bar", "errorbar", "stairs", "pie", "histogram")
 PASTE_STEP = 14.0           # pixels: how far a pasted copy sits from the original
 NUDGE_STEP = 1.0            # pixels: one press of an arrow key
 NUDGE_BIG_STEP = 10.0       # pixels: with Shift
+# the page: the canvas keeps the size it was given, whatever the window does
+PAGE_BACKDROP = "#8f8f96"   # the desk the page lies on
+PAGE_EDGE = "#5a5a61"       # a thin line around the page
+PAGE_MARGIN = 14            # pixels of desk left around the page
+ZOOM_MIN, ZOOM_MAX = 0.15, 6.0
+ZOOM_STEP = 1.1             # one notch of the wheel
+PLOT_RESIZE_STEP = 0.10     # `Resize graph`: one step is ten per cent
+# pixels the pointer has to travel before grabbing the paper, a curve or the
+# frame starts carrying the whole graph: below it the press is still a click
+PLOT_DRAG_START = 3.0
 SNAP_ANGLE = np.pi / 4      # arrows snap to 45 degrees while Shift is held
 
 # texts that can be rewritten in place, the way a file is renamed in the
@@ -855,8 +871,8 @@ SETTINGS_SPEC = [
     ]),
     ("plot", "Plot", [
         # a list of two settings puts them side by side on one line
-        [("fig_width", "Figure width [inch]", "float"),
-         ("fig_height", "Figure height [inch]", "float")],
+        [("fig_width", "Page width [inch]", "float"),
+         ("fig_height", "Page height [inch]", "float")],
         ("dpi", "Resolution [dpi]", "int"),
         ("title_template", "Title ({x} = name of the X column)", "text"),
         ("y_label", "Default Y axis label", "text"),
@@ -2347,6 +2363,38 @@ def clipboard_picture(widget=None):
         return open_picture(widget.clipboard_get())
     except (tk.TclError, TypeError):
         return None
+
+
+def clipboard_serial(widget=None):
+    """A mark that changes whenever the clipboard of the system changes.
+
+    It answers one question: *has another program put something on the
+    clipboard since this program last copied?*  Stamps of time cannot
+    answer it - a picture copied in PowerPoint or in a browser carries no
+    time of its own - so what is compared is the clipboard itself.
+
+    macOS keeps a counter for exactly this purpose (`changeCount` of the
+    pasteboard, raised by every copy anywhere in the system); it is read
+    when pyobjc is there, because it is quick and needs no picture.  Where
+    that counter is not available the picture on the clipboard is read and
+    boiled down to a short fingerprint instead.  `None` comes back when
+    neither way works, and then nothing is assumed.
+    """
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSPasteboard  # type: ignore
+            return f"count:{int(NSPasteboard.generalPasteboard().changeCount())}"
+        except (ImportError, AttributeError, ValueError, TypeError):
+            pass
+    picture = clipboard_picture(widget)
+    if picture is None:
+        return "empty" if Image is not None else None
+    try:                        # a small thumbnail is enough to tell apart
+        small = picture.convert("RGB").resize((16, 16), Image.Resampling.NEAREST)
+        return (f"{picture.width}x{picture.height}:"
+                f"{hashlib.md5(small.tobytes()).hexdigest()}")
+    except (OSError, ValueError, TypeError, AttributeError):
+        return f"{picture.width}x{picture.height}"
 
 
 def dropped_names(data):
@@ -3968,7 +4016,7 @@ class AxisTab(PairedFields, ttk.Frame):
 
 
 class FrameTab(ttk.Frame):
-    """Frame (spines) and the size/position of the axes inside the window."""
+    """Frame (spines) and the size/position of the axes on the page."""
 
     def __init__(self, master, plot):
         super().__init__(master, padding=12)
@@ -4060,7 +4108,7 @@ class FrameTab(ttk.Frame):
         unit = unit or self._unit
         if unit == SIZE_UNITS[0]:
             return 1.0
-        inches = self.plot.fig.get_size_inches()
+        inches = self.plot.page_size          # the page, not the window
         size = inches[0] if key in ("left", "x_length") else inches[1]
         return size * 2.54 if unit == "cm" else size
 
@@ -4070,8 +4118,8 @@ class FrameTab(ttk.Frame):
         width_cm = self._fractions["x_length"] * self._factor("x_length", "cm")
         height_cm = self._fractions["y_length"] * self._factor("y_length", "cm")
         self.hint.configure(
-            text=f"Current size on the screen: {width_cm:.1f} x {height_cm:.1f} cm "
-                 "(fractions keep it when the window is resized).")
+            text=f"Current size on the page: {width_cm:.1f} x {height_cm:.1f} cm "
+                 "(fractions keep it whatever the window does).")
 
     def _read_values(self):
         for key, var in self.value_vars.items():
@@ -4087,6 +4135,13 @@ class FrameTab(ttk.Frame):
     def _reset(self):
         self._fractions = dict(zip(("left", "bottom", "x_length", "y_length"),
                                    self.plot.default_position))
+        self._show_values()
+
+    def sync_position(self):
+        """Read the place of the plot area again - it was dragged."""
+        left, bottom, width, height = self.plot.ax.get_position().bounds
+        self._fractions = {"left": left, "bottom": bottom,
+                           "x_length": width, "y_length": height}
         self._show_values()
 
     # -- result ------------------------------------------------------------
@@ -8653,17 +8708,23 @@ class PlotWindow(tk.Toplevel):
     # takes whichever was copied more recently
     _clipboard_stamp = 0.0
     _figure_stamp = 0.0
+    # what the clipboard of the system looked like when this program last
+    # copied something: anything else there now came from another program
+    _clipboard_serial = None
 
     HINT = ("One click selects (a text turns blue), a slow second click "
             "writes the text, a double click opens its properties   |   "
-            "A curve: one click   |   Drag: move   |   "
+            "A curve: two clicks   |   Drag: move   |   "
             "Drag a control point: resize\n"
             "\"T\", the shape and the arrow button: add text, drawings and "
             "arrows   |   Shift: arrows at 45 deg steps   |   "
             f"{ACCEL_NAME}+C: copy the object, or the whole figure   |   "
             f"{ACCEL_NAME}+V: paste   |   "
             f"{ACCEL_NAME}+S: save   |   {ACCEL_NAME}+E: export   |   "
-            "Arrow keys: move   |   Delete: remove")
+            "Arrow keys: move   |   Delete: remove\n"
+            f"The page keeps its size: wheel to scroll, {ACCEL_NAME}+wheel "
+            f"to zoom, {ACCEL_NAME}+0 for its true size, middle button to "
+            "slide it   |   Right click the paper: Resize graph")
 
     def __init__(self, master, df: pd.DataFrame, config: Config, app=None,
                  layout=None, plot_style="line_symbol"):
@@ -8723,6 +8784,7 @@ class PlotWindow(tk.Toplevel):
         self._shape_counter = 0
         self._pending_shape = False
         self._shape_drag = None
+        self._plot_drag = None          # dragging the whole plot area about
         self._drag_before = None        # the diagram before the drag started
         self._change_depth = 0          # commands that call one another
         # where each curve stands in the stack; the drawings, the arrows and
@@ -8793,11 +8855,24 @@ class PlotWindow(tk.Toplevel):
         # no curve belongs to the right hand scale yet: it is not drawn
         self.axis_cfg["y2"]["direction"] = "off"
 
-        self.fig = Figure(figsize=(plot_cfg["fig_width"], plot_cfg["fig_height"]),
-                          dpi=plot_cfg["dpi"])
+        # the page keeps its size whatever the window does; the zoom only
+        # changes how large it is drawn, by changing the resolution
+        self.page_size = (float(plot_cfg["fig_width"]),
+                          float(plot_cfg["fig_height"]))
+        self.base_dpi = float(plot_cfg["dpi"])
+        self.zoom = 1.0
+        self.fig = Figure(figsize=self.page_size, dpi=self.base_dpi)
         self.ax = self.fig.add_subplot(111)
-        self.default_position = DEFAULT_POSITION
+        self.default_position = self.fit_position()
         frame = config.section("frame")
+        chosen = (float(frame["left"]), float(frame["bottom"]),
+                  float(frame["x_length"]), float(frame["y_length"]))
+        # the settings offer a starting place for the plot area; while it is
+        # the one the program was built with, the page itself decides - a
+        # small page needs wider margins for the very same texts
+        if all(abs(one - other) < 1e-9
+               for one, other in zip(chosen, DEFAULT_POSITION)):
+            chosen = self.default_position
         self.frame_cfg = {
             "style": code_of(FRAME_STYLES, frame["style"], "none"),
             "width": float(frame["width"]),
@@ -8807,9 +8882,8 @@ class PlotWindow(tk.Toplevel):
             "background": ("none" if frame.get("transparent_background")
                            else safe_hex(frame.get("background"), "#ffffff")),
             "figure_background": safe_hex(frame.get("figure_background"), "#ffffff"),
-            "left": float(frame["left"]), "bottom": float(frame["bottom"]),
-            "x_length": float(frame["x_length"]),
-            "y_length": float(frame["y_length"]),
+            "left": chosen[0], "bottom": chosen[1],
+            "x_length": chosen[2], "y_length": chosen[3],
         }
 
         self._build_widgets()
@@ -8868,7 +8942,10 @@ class PlotWindow(tk.Toplevel):
             menubar.add_cascade(label="Plot", menu=plot_menu)
             self.configure(menu=menubar)
 
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+        self._build_desk()
+        # the figure widget is a child of the desk, so that the desk can
+        # carry it about and never draws over it
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.view)
         self._bind_native_focus()
         toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
         toolbar.update()
@@ -8943,9 +9020,345 @@ class PlotWindow(tk.Toplevel):
                                          lambda _e: self.cancel_tools())
         self._bind_keys()
         toolbar.pack(side="top", fill="x")
-        self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
         ttk.Label(self, text=self.HINT, anchor="center", justify="center",
                   padding=4, foreground="#444").pack(side="bottom", fill="x")
+        self._place_page()
+
+    # -- the page: a canvas of its own size, on a desk that scrolls --------
+    def _build_desk(self):
+        """The desk the page lies on: a canvas of its own, with scrollbars.
+
+        The diagram is a **page**, like a slide: it keeps the size it was
+        given whatever the window does, so its proportions never change.
+        The window is only a view of that page - when the page is larger
+        than the window the desk scrolls, and when it is smaller the page
+        sits in the middle of it.  It is built before the figure, so that
+        the figure can be made a child of it.
+        """
+        self._desk = ttk.Frame(self)
+        self._desk.rowconfigure(0, weight=1)
+        self._desk.columnconfigure(0, weight=1)
+        self.view = tk.Canvas(self._desk, highlightthickness=0, borderwidth=0,
+                              background=PAGE_BACKDROP)
+        self.view.grid(row=0, column=0, sticky="nsew")
+        self._view_bars = {
+            "y": ttk.Scrollbar(self._desk, orient="vertical",
+                               command=self.view.yview),
+            "x": ttk.Scrollbar(self._desk, orient="horizontal",
+                               command=self.view.xview),
+        }
+        self.view.configure(yscrollcommand=self._view_bars["y"].set,
+                            xscrollcommand=self._view_bars["x"].set)
+        self._bars_shown = {"x": False, "y": False}
+        return self.view
+
+    def _place_page(self):
+        """Lay the page on the desk and let the desk be seen."""
+        self._desk.pack(side="top", fill="both", expand=True)
+        widget = self.canvas.get_tk_widget()
+        widget.configure(highlightthickness=0, borderwidth=0)
+        self._page_edge = self.view.create_rectangle(
+            0, 0, 1, 1, outline=PAGE_EDGE, width=1)
+        self._page_window = self.view.create_window(0, 0, anchor="nw",
+                                                    window=widget)
+        self.view.bind("<Configure>", lambda _e: self._layout_page())
+        self._bind_wheel(self.view)
+        self._bind_wheel(widget)
+        self._bind_sliding(self.view)
+        self._bind_sliding(widget)
+        self._layout_page()
+
+    def _bind_sliding(self, widget):
+        """The middle button slides the page about, as in a picture viewer."""
+        widget.bind("<Button-2>", self._slide_start, add="+")
+        widget.bind("<B2-Motion>", self._slide_move, add="+")
+        return widget
+
+    def _slide_start(self, event):
+        try:
+            self.view.scan_mark(event.x_root - self.view.winfo_rootx(),
+                                event.y_root - self.view.winfo_rooty())
+        except (AttributeError, tk.TclError):
+            return None
+        return "break"
+
+    def _slide_move(self, event):
+        try:
+            self.view.scan_dragto(event.x_root - self.view.winfo_rootx(),
+                                  event.y_root - self.view.winfo_rooty(),
+                                  gain=1)
+        except (AttributeError, tk.TclError):
+            return None
+        return "break"
+
+    def screen_ratio(self):
+        """How many screen pixels one drawn pixel takes on this display.
+
+        A retina screen asks matplotlib for two pixels where the program
+        counts one; the number is 1.0 on an ordinary one.
+        """
+        try:
+            return float(getattr(self.canvas, "device_pixel_ratio", 1.0) or 1.0)
+        except (AttributeError, TypeError, ValueError):
+            return 1.0
+
+    def render_dpi(self):
+        """The resolution the page is drawn at just now: page x zoom."""
+        return float(self.base_dpi) * float(self.zoom) * self.screen_ratio()
+
+    def page_pixels(self):
+        """The size of the page on the screen, in pixels.
+
+        A part of a pixel is dropped, not rounded up - that is what
+        matplotlib does with the same numbers, and the two have to agree or
+        the widget and the figure would argue about one pixel for ever.
+        """
+        dpi = self.render_dpi()
+        return (max(1, int(self.page_size[0] * dpi + 1e-8)),
+                max(1, int(self.page_size[1] * dpi + 1e-8)))
+
+    def _fix_page_size(self):
+        """Tell the figure the true size of the page again.
+
+        The widget is a whole number of pixels while the page is a length
+        in centimetres, and matplotlib works the one out from the other
+        every time the window changes - which would let the proportions of
+        the page drift by a fraction of a per cent at every step.  The page
+        is the measure, so it is simply set again.
+        """
+        if getattr(self, "_fixing_page", False):
+            return False
+        if (abs(self.fig.get_figwidth() - self.page_size[0]) <= 1e-6
+                and abs(self.fig.get_figheight() - self.page_size[1]) <= 1e-6):
+            return False
+        self._fixing_page = True
+        try:
+            self.fig.set_size_inches(*self.page_size, forward=False)
+        except (ValueError, tk.TclError):
+            return False
+        finally:
+            self._fixing_page = False
+        return True
+
+    def page_origin(self):
+        """Where the top left corner of the page lies on the desk."""
+        try:
+            return tuple(float(one) for one in
+                         self.view.coords(self._page_window))
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return (0.0, 0.0)
+
+    def _layout_page(self):
+        """Put the page on the desk: centred if it fits, scrolled if not."""
+        view = getattr(self, "view", None)
+        if view is None or not view.winfo_exists():
+            return False
+        page_w, page_h = self.page_pixels()
+        widget = self.canvas.get_tk_widget()
+        if (widget.winfo_reqwidth() != page_w
+                or widget.winfo_reqheight() != page_h):
+            widget.configure(width=page_w, height=page_h)
+        self._fix_page_size()
+        room_w = max(1, view.winfo_width())
+        room_h = max(1, view.winfo_height())
+        desk_w = max(room_w, page_w + 2 * PAGE_MARGIN)
+        desk_h = max(room_h, page_h + 2 * PAGE_MARGIN)
+        x = max(PAGE_MARGIN, (desk_w - page_w) // 2)
+        y = max(PAGE_MARGIN, (desk_h - page_h) // 2)
+        view.coords(self._page_window, x, y)
+        view.coords(self._page_edge, x - 1, y - 1, x + page_w, y + page_h)
+        view.configure(scrollregion=(0, 0, desk_w, desk_h))
+        self._show_bars(desk_w > room_w, desk_h > room_h)
+        return True
+
+    def _show_bars(self, need_x, need_y):
+        """A scrollbar is only there while the page does not fit."""
+        for name, need in (("x", bool(need_x)), ("y", bool(need_y))):
+            if self._bars_shown.get(name) == need:
+                continue
+            bar = self._view_bars[name]
+            try:
+                if need:
+                    if name == "x":
+                        bar.grid(row=1, column=0, sticky="ew")
+                    else:
+                        bar.grid(row=0, column=1, sticky="ns")
+                else:
+                    bar.grid_remove()
+            except tk.TclError:
+                continue
+            self._bars_shown[name] = need
+        return True
+
+    # -- zooming the view --------------------------------------------------
+    def _bind_wheel(self, widget):
+        """The wheel scrolls the desk; with Ctrl or Cmd it zooms."""
+        widget.bind("<MouseWheel>", self._on_wheel, add="+")
+        widget.bind("<Shift-MouseWheel>", self._on_wheel, add="+")
+        for number in (4, 5, 6, 7):           # X11 sends buttons, not deltas
+            try:                              # 6 and 7 are sideways, and
+                widget.bind(f"<Button-{number}>", self._on_wheel, add="+")
+            except tk.TclError:               # older Tk knows only 4 and 5
+                continue
+        return widget
+
+    @staticmethod
+    def _wheel_steps(event):
+        """How far the wheel was turned, as a number of notches."""
+        number = getattr(event, "num", 0)
+        if number in (4, 6):
+            return 1.0
+        if number in (5, 7):
+            return -1.0
+        delta = float(getattr(event, "delta", 0) or 0)
+        if not delta:
+            return 0.0
+        return delta / (120.0 if abs(delta) >= 120 else abs(delta))
+
+    def _on_wheel(self, event):
+        """One notch of the wheel: scroll the desk, or zoom with Ctrl/Cmd."""
+        steps = self._wheel_steps(event)
+        if not steps:
+            return None
+        state = int(getattr(event, "state", 0) or 0)
+        # Control everywhere, and Command as well on a Mac (Tk reports it
+        # as Mod1 or as Meta, depending on the build)
+        control = bool(state & 0x0004)
+        if sys.platform == "darwin":
+            control = control or bool(state & 0x0008) or bool(state & 0x40000)
+        sideways = bool(state & 0x0001) or getattr(event, "num", 0) in (6, 7)
+        if control:
+            self.zoom_by(ZOOM_STEP ** steps, event=event)
+            return "break"
+        try:
+            if sideways:
+                self.view.xview_scroll(int(-steps * 2), "units")
+            else:
+                self.view.yview_scroll(int(-steps * 2), "units")
+        except tk.TclError:
+            return None
+        return "break"
+
+    def zoom_by(self, factor, event=None):
+        """Make the page larger or smaller on the screen."""
+        return self.set_zoom(self.zoom * float(factor), event=event)
+
+    def set_zoom(self, zoom, event=None):
+        """Show the page at `zoom` times its own size.
+
+        Only the **view** changes: the page keeps its size in centimetres
+        and everything on it keeps its proportions.  It is done by drawing
+        the same figure at a higher or lower resolution, so the curves, the
+        texts and the line widths all grow and shrink together.  When the
+        pointer is over the page, the point under it stays under it.
+        """
+        zoom = min(max(float(zoom), ZOOM_MIN), ZOOM_MAX)
+        if abs(zoom - self.zoom) < 1e-6:
+            return self.zoom
+        held = self._page_point_at(event)
+        ratio = zoom / self.zoom
+        self.zoom = zoom
+        # the dragged distances of the title and the axis labels are in
+        # pixels of the screen, so they grow with the view
+        self.text_offset = {name: (value[0] * ratio, value[1] * ratio)
+                            for name, value in self.text_offset.items()}
+        self.fig.set_dpi(self.render_dpi())
+        self._layout_page()
+        self.apply_text_offsets()
+        self.refresh_shapes()
+        self.refresh_arrows()
+        self._refresh_handles()
+        self.draw()
+        if held is not None:
+            self._keep_page_point(held, event)
+        self.flash(f"Zoom {self.zoom * 100:.0f}%")
+        return self.zoom
+
+    def reset_zoom(self, _event=None):
+        """Back to the true size of the page."""
+        return self.set_zoom(1.0)
+
+    def zoom_to_fit(self, _event=None):
+        """As large as the page can be drawn and still fit in the window."""
+        view = getattr(self, "view", None)
+        if view is None or not view.winfo_exists():
+            return self.zoom
+        room_w = max(1, view.winfo_width()) - 2 * PAGE_MARGIN
+        room_h = max(1, view.winfo_height()) - 2 * PAGE_MARGIN
+        page_w = self.page_size[0] * self.base_dpi * self.screen_ratio()
+        page_h = self.page_size[1] * self.base_dpi * self.screen_ratio()
+        if page_w <= 0 or page_h <= 0:
+            return self.zoom
+        return self.set_zoom(min(room_w / page_w, room_h / page_h))
+
+    def _page_point_at(self, event):
+        """Which point of the page the pointer is on, as two fractions."""
+        if event is None:
+            return None
+        try:
+            x = self.view.canvasx(event.x_root - self.view.winfo_rootx())
+            y = self.view.canvasy(event.y_root - self.view.winfo_rooty())
+        except (AttributeError, tk.TclError, TypeError):
+            return None
+        page_w, page_h = self.page_pixels()
+        origin = self.page_origin()
+        return (min(max((x - origin[0]) / page_w, 0.0), 1.0),
+                min(max((y - origin[1]) / page_h, 0.0), 1.0))
+
+    def _keep_page_point(self, point, event):
+        """Scroll so that the point of the page stays under the pointer."""
+        try:
+            self.view.update_idletasks()
+            region = [float(one) for one in
+                      str(self.view.cget("scrollregion")).split()]
+            if len(region) != 4:
+                return False
+            page_w, page_h = self.page_pixels()
+            origin = self.page_origin()
+            want_x = origin[0] + point[0] * page_w - (
+                event.x_root - self.view.winfo_rootx())
+            want_y = origin[1] + point[1] * page_h - (
+                event.y_root - self.view.winfo_rooty())
+            desk_w = max(1.0, region[2] - region[0])
+            desk_h = max(1.0, region[3] - region[1])
+            self.view.xview_moveto(min(max(want_x / desk_w, 0.0), 1.0))
+            self.view.yview_moveto(min(max(want_y / desk_h, 0.0), 1.0))
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return False
+        return True
+
+    # -- the size of the page ---------------------------------------------
+    def fit_position(self, page=None):
+        """The place of the plot area that fills the page and still fits.
+
+        The texts around the plot area - the numbers, the axis labels and
+        the title - are set in points, so the room they need is a length,
+        not a fraction: a small page has to keep proportionally wider
+        margins for exactly the same texts.  `FIT_MARGINS` holds those
+        lengths in inches and this turns them into fractions of the page.
+        """
+        width, height = page or self.page_size
+        width = max(1.0, float(width))
+        height = max(1.0, float(height))
+        left = min(0.45, FIT_MARGINS["left"] / width)
+        bottom = min(0.45, FIT_MARGINS["bottom"] / height)
+        right = min(0.30, FIT_MARGINS["right"] / width)
+        top = min(0.30, FIT_MARGINS["top"] / height)
+        return (round(left, 4), round(bottom, 4),
+                round(max(MIN_AXIS_SIZE, 1.0 - left - right), 4),
+                round(max(MIN_AXIS_SIZE, 1.0 - bottom - top), 4))
+
+    def set_page_size(self, width, height, redraw=True):
+        """Give the page another size in inches, and lay it out again."""
+        width = max(1.0, float(width))
+        height = max(1.0, float(height))
+        self.page_size = (width, height)
+        self.default_position = self.fit_position()
+        self.fig.set_size_inches(width, height)
+        self._layout_page()
+        if redraw:
+            self.draw()
+        return self.page_size
 
     def restyle_toolbar(self, toolbar):
         """Give matplotlib's own buttons the pastel icons of the program.
@@ -9088,6 +9501,14 @@ class PlotWindow(tk.Toplevel):
             for letter in ("d", "D"):
                 bind_both(f"<{modifier}-{letter}>",
                           wrap(self.duplicate_selection))
+            # the view of the page: true size, larger, smaller
+            bind_both(f"<{modifier}-Key-0>", wrap(self.reset_zoom))
+            for plus in ("plus", "equal", "KP_Add"):
+                bind_both(f"<{modifier}-Key-{plus}>",
+                          wrap(self.zoom_by, ZOOM_STEP))
+            for minus in ("minus", "KP_Subtract"):
+                bind_both(f"<{modifier}-Key-{minus}>",
+                          wrap(self.zoom_by, 1.0 / ZOOM_STEP))
         for sequence in ("<Delete>", "<BackSpace>"):
             bind_both(sequence, wrap(self.delete_selection))
 
@@ -10915,7 +11336,7 @@ class PlotWindow(tk.Toplevel):
         """A stand-alone matplotlib program that draws this very diagram."""
         lit = self._literal
         cfg = self.frame_cfg
-        dpi = float(self.fig.get_dpi())
+        dpi = float(self.base_dpi)        # the page, not the zoomed view
         out = [
             '"""Diagram exported from ' + APP_NAME + '.',
             "",
@@ -11419,11 +11840,12 @@ class PlotWindow(tk.Toplevel):
             dx, dy = self.text_offset.get(name, (0.0, 0.0))
             if not dx and not dy:
                 continue
+            dx, dy = float(dx) / self.zoom, float(dy) / self.zoom
             if name == "title":
                 out.append("ax._autotitlepos = False")
             out.append("%s.set_transform(%s.get_transform() + "
                        "Affine2D().translate(%s, %s))"
-                       % (artist, artist, lit(float(dx)), lit(float(dy))))
+                       % (artist, artist, lit(dx), lit(dy)))
         return out
 
     def script_host(self, kind, key):
@@ -11604,9 +12026,10 @@ class PlotWindow(tk.Toplevel):
             "geometry": self.geometry(),
             "plot_style": self.plot_style,
             "font_family": self.font_family() or "",
-            "figure": {"width": float(self.fig.get_figwidth()),
-                       "height": float(self.fig.get_figheight()),
-                       "dpi": float(self.fig.get_dpi())},
+            "figure": {"width": float(self.page_size[0]),
+                       "height": float(self.page_size[1]),
+                       "dpi": float(self.base_dpi),
+                       "zoom": float(self.zoom)},
             "title": {"text": self.ax.get_title(), "size": self.fonts["title"],
                       "color": safe_hex(self.fonts["title_color"], "#000000"),
                       "pad": float(self.fonts["title_pad"])},
@@ -11614,7 +12037,10 @@ class PlotWindow(tk.Toplevel):
                        "size": self.fonts["legend"],
                        "color": safe_hex(self.fonts["legend_color"], "#000000")},
             "frame": dict(self.frame_cfg),
-            "text_offsets": {name: [float(value[0]), float(value[1])]
+            # in pixels of the page itself, so that the file does not
+            # depend on how far the view happened to be zoomed in
+            "text_offsets": {name: [float(value[0]) / self.zoom,
+                                    float(value[1]) / self.zoom]
                              for name, value in self.text_offset.items()},
             # a name beginning with "_" is something the program keeps for
             # itself (the pixels of a picture), not a part of the graph
@@ -11651,9 +12077,13 @@ class PlotWindow(tk.Toplevel):
         """Rebuild the appearance stored by to_state()."""
         figure = state.get("figure") or {}
         if figure:
-            self.fig.set_size_inches(figure.get("width", self.fig.get_figwidth()),
-                                     figure.get("height", self.fig.get_figheight()))
-            self.fig.set_dpi(figure.get("dpi", self.fig.get_dpi()))
+            self.base_dpi = float(figure.get("dpi", self.base_dpi) or self.base_dpi)
+            self.zoom = min(max(float(figure.get("zoom", self.zoom) or 1.0),
+                                ZOOM_MIN), ZOOM_MAX)
+            self.fig.set_dpi(self.render_dpi())
+            self.set_page_size(figure.get("width", self.page_size[0]),
+                               figure.get("height", self.page_size[1]),
+                               redraw=False)
 
         if "plot_style" in state:
             self.plot_style = state["plot_style"]
@@ -11782,7 +12212,8 @@ class PlotWindow(tk.Toplevel):
 
         for name, value in (state.get("text_offsets") or {}).items():
             if name in self.text_offset and value:
-                self.text_offset[name] = (float(value[0]), float(value[1]))
+                self.text_offset[name] = (float(value[0]) * self.zoom,
+                                          float(value[1]) * self.zoom)
         self.apply_text_offsets()
 
         self.apply_series_stack()      # the curves first: the drawings that
@@ -11919,6 +12350,7 @@ class PlotWindow(tk.Toplevel):
         """The Tk canvas may change the resolution: keep the pixels honest."""
         if self._inline is not None:   # the editor would sit in the wrong place
             self.commit_inline_edit()
+        self._fix_page_size()          # the page keeps its own proportions
         dpi = self.fig.get_dpi()
         if abs(dpi - self._dpi) > 0.01:
             self._dpi = dpi
@@ -13522,7 +13954,7 @@ class PlotWindow(tk.Toplevel):
         return candidates[-1]
 
     def show_object_menu(self, x, y, root_x=None, root_y=None):
-        """The menu of a right click: copy, cut, paste and the stacking.
+        """The menu of a right click: copy, cut, paste, duplicate, stacking.
 
         It opens over any object - a drawing, a picture, an arrow, a text
         box or a curve - and over the empty paper as well, where the only
@@ -13546,6 +13978,9 @@ class PlotWindow(tk.Toplevel):
                          command=lambda: self.cut_object(kind, key))
         menu.add_command(label="Paste", accelerator=f"{ACCEL_NAME}+V",
                          command=lambda: self.paste_clipboard(at=point))
+        menu.add_command(label="Duplicate", accelerator=f"{ACCEL_NAME}+D",
+                         state=able,
+                         command=lambda: self.duplicate_object(kind, key))
         menu.add_separator()
         menu.add_command(label="Bring to front", state=stackable,
                          command=lambda: self.bring_to_front(kind, key))
@@ -13555,6 +13990,18 @@ class PlotWindow(tk.Toplevel):
                          command=lambda: self.move_in_stack(kind, key, -1))
         menu.add_command(label="Send to back", state=stackable,
                          command=lambda: self.send_to_back(kind, key))
+        if kind is None:               # the paper: the size of the graph
+            menu.add_separator()
+            sizes = tk.Menu(menu, tearoff=0)
+            sizes.add_command(
+                label="Smaller",
+                command=lambda: self.scale_plot_area(1.0 - PLOT_RESIZE_STEP))
+            sizes.add_command(
+                label="Larger",
+                command=lambda: self.scale_plot_area(1.0 + PLOT_RESIZE_STEP))
+            sizes.add_command(label="Fit to page", command=self.fit_to_page)
+            menu.add_cascade(label="Resize graph", menu=sizes)
+            self._resize_menu = sizes           # kept, or Tk lets it go
         self._object_menu = menu                # kept, or Tk lets it go
         if root_x is None or root_y is None:
             widget = self.canvas.get_tk_widget()
@@ -13596,6 +14043,7 @@ class PlotWindow(tk.Toplevel):
             "state": {name: value for name, value in copy.deepcopy(state).items()
                       if not str(name).startswith("_")}}
         PlotWindow._clipboard_stamp = time.monotonic()
+        self.remember_clipboard()
         self.flash(f"{self.object_name(kind, key)} copied - "
                    f"paste it with {PASTE_HINT}")
         return kind
@@ -13700,21 +14148,64 @@ class PlotWindow(tk.Toplevel):
         with self.changed('pasting'):
             return self._paste_clipboard(*args, **kwargs)
 
+    def remember_clipboard(self):
+        """Write down what is on the clipboard of the system just now.
+
+        Every copy of this program - an object or the whole figure - ends
+        with this, so that a paste afterwards can tell whether anything
+        *else* has been copied in the meantime.
+        """
+        try:
+            widget = self.canvas.get_tk_widget()
+        except (AttributeError, tk.TclError):
+            widget = None
+        PlotWindow._clipboard_serial = clipboard_serial(widget)
+        return PlotWindow._clipboard_serial
+
+    def clipboard_came_from_outside(self):
+        """True when another program has copied since this program did.
+
+        A picture copied in a presentation program, a browser or a photo
+        editor carries no time of its own, so the clipboard itself is
+        asked: if it no longer holds what it held at the last copy of this
+        program, then it holds something newer, and that is what a paste
+        must take.
+        """
+        mark = PlotWindow._clipboard_serial
+        if mark is None:
+            return False               # this system cannot tell: assume not
+
+        try:
+            widget = self.canvas.get_tk_widget()
+        except (AttributeError, tk.TclError):
+            widget = None
+        now = clipboard_serial(widget)
+        return now is not None and now != mark
+
     def _paste_clipboard(self, _event=None, at=None):
         """Ctrl/Cmd+V: the copied object, or a picture from the clipboard.
 
         Two things can be waiting: an object copied inside the program, and
         a picture on the clipboard of the system.  **The newer of the two
-        wins** - so copying the whole figure and then copying an object
-        pastes the object, and the other way round pastes the picture.  A
-        picture copied in *another* program carries no time of its own, so
-        it is taken whenever the program's own copy is not the newer one.
-        `at` is a point of the plot area - the menu of a right click pastes
-        where the pointer was.
+        wins.**
+
+        Between the program's own two ways of copying - an object and
+        `Copy figure to the clipboard` - the time of the copy decides, so
+        copying the figure and then an object pastes the object, and the
+        other way round pastes the picture.
+
+        A picture copied in *another* program carries no time of its own.
+        For that one the clipboard of the system is compared with what it
+        held when this program last copied: when it has changed since, the
+        picture is the newer thing and it wins over the object that is
+        still being kept here.  `at` is a point of the plot area - the menu
+        of a right click pastes where the pointer was.
         """
         data = PlotWindow._clipboard
         mine_is_newer = bool(data) and (PlotWindow._clipboard_stamp
                                         >= PlotWindow._figure_stamp)
+        if mine_is_newer and self.clipboard_came_from_outside():
+            mine_is_newer = False      # another program copied after us
         if not mine_is_newer:
             key = self.paste_picture(centre=at)
             if key is not None:
@@ -13835,7 +14326,8 @@ class PlotWindow(tk.Toplevel):
             self.canvas.draw()
             if transparent is None:
                 transparent = self.frame_cfg.get("figure_background") == "none"
-            self.fig.savefig(path, dpi=dpi or self.fig.get_dpi(),
+            # the picture is of the page, not of the zoomed view
+            self.fig.savefig(path, dpi=dpi or self.base_dpi,
                              bbox_inches="tight", transparent=bool(transparent),
                              facecolor=self.fig.get_facecolor())
         finally:
@@ -13854,6 +14346,7 @@ class PlotWindow(tk.Toplevel):
             return False
         if copy_png_to_clipboard(path):
             PlotWindow._figure_stamp = time.monotonic()
+            self.remember_clipboard()
             self.flash("The diagram is on the clipboard as a picture")
             return True
         messagebox.showinfo(
@@ -14415,6 +14908,9 @@ class PlotWindow(tk.Toplevel):
             if (abs(event.x - pending["x"]) > 3.0
                     or abs(event.y - pending["y"]) > 3.0):
                 self._pending_rename = None    # this is a drag, not a rename
+        if self._plot_drag is not None:
+            self._drag_plot_to(event)
+            return
         if self._shape_drag is not None:
             if event.x is None or event.y is None:
                 return
@@ -14542,13 +15038,20 @@ class PlotWindow(tk.Toplevel):
         self.draw()
 
     def _on_release(self, event=None):
-        dragged = self._shape_drag is not None or self._drag is not None
+        moved_plot = (self._plot_drag or {}).get("moved", False)
+        dragged = (self._shape_drag is not None or self._drag is not None
+                   or moved_plot)
+        self._plot_drag = None
         self._finish_drag(event)
         self._open_pending_rename()
         before, self._drag_before = getattr(self, "_drag_before", None), None
         app = getattr(self, "app", None)
         if dragged and before is not None and app is not None:
-            app.record_plot(self, "moving the object", before)
+            app.record_plot(self, "moving the graph" if moved_plot
+                            else "moving the object", before)
+        if moved_plot:
+            self._set_cursor("")
+            self.flash("The graph was moved - Undo puts it back")
 
     def _finish_drag(self, _event=None):
         self._drag = None
@@ -14629,14 +15132,23 @@ class PlotWindow(tk.Toplevel):
             cursor = "fleur"
         elif legend is not None:
             cursor = "fleur"           # one click selects it, then it is moved
-        elif self.frame_hit(event.x, event.y):
-            cursor = "hand2"
-        if cursor != self._cursor:
-            self._cursor = cursor
-            try:
-                self.canvas.get_tk_widget().configure(cursor=cursor)
-            except tk.TclError:
-                pass
+        elif (self.frame_hit(event.x, event.y)
+              or self.series_at(event) is not None
+              or self.plot_area_hit(event.x, event.y)):
+            # the frame, a curve and the plot area all carry the whole graph
+            cursor = "fleur"
+        self._set_cursor(cursor)
+
+    def _set_cursor(self, cursor):
+        """The pointer shape over the canvas, set only when it changes."""
+        if cursor == self._cursor:
+            return False
+        self._cursor = cursor
+        try:
+            self.canvas.get_tk_widget().configure(cursor=cursor)
+        except tk.TclError:
+            return False
+        return True
 
     # -- axis helpers ------------------------------------------------------
     def axis_label(self, which):
@@ -14679,10 +15191,10 @@ class PlotWindow(tk.Toplevel):
             return "The distances from the edges cannot be negative."
         if cfg["left"] + cfg["x_length"] > 1.001:
             return ("The width plus the distance from the left is larger than "
-                    "the window.")
+                    "the page.")
         if cfg["bottom"] + cfg["y_length"] > 1.001:
             return ("The height plus the distance from the bottom is larger "
-                    "than the window.")
+                    "than the page.")
         return None
 
     def apply_frame(self, cfg, redraw=True):
@@ -14891,37 +15403,16 @@ class PlotWindow(tk.Toplevel):
 
     # -- events ------------------------------------------------------------
     def _on_pick(self, event):
-        mouse = event.mouseevent
-        if getattr(mouse, "dblclick", False):
-            return  # double click belongs to the axes dialog
-        if self._pending_text or self._pending_shape or self._pending_arrow:
-            return  # waiting for the click that places the new object
-        if (self.shape_at(mouse.x, mouse.y) is not None
-                or self.arrow_at(mouse.x, mouse.y) is not None
-                or self.handle_at(mouse.x, mouse.y) is not None):
-            return  # drawn objects are handled by the press handler
-        if self.legend_at(mouse.x, mouse.y)[1] is not None:
-            return  # the legend boxes are handled by the press handler
-        artist = event.artist
-        if artist in self.notes.values() or self.note_at(mouse.x, mouse.y):
-            return  # free text boxes are handled by the press handler
-        # the title and the axis labels are draggable, so the press and
-        # release handlers decide between moving them and editing them
-        if artist in (self.ax.title, self.ax.xaxis.label, self.ax.yaxis.label):
-            return
-        if self.text_at(mouse.x, mouse.y) is not None or self._text_drag:
-            return
+        """matplotlib offers the artist a click was on.
 
-        if artist in self.ax.spines.values() or self.frame_hit(mouse.x, mouse.y):
-            return          # the frame is opened by a double click
-        # a curve or bar or errorbar is never "selected": one click opens its properties
-        series_name = getattr(artist, "aplot_series", None)
-        if series_name is not None and series_name in self.series:
-            self.open_series_dialog(self.series[series_name])
-            return
-        if isinstance(artist, Line2D) and artist in self.lines:
-            self.open_series_dialog(artist)
-            return
+        Nothing is done with it any more.  Everything in the diagram is
+        found by its own hit test in the press handler below - which is the
+        only way to reach the curves of the left axis once a right axis
+        lies over them - and a single click now grabs the graph rather than
+        opening anything.  The handler stays connected so that the picker
+        settings of the artists keep their meaning.
+        """
+        return None
 
     def object_at(self, x, y):
         """(kind, key) of the object under the pointer, the topmost first."""
@@ -14975,12 +15466,27 @@ class PlotWindow(tk.Toplevel):
         return None
 
     def _on_double_click(self, event):
-        """The second click opens the properties of the object under it."""
+        """The second click opens the properties of what is under it.
+
+        A single click moves things about - the whole graph included - so
+        every property window is reached by clicking twice: a drawing, an
+        arrow, a text box, a legend entry, a **curve**, the frame and the
+        numbers of an axis alike.
+        """
         kind, key = self.object_at(event.x, event.y)
-        if kind is not None:
-            if kind != "frame":            # the frame itself is not selected
-                self.select_object(kind, key)
+        if kind is not None and kind != "frame":
+            self.select_object(kind, key)
+            self.draw()
+            self.open_properties(kind, key)
+            return True
+        name = self.series_at(event)       # a curve of either Y axis
+        if name is not None:
+            if self.selection is not None:
+                self.select_object(None, None)
                 self.draw()
+            self.open_series_dialog(self.series[name])
+            return True
+        if kind == "frame":                # the frame itself is not selected
             self.open_properties(kind, key)
             return True
         which = self._axis_hit(event)      # the numbers or the label of an axis
@@ -15121,21 +15627,25 @@ class PlotWindow(tk.Toplevel):
         if side is not None:              # an axis line: select it to resize
             self.select_object("axis", side)
             self.draw()
-            self.flash(f"{SIDE_NAMES.get(side, side)} selected - drag one of "
-                       "its ends to resize it, double click for frame and origin")
+            self.flash(f"{SIDE_NAMES.get(side, side)} selected - drag the line "
+                       "to move the graph, drag one of its ends to resize it, "
+                       "double click for frame and origin")
+            self._start_plot_drag(event)  # ...and dragging it carries the graph
             return
         name = self.series_at(event)      # a curve of either Y axis
         if name is not None:
-            # a curve is never "selected": the click opens its properties,
-            # and what was selected before is let go, as any other click
+            # a curve is never "selected", and a single click no longer opens
+            # its properties: it grabs the graph, and two clicks open the
+            # curve.  What was selected before is let go, as with any click.
             if self.selection is not None:
                 self.select_object(None, None)
                 self.draw()
-            self.open_series_dialog(self.series[name])
+            self._start_plot_drag(event)
             return
         if self.selection is not None:    # clicking elsewhere deselects
             self.select_object(None, None)
             self.draw()
+        self._start_plot_drag(event)      # the paper carries the graph too
 
     def series_at(self, event):
         """The curve under the pointer, whichever Y axis it belongs to.
@@ -15192,6 +15702,140 @@ class PlotWindow(tk.Toplevel):
     def frame_hit(self, x, y):
         """True when the pointer is on one of the visible frame sides."""
         return self.frame_side_at(x, y) is not None
+
+    # -- the whole graph is dragged to another place ----------------------
+    def scale_plot_area(self, factor):
+        """`Resize graph`: the graph grows or shrinks around its own middle.
+
+        One step of the menu is ten per cent of the length of both axes.
+        The middle of the plot area stays where it is, and the graph is
+        kept inside the page; everything drawn in it - the curves, the
+        legend boxes, the text boxes, the drawings and the arrows - keeps
+        its place inside the plot area and follows.
+        """
+        factor = float(factor)
+        if factor <= 0:
+            return False
+        cfg = self.frame_cfg
+        width = float(cfg.get("x_length", 0.7))
+        height = float(cfg.get("y_length", 0.7))
+        new_width = min(max(width * factor, MIN_AXIS_SIZE), 1.0)
+        new_height = min(max(height * factor, MIN_AXIS_SIZE), 1.0)
+        if abs(new_width - width) < 1e-9 and abs(new_height - height) < 1e-9:
+            self.flash("The graph cannot be made any "
+                       + ("larger" if factor > 1 else "smaller"))
+            return False
+        middle_x = float(cfg.get("left", 0.13)) + width / 2.0
+        middle_y = float(cfg.get("bottom", 0.125)) + height / 2.0
+        left = min(max(middle_x - new_width / 2.0, 0.0), 1.0 - new_width)
+        bottom = min(max(middle_y - new_height / 2.0, 0.0), 1.0 - new_height)
+        with self.changed("the size of the graph"):
+            self.apply_frame({**cfg, "left": left, "bottom": bottom,
+                              "x_length": new_width, "y_length": new_height})
+        self.flash(f"The graph is {'larger' if factor > 1 else 'smaller'} - "
+                   f"{new_width * 100:.0f}% x {new_height * 100:.0f}% of the page")
+        return True
+
+    def fit_to_page(self, _event=None):
+        """`Resize graph > Fit to page`: the graph fills the whole page.
+
+        It is the layout the program starts with - as large as the plot
+        area can be while the numbers, the axis labels and the title still
+        have their room around it.
+        """
+        left, bottom, width, height = self.default_position
+        with self.changed("the size of the graph"):
+            self.apply_frame({**self.frame_cfg, "left": left, "bottom": bottom,
+                              "x_length": width, "y_length": height})
+        self.flash("The graph fills the page again")
+        return True
+
+    def move_plot_area(self, left, bottom, redraw=True):
+        """Put the plot area somewhere else in the window, same size.
+
+        Only the two distances of the origin change - the length of the two
+        axes, the ranges, the ticks and everything drawn in the plot area
+        stay as they are and travel with it.  The place is kept inside the
+        window, so the graph cannot be pushed out of sight.
+        """
+        width = float(self.frame_cfg.get("x_length", 0.7))
+        height = float(self.frame_cfg.get("y_length", 0.7))
+        left = min(max(float(left), 0.0), max(0.0, 1.0 - width))
+        bottom = min(max(float(bottom), 0.0), max(0.0, 1.0 - height))
+        self.ax.set_position([left, bottom, width, height])
+        if self.ax2 is not None:
+            self.ax2.set_position(self.ax.get_position())
+        self.frame_cfg["left"] = left
+        self.frame_cfg["bottom"] = bottom
+        # the objects are placed in the coordinates of the plot area, so
+        # their pixels have to be worked out again where it now stands
+        self.refresh_shapes()
+        self.refresh_arrows()
+        self._refresh_handles()
+        dialog = self._dialogs.get("axes")
+        if dialog is not None and dialog.winfo_exists():
+            try:
+                dialog.frame_tab.sync_position()
+            except (AttributeError, tk.TclError):
+                pass
+        if redraw:
+            self.draw()
+        return (left, bottom)
+
+    def plot_area_hit(self, x, y):
+        """True when the pointer is inside the plot area (or on its edge)."""
+        if x is None or y is None:
+            return False
+        box = self.ax.get_window_extent()
+        tolerance = max(4.0, float(self.frame_cfg.get("width", 1.0)) + 3.0)
+        return (box.x0 - tolerance <= x <= box.x1 + tolerance
+                and box.y0 - tolerance <= y <= box.y1 + tolerance)
+
+    def toolbar_busy(self):
+        """True while the pan or the zoom tool of the toolbar is switched on.
+
+        Those two drive the canvas themselves - one moves the data inside
+        the axes, the other draws a rectangle - so the graph must not be
+        carried about under them.
+        """
+        try:
+            return bool(str(getattr(self.toolbar, "mode", "") or ""))
+        except (AttributeError, tk.TclError):
+            return False
+
+    def _start_plot_drag(self, event):
+        """Remember where the graph stood when the button went down."""
+        if event is None or event.x is None or event.y is None \
+                or self.toolbar_busy():
+            self._plot_drag = None
+            return None
+        bounds = self.ax.get_position().bounds
+        self._plot_drag = {"x": float(event.x), "y": float(event.y),
+                           "left": float(bounds[0]),
+                           "bottom": float(bounds[1]), "moved": False}
+        return self._plot_drag
+
+    def _drag_plot_to(self, event):
+        """Carry the graph along with the pointer."""
+        drag = self._plot_drag
+        if drag is None or event.x is None or event.y is None:
+            return False
+        dx = float(event.x) - drag["x"]
+        dy = float(event.y) - drag["y"]
+        if not drag["moved"] and abs(dx) < PLOT_DRAG_START \
+                and abs(dy) < PLOT_DRAG_START:
+            return False               # still a click, not yet a drag
+        width = float(self.fig.get_figwidth() * self.fig.dpi)
+        height = float(self.fig.get_figheight() * self.fig.dpi)
+        if width <= 0 or height <= 0:
+            return False
+        if not drag["moved"]:
+            drag["moved"] = True
+            self.flash("Moving the graph - let go where it should stand")
+            self._set_cursor("fleur")
+        self.move_plot_area(drag["left"] + dx / width,
+                            drag["bottom"] + dy / height)
+        return True
 
     # -- the axes are resized by their two ends ----------------------------
     @staticmethod
@@ -15548,7 +16192,7 @@ Three constants at the top of `aplot.py` decide how it is drawn:
 | --- | --- |
 | `APP_ICON_SIZE` (512) | the number of pixels the icon is drawn at - how **sharp** it is, not how big it appears. |
 | `APP_ICON_SIZES` | the sizes written into `APlot.app`'s `.icns`, each also at `@2x`. |
-| `APP_ICON_MARGIN` (0.06) | the **free border** left around the rounded square, as a part of the whole picture. |
+| `APP_ICON_MARGIN` (0.1) | the **free border** left around the rounded square, as a part of the whole picture. |
 
 How large the icon *appears* in the Dock is not the program's to decide: it
 is the size of the Dock tile, which is a setting of macOS itself.  What the
@@ -16421,6 +17065,43 @@ renames that curve and its legend box as well.
 
 ## 2. The diagram window
 
+### The page
+
+A diagram is a **page**, like a slide: it has a size of its own - the
+`Page width` and `Page height` of the settings - and it keeps that size
+whatever happens to the window.  The window is only a view of the page:
+
+* **Resizing the window never changes the diagram.**  The proportions, the
+  lengths of the axes, the font sizes and everything else stay exactly as
+  they are; only more or less of the desk around the page becomes visible.
+* When the window is **larger** than the page, the page sits in the middle
+  of the desk.
+* When the window is **smaller**, scrollbars appear and the page can be
+  moved about: with the **wheel** (`Shift`+wheel sideways), by dragging with
+  the **middle button**, or with the scrollbars themselves.
+* **Zooming** changes how large the page is drawn, not what is on it:
+  `Ctrl/Cmd`+wheel zooms around the pointer - the point under it stays under
+  it - and `Ctrl/Cmd`+`+` and `Ctrl/Cmd`+`-` do the same from the keyboard.
+  `Ctrl/Cmd+0` goes back to the true size of the page.  The zoom runs from
+  15% to 600% and is shown in the message line of the toolbar.
+* The zoom is a property of the **view**, so it changes nothing that is
+  saved or exported: a picture, a copy on the clipboard and an exported
+  matplotlib program are always of the page itself.
+
+The size of the page is stored in the `.aplt` file together with the zoom,
+so a graph opens looking exactly as it was left.
+
+**The starting margins come from the size of the page.**  The numbers, the
+axis labels and the title are set in **points**, so the room they need is a
+length and not a fraction: a small page has to keep proportionally wider
+margins for exactly the same texts.  A new diagram therefore begins with a
+plot area worked out from the page - the same layout `Fit to page` and
+`Default layout` give - and nothing is ever cut off at the edge.  A size
+and origin of your own, typed in `Frame and origin` or set in the `Frame`
+tab of the settings, is used as it stands.
+
+### Clicking
+
 Every text, label, axis and object reacts to the mouse, and all of them
 follow the same rule:
 
@@ -16436,25 +17117,29 @@ opening a single dialog.  What is selected is always visible:
 * clicking an empty part of the diagram deselects everything.
 
 The single exception is a **curve**: it is never selected, because there is
-nothing to move or copy on it, so one click on a curve opens its
-properties at once.
+nothing to move or copy on it by itself.  A curve is opened by clicking it
+**twice**; one click takes hold of the whole graph and carries it to
+another place (see `Moving the whole graph`).
 
 | Action | Result |
 | --- | --- |
-| Click a curve | Curve properties at once: line and marker settings separately. |
+| Drag the plot area, a curve or the frame | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
+| Click a curve twice | Curve properties: line and marker settings separately.  One click does not open it - it grabs the graph. |
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`). |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
+| Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
 | `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
 | `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
+| Drag the axis line itself | Moves the whole graph, the same as dragging the plot area. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
@@ -16554,8 +17239,8 @@ An object that was drawn behaves like the other decorations:
 * it can be **turned** to any angle: see below.
 
 The positions and sizes are kept in the coordinates of the plot area, so
-the objects follow the diagram when the window is resized, and they are
-stored in `.aplt` files.  The starting line and fill of new objects come
+the objects follow the graph wherever it is moved or resized on the page,
+and they are stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
 
 ### The second Y axis and the top X axis
@@ -16622,6 +17307,8 @@ All four sides work, each with the points on its own line:
 * Only a line that is really **drawn** can be clicked, and a line that
   disappears (because the X axis moved to the other side, or the last curve
   of one Y axis was unticked) drops out of the selection by itself.
+* Dragging an axis **line** (anywhere but its two ends) moves the whole
+  graph - see `Moving the whole graph` just below.
 * The arrow keys move the **whole plot area** while an axis is selected
   (`Shift`: ten pixels), keeping its size.
 * Everything in the diagram - the curves, the legend boxes, the text
@@ -16630,8 +17317,60 @@ All four sides work, each with the points on its own line:
 * **Double clicking** an axis line opens `Frame and origin`, where the same
   numbers can be typed in fractions, centimetres or inches; the dialog
   always shows what the pointer has made.
-* The size is kept in fractions of the window, so it survives a resize of
-  the diagram window, and it is stored in `.aplt` files.
+* The size is kept in fractions of the **page**, so it is the same
+  whatever the window does and at any zoom, and it is stored in `.aplt`
+  files.
+
+### Moving the whole graph
+
+The plot area does not have to stay where the program put it.  **Press
+anywhere that is not an object of its own and drag**, and the whole graph
+travels with the pointer:
+
+* the **plot area** itself and everything in it,
+* any **curve** - grabbing a line no longer opens its properties, it takes
+  hold of the graph (the properties are two clicks away now),
+* any **axis line** of the frame - the same line whose two ends resize the
+  axis, so its middle moves the graph and its ends stretch it,
+* the **empty paper** around the graph, the numbers and the labels
+  included.
+
+Only the two distances of the origin change.  The length of both axes, the
+ranges, the ticks and everything drawn inside - the curves, the legend
+boxes, the text boxes, the drawings, the pictures and the arrows - stay as
+they are and travel along.  The pointer turns into a four way arrow over
+everything that can carry the graph, and the graph is kept inside the
+**page**, so it cannot be pushed off it.
+
+The whole drag is **one step**: `Edit > Undo` (`Ctrl/Cmd+Z`) puts the graph
+back where it was.  The arrow keys still move it by single pixels while an
+axis is selected, and `Frame and origin` still takes the same two distances
+as numbers.
+
+While the **pan** or the **zoom** tool of the toolbar is switched on the
+canvas belongs to that tool, and dragging does what the tool says instead.
+
+### Resizing the graph on the page
+
+**Right click the paper** - anywhere that is not an object - and the menu
+ends with `Resize graph`:
+
+| Item | What it does |
+| --- | --- |
+| `Smaller` | Takes **ten per cent** off the length of both axes. |
+| `Larger` | Puts **ten per cent** on. |
+| `Fit to page` | The graph fills the whole page again - the layout the program starts with, worked out from the size of the page so that the numbers, the axis labels and the title have exactly the room they need. |
+
+`Smaller` and `Larger` keep the **middle** of the graph where it is, so it
+grows and shrinks in place, and the graph is kept inside the page.
+Everything drawn in the plot area - the curves, the legend boxes, the text
+boxes, the drawings, the pictures and the arrows - keeps its place inside it
+and follows.  Each choice is **one step** of `Edit > Undo`.
+
+This changes the **graph on the page**, not the page and not the window:
+`Resize graph` makes the drawing itself bigger or smaller, the zoom only
+changes how large the page is shown, and the size of the page is set by
+`Page width` and `Page height` in the settings.
 
 ### Which frame lines are drawn
 
@@ -16717,8 +17456,8 @@ An arrow behaves like the drawn objects:
 * clicking an empty part of the diagram deselects it.
 
 The tip and the tail are kept in the coordinates of the plot area, so the
-arrows follow the diagram when the window is resized, while the head keeps
-its size in pixels.  They are stored in `.aplt` files, and the head, size,
+arrows follow the graph wherever it is moved or resized on the page, while
+the head keeps its size in points.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
 
 ### Pictures in the diagram
@@ -16815,14 +17554,27 @@ disturb text that was copied elsewhere.
 key makes the copy, places it a little to the lower right and selects it,
 and what was on the clipboard before stays there.
 
-**Two things can be waiting, and the newer one wins.**  `File > Copy figure
-to the clipboard` puts a picture of the whole diagram on the clipboard of
-the system, while copying an object keeps it inside the program.  When both
-have happened, `Ctrl/Cmd+V` takes whichever was copied **last** - so
-copying the figure and then an object pastes the object, and the other way
-round pastes the picture.  A picture copied in another program carries no
-time of its own and is taken whenever the program's own copy is not the
-newer one.
+**Two things can be waiting, and the newer one wins.**  An object copied
+here is kept inside the program; a picture lies on the clipboard of the
+system - put there by `File > Copy figure to the clipboard`, or by any
+other program.  `Ctrl/Cmd+V` always takes the one that was copied **last**:
+
+* Between the two ways of copying inside the program the time of the copy
+  decides, so copying the figure and then an object pastes the object, and
+  the other way round pastes the picture.
+* A picture copied in **another** program - a slide in PowerPoint or
+  Keynote, a picture in a browser, a drawing in a photo editor - carries no
+  time of its own.  For that one the clipboard itself is looked at: if it
+  no longer holds what it held when this program last copied, then
+  something newer is on it, and that is what is pasted, even when an object
+  is still being kept here.  On macOS this is read from the counter the
+  system keeps for it; elsewhere the picture is compared with the one that
+  was there before.
+
+So copying an ellipse here, then a picture in another program, and pressing
+`Ctrl/Cmd+V` lays the **picture** into the diagram - and it goes on doing
+so until something is copied here again, which puts the object back in
+front.
 
 ### Writing a text in place
 
@@ -16902,7 +17654,7 @@ A text box behaves like a legend box:
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,
 * the position is kept in the coordinates of the plot area, so the box
-  follows the diagram when the window is resized,
+  follows the graph wherever it is moved or resized on the page,
 * any number of text boxes can be added, and they are all stored in
   `.aplt` files.
 
@@ -16971,6 +17723,11 @@ If the old behaviour is preferred, `Property windows always on top` in the
 `Windows` tab of the settings keeps them above the diagram again.
 
 ### Curve properties
+
+**Click a curve twice** to open it: line, bar, slice, filled area, the
+staircase - anything drawn for that column.  A single click grabs the graph
+and moves it (see `Moving the whole graph`), so the properties need the
+second click, exactly like a text box or a drawing.
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
 representation of any individual curve between all 9 styles: **Line + Symbol**,
@@ -17150,7 +17907,7 @@ for a 2D histogram.
     are set in `Pie properties`, under `The names of the slices`.
   * **A pie is clicked like any other curve.**  It has no line to hit, so
     the slices *and* the names and percentages written on them all open
-    `Curve properties` with a single click - which is where their font,
+    `Curve properties` on the **second** click - which is where their font,
     their colour and their distance are.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
@@ -17305,14 +18062,15 @@ the commands of that diagram after a separator: `Axes properties...`,
 
 **Size and origin of the axes**
 
-* **Units**: `Fraction of window`, `cm` or `inch`.  Fractions are kept when
-  the window is resized; the centimetre and inch values are converted with
-  the current window size, and the line under the fields always shows the
-  present size in centimetres.
+* **Units**: `Fraction of page`, `cm` or `inch`.  Fractions are what is
+  really stored; the centimetre and inch values are worked out from the
+  size of the page, and the line under the fields always shows the present
+  size in centimetres.
 * **Width (length of the X axis)** and **Height (length of the Y axis)**.
 * **Y axis distance from the left** and **X axis distance from the bottom**
   - the position of the origin inside the window.
-* **Default layout** puts back matplotlib's own margins.
+* **Default layout** puts back the layout the page itself asks for -
+  the same one as `Resize graph > Fit to page`.
 
 The four numbers are the same values as `left`, `bottom`, `width` and
 `height` of a matplotlib axes, so `left + width` and `bottom + height` must
@@ -17523,10 +18281,10 @@ less room than a title.
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
-| Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
+| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
-| Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
+| Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the page). |
 | Text boxes | Font size and colour, frame and background of the text boxes added with the **T** button. |
 | Drawings | The shape the drawing tool starts with, and the line style, thickness, colour, fill colour and opacity of new objects. |
 | Arrows | The head type the arrow tool starts with, the head size in pixels, and the line style, thickness and colour of new arrows. |

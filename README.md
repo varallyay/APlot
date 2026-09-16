@@ -83,7 +83,7 @@ Three constants at the top of `aplot.py` decide how it is drawn:
 | --- | --- |
 | `APP_ICON_SIZE` (512) | the number of pixels the icon is drawn at - how **sharp** it is, not how big it appears. |
 | `APP_ICON_SIZES` | the sizes written into `APlot.app`'s `.icns`, each also at `@2x`. |
-| `APP_ICON_MARGIN` (0.06) | the **free border** left around the rounded square, as a part of the whole picture. |
+| `APP_ICON_MARGIN` (0.1) | the **free border** left around the rounded square, as a part of the whole picture. |
 
 How large the icon *appears* in the Dock is not the program's to decide: it
 is the size of the Dock tile, which is a setting of macOS itself.  What the
@@ -956,6 +956,43 @@ renames that curve and its legend box as well.
 
 ## 2. The diagram window
 
+### The page
+
+A diagram is a **page**, like a slide: it has a size of its own - the
+`Page width` and `Page height` of the settings - and it keeps that size
+whatever happens to the window.  The window is only a view of the page:
+
+* **Resizing the window never changes the diagram.**  The proportions, the
+  lengths of the axes, the font sizes and everything else stay exactly as
+  they are; only more or less of the desk around the page becomes visible.
+* When the window is **larger** than the page, the page sits in the middle
+  of the desk.
+* When the window is **smaller**, scrollbars appear and the page can be
+  moved about: with the **wheel** (`Shift`+wheel sideways), by dragging with
+  the **middle button**, or with the scrollbars themselves.
+* **Zooming** changes how large the page is drawn, not what is on it:
+  `Ctrl/Cmd`+wheel zooms around the pointer - the point under it stays under
+  it - and `Ctrl/Cmd`+`+` and `Ctrl/Cmd`+`-` do the same from the keyboard.
+  `Ctrl/Cmd+0` goes back to the true size of the page.  The zoom runs from
+  15% to 600% and is shown in the message line of the toolbar.
+* The zoom is a property of the **view**, so it changes nothing that is
+  saved or exported: a picture, a copy on the clipboard and an exported
+  matplotlib program are always of the page itself.
+
+The size of the page is stored in the `.aplt` file together with the zoom,
+so a graph opens looking exactly as it was left.
+
+**The starting margins come from the size of the page.**  The numbers, the
+axis labels and the title are set in **points**, so the room they need is a
+length and not a fraction: a small page has to keep proportionally wider
+margins for exactly the same texts.  A new diagram therefore begins with a
+plot area worked out from the page - the same layout `Fit to page` and
+`Default layout` give - and nothing is ever cut off at the edge.  A size
+and origin of your own, typed in `Frame and origin` or set in the `Frame`
+tab of the settings, is used as it stands.
+
+### Clicking
+
 Every text, label, axis and object reacts to the mouse, and all of them
 follow the same rule:
 
@@ -971,25 +1008,29 @@ opening a single dialog.  What is selected is always visible:
 * clicking an empty part of the diagram deselects everything.
 
 The single exception is a **curve**: it is never selected, because there is
-nothing to move or copy on it, so one click on a curve opens its
-properties at once.
+nothing to move or copy on it by itself.  A curve is opened by clicking it
+**twice**; one click takes hold of the whole graph and carries it to
+another place (see `Moving the whole graph`).
 
 | Action | Result |
 | --- | --- |
-| Click a curve | Curve properties at once: line and marker settings separately. |
+| Drag the plot area, a curve or the frame | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
+| Click a curve twice | Curve properties: line and marker settings separately.  One click does not open it - it grabs the graph. |
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`). |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
+| Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
 | `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
 | `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
+| Drag the axis line itself | Moves the whole graph, the same as dragging the plot area. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
@@ -1089,8 +1130,8 @@ An object that was drawn behaves like the other decorations:
 * it can be **turned** to any angle: see below.
 
 The positions and sizes are kept in the coordinates of the plot area, so
-the objects follow the diagram when the window is resized, and they are
-stored in `.aplt` files.  The starting line and fill of new objects come
+the objects follow the graph wherever it is moved or resized on the page,
+and they are stored in `.aplt` files.  The starting line and fill of new objects come
 from the `Drawings` tab of the settings.
 
 ### The second Y axis and the top X axis
@@ -1157,6 +1198,8 @@ All four sides work, each with the points on its own line:
 * Only a line that is really **drawn** can be clicked, and a line that
   disappears (because the X axis moved to the other side, or the last curve
   of one Y axis was unticked) drops out of the selection by itself.
+* Dragging an axis **line** (anywhere but its two ends) moves the whole
+  graph - see `Moving the whole graph` just below.
 * The arrow keys move the **whole plot area** while an axis is selected
   (`Shift`: ten pixels), keeping its size.
 * Everything in the diagram - the curves, the legend boxes, the text
@@ -1165,8 +1208,60 @@ All four sides work, each with the points on its own line:
 * **Double clicking** an axis line opens `Frame and origin`, where the same
   numbers can be typed in fractions, centimetres or inches; the dialog
   always shows what the pointer has made.
-* The size is kept in fractions of the window, so it survives a resize of
-  the diagram window, and it is stored in `.aplt` files.
+* The size is kept in fractions of the **page**, so it is the same
+  whatever the window does and at any zoom, and it is stored in `.aplt`
+  files.
+
+### Moving the whole graph
+
+The plot area does not have to stay where the program put it.  **Press
+anywhere that is not an object of its own and drag**, and the whole graph
+travels with the pointer:
+
+* the **plot area** itself and everything in it,
+* any **curve** - grabbing a line no longer opens its properties, it takes
+  hold of the graph (the properties are two clicks away now),
+* any **axis line** of the frame - the same line whose two ends resize the
+  axis, so its middle moves the graph and its ends stretch it,
+* the **empty paper** around the graph, the numbers and the labels
+  included.
+
+Only the two distances of the origin change.  The length of both axes, the
+ranges, the ticks and everything drawn inside - the curves, the legend
+boxes, the text boxes, the drawings, the pictures and the arrows - stay as
+they are and travel along.  The pointer turns into a four way arrow over
+everything that can carry the graph, and the graph is kept inside the
+**page**, so it cannot be pushed off it.
+
+The whole drag is **one step**: `Edit > Undo` (`Ctrl/Cmd+Z`) puts the graph
+back where it was.  The arrow keys still move it by single pixels while an
+axis is selected, and `Frame and origin` still takes the same two distances
+as numbers.
+
+While the **pan** or the **zoom** tool of the toolbar is switched on the
+canvas belongs to that tool, and dragging does what the tool says instead.
+
+### Resizing the graph on the page
+
+**Right click the paper** - anywhere that is not an object - and the menu
+ends with `Resize graph`:
+
+| Item | What it does |
+| --- | --- |
+| `Smaller` | Takes **ten per cent** off the length of both axes. |
+| `Larger` | Puts **ten per cent** on. |
+| `Fit to page` | The graph fills the whole page again - the layout the program starts with, worked out from the size of the page so that the numbers, the axis labels and the title have exactly the room they need. |
+
+`Smaller` and `Larger` keep the **middle** of the graph where it is, so it
+grows and shrinks in place, and the graph is kept inside the page.
+Everything drawn in the plot area - the curves, the legend boxes, the text
+boxes, the drawings, the pictures and the arrows - keeps its place inside it
+and follows.  Each choice is **one step** of `Edit > Undo`.
+
+This changes the **graph on the page**, not the page and not the window:
+`Resize graph` makes the drawing itself bigger or smaller, the zoom only
+changes how large the page is shown, and the size of the page is set by
+`Page width` and `Page height` in the settings.
 
 ### Which frame lines are drawn
 
@@ -1252,8 +1347,8 @@ An arrow behaves like the drawn objects:
 * clicking an empty part of the diagram deselects it.
 
 The tip and the tail are kept in the coordinates of the plot area, so the
-arrows follow the diagram when the window is resized, while the head keeps
-its size in pixels.  They are stored in `.aplt` files, and the head, size,
+arrows follow the graph wherever it is moved or resized on the page, while
+the head keeps its size in points.  They are stored in `.aplt` files, and the head, size,
 line and colour of new arrows come from the `Arrows` tab of the settings.
 
 ### Pictures in the diagram
@@ -1350,14 +1445,27 @@ disturb text that was copied elsewhere.
 key makes the copy, places it a little to the lower right and selects it,
 and what was on the clipboard before stays there.
 
-**Two things can be waiting, and the newer one wins.**  `File > Copy figure
-to the clipboard` puts a picture of the whole diagram on the clipboard of
-the system, while copying an object keeps it inside the program.  When both
-have happened, `Ctrl/Cmd+V` takes whichever was copied **last** - so
-copying the figure and then an object pastes the object, and the other way
-round pastes the picture.  A picture copied in another program carries no
-time of its own and is taken whenever the program's own copy is not the
-newer one.
+**Two things can be waiting, and the newer one wins.**  An object copied
+here is kept inside the program; a picture lies on the clipboard of the
+system - put there by `File > Copy figure to the clipboard`, or by any
+other program.  `Ctrl/Cmd+V` always takes the one that was copied **last**:
+
+* Between the two ways of copying inside the program the time of the copy
+  decides, so copying the figure and then an object pastes the object, and
+  the other way round pastes the picture.
+* A picture copied in **another** program - a slide in PowerPoint or
+  Keynote, a picture in a browser, a drawing in a photo editor - carries no
+  time of its own.  For that one the clipboard itself is looked at: if it
+  no longer holds what it held when this program last copied, then
+  something newer is on it, and that is what is pasted, even when an object
+  is still being kept here.  On macOS this is read from the counter the
+  system keeps for it; elsewhere the picture is compared with the one that
+  was there before.
+
+So copying an ellipse here, then a picture in another program, and pressing
+`Ctrl/Cmd+V` lays the **picture** into the diagram - and it goes on doing
+so until something is copied here again, which puts the object back in
+front.
 
 ### Writing a text in place
 
@@ -1437,7 +1545,7 @@ A text box behaves like a legend box:
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,
 * the position is kept in the coordinates of the plot area, so the box
-  follows the diagram when the window is resized,
+  follows the graph wherever it is moved or resized on the page,
 * any number of text boxes can be added, and they are all stored in
   `.aplt` files.
 
@@ -1506,6 +1614,11 @@ If the old behaviour is preferred, `Property windows always on top` in the
 `Windows` tab of the settings keeps them above the diagram again.
 
 ### Curve properties
+
+**Click a curve twice** to open it: line, bar, slice, filled area, the
+staircase - anything drawn for that column.  A single click grabs the graph
+and moves it (see `Moving the whole graph`), so the properties need the
+second click, exactly like a text box or a drawing.
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
 representation of any individual curve between all 9 styles: **Line + Symbol**,
@@ -1685,7 +1798,7 @@ for a 2D histogram.
     are set in `Pie properties`, under `The names of the slices`.
   * **A pie is clicked like any other curve.**  It has no line to hit, so
     the slices *and* the names and percentages written on them all open
-    `Curve properties` with a single click - which is where their font,
+    `Curve properties` on the **second** click - which is where their font,
     their colour and their distance are.
 * **Fill under the curve**: `Same colour as the curve` at the top, then
   `Fill colour` with `Opacity (0-1)` next to it, a **pattern** (diagonal,
@@ -1840,14 +1953,15 @@ the commands of that diagram after a separator: `Axes properties...`,
 
 **Size and origin of the axes**
 
-* **Units**: `Fraction of window`, `cm` or `inch`.  Fractions are kept when
-  the window is resized; the centimetre and inch values are converted with
-  the current window size, and the line under the fields always shows the
-  present size in centimetres.
+* **Units**: `Fraction of page`, `cm` or `inch`.  Fractions are what is
+  really stored; the centimetre and inch values are worked out from the
+  size of the page, and the line under the fields always shows the present
+  size in centimetres.
 * **Width (length of the X axis)** and **Height (length of the Y axis)**.
 * **Y axis distance from the left** and **X axis distance from the bottom**
   - the position of the origin inside the window.
-* **Default layout** puts back matplotlib's own margins.
+* **Default layout** puts back the layout the page itself asks for -
+  the same one as `Resize graph > Fit to page`.
 
 The four numbers are the same values as `left`, `bottom`, `width` and
 `height` of a matplotlib axes, so `left + width` and `bottom + height` must
@@ -2058,10 +2172,10 @@ less room than a title.
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
-| Plot | Figure size and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
+| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
-| Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the window). |
+| Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the page). |
 | Text boxes | Font size and colour, frame and background of the text boxes added with the **T** button. |
 | Drawings | The shape the drawing tool starts with, and the line style, thickness, colour, fill colour and opacity of new objects. |
 | Arrows | The head type the arrow tool starts with, the head size in pixels, and the line style, thickness and colour of new arrows. |
