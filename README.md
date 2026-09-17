@@ -2029,9 +2029,16 @@ The last tab of the axes dialog, also reachable with
 **Background**
 
 * **Plot area**: the colour behind the curves, or **Transparent plot area**
-  to let the colour around the axes show through (a transparent plot area
-  is also saved transparently into a PNG).
-* **Around the axes**: the colour of the rest of the window.
+  to let the colour around the axes show through.
+* **Around the axes**: the colour of the paper the graph sits on, or
+  **Transparent around the axes** to leave it away altogether.
+
+Both switches travel into the picture: with the second one ticked, a copied
+or saved **PNG, PDF or SVG has no background at all**, so the graph can be
+dropped onto a coloured slide or a printed page without a white box around
+it.  (JPEG has no transparency of its own and fills it with white.)  The
+starting state of both comes from the `Frame` tab of the settings, so every
+new diagram can begin transparent if that is what you want.
 
 Clicking any side of the frame on the diagram (the X axis line, the Y axis
 line, or the top and right sides when they are drawn) opens this dialog;
@@ -2142,7 +2149,7 @@ belong to the characters of that text, exactly as everywhere else.
 | Save graph as... | | The same, always asking for a new name. |
 | Import data (CSV, TXT, DAT)... | `Cmd/Ctrl+I` | Reads a text data file into the sheet; the separator is recognised automatically.  This is the **arrow button** of the toolbar. |
 | Export data (CSV, TXT, DAT)... | `Shift+Cmd/Ctrl+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
-| Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
+| Export figure (image)... | `Cmd/Ctrl+E` | Writes the graph as a picture (PNG, PDF, SVG, ...), cut out of the page. |
 | Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
 
@@ -2178,10 +2185,19 @@ nothing was changed since the last save.
 
 * **Export figure (image)...** (`Cmd/Ctrl+E`) is the same as the save
   button of the toolbar: a picture in any format matplotlib can write, and
-  the control points of a selected object are never on it.
+  the control points of a selected object are never on it.  What is written
+  is the **graph, not the whole page** - the page is cut down to what is
+  drawn on it, with a little air around that, exactly as `Copy figure to
+  the clipboard` does, so the two ways out of the program give the same
+  picture.  The **zoom of the view** never reaches the file either: a
+  picture is always of the page at the resolution the settings give it.
 * **Copy figure to the clipboard** (`Cmd/Ctrl+C` in the diagram window,
   with nothing selected) puts a 200 dpi picture on the clipboard, ready to
-  be pasted into a text editor, a presentation or an e-mail.  With an
+  be pasted into a text editor, a presentation or an e-mail.  Tick
+  **`Transparent around the axes`** in `Frame and origin` and that picture
+  has **no background at all** - it drops onto a coloured slide without a
+  white box around it.  Both switches of that section are carried into the
+  picture: the plot area and the paper around it, each on its own.  With an
   object **selected**, the same key copies that object instead, as before -
   so both uses of `Cmd/Ctrl+C` live side by side.  If the system has no
   tool for pictures on the clipboard, the program says where it wrote the

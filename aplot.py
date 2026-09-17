@@ -437,6 +437,11 @@ LOG_FLOOR = 1e-12           # a logarithmic axis never reaches zero
 # out by itself unless it is told a number, and thinning is exactly what
 # `Major ticks interval` is there to decide.
 LOG_TICK_LIMIT = 400
+# the free border left around the graph when it is saved or copied, in
+# inches.  Both ways out of the program cut the page down to what is drawn
+# on it - the graph, its labels and whatever was put beside them - and
+# leave this much air around that.
+EXPORT_PAD = 0.05
 # the largest major step that is still divided by whole numbers.  Beyond it
 # there would be millions of them, so the step is divided evenly in the
 # logarithm instead - and the list of them is never built.
@@ -868,7 +873,7 @@ DEFAULTS = {
         "color": "#000000",
         "major_tick_length": 8.0, "minor_tick_length": 4.0,
         "background": "#ffffff", "transparent_background": True,
-        "figure_background": "#ffffff",
+        "figure_background": "#ffffff", "transparent_figure": False,
         "left": DEFAULT_POSITION[0], "bottom": DEFAULT_POSITION[1],
         "x_length": DEFAULT_POSITION[2], "y_length": DEFAULT_POSITION[3],
     },
@@ -963,7 +968,8 @@ SETTINGS_SPEC = [
         ("minor_tick_length", "Minor tick length", "float"),
         ("background", "Plot area background", "color"),
         ("transparent_background", "Transparent plot area", "bool"),
-        ("figure_background", "Window background", "color"),
+        ("figure_background", "Background around the axes", "color"),
+        ("transparent_figure", "Transparent around the axes", "bool"),
         ("x_length", "X axis length (fraction of window)", "float"),
         ("y_length", "Y axis length (fraction of window)", "float"),
         ("left", "Y axis distance from the left", "float"),
@@ -4187,6 +4193,10 @@ class FrameTab(ttk.Frame):
         self.minor_len_var = tk.StringVar(value=f"{cfg['minor_tick_length']:g}")
         background = cfg.get("background", "#ffffff")
         self.transparent_var = tk.BooleanVar(value=background == "none")
+        # the paper around the plot area can be left away as well, which is
+        # what makes a copied or saved picture transparent
+        self.clear_figure_var = tk.BooleanVar(
+            value=cfg.get("figure_background", "#ffffff") == "none")
         self.unit_var = tk.StringVar(value=SIZE_UNITS[0])
         self._unit = SIZE_UNITS[0]
 
@@ -4228,9 +4238,13 @@ class FrameTab(ttk.Frame):
         ToolDialog.field(box, 1, "",
                          ttk.Checkbutton(box, text="Transparent plot area",
                                          variable=self.transparent_var))
+        figure_background = cfg.get("figure_background", "#ffffff")
         self.figure_background = ColorSwatch(
-            box, cfg.get("figure_background", "#ffffff"))
+            box, "#ffffff" if figure_background == "none" else figure_background)
         ToolDialog.field(box, 2, "Around the axes:", self.figure_background)
+        ToolDialog.field(box, 3, "",
+                         ttk.Checkbutton(box, text="Transparent around the axes",
+                                         variable=self.clear_figure_var))
 
     def _build_size_box(self):
         box = ttk.LabelFrame(self, text="Size and origin of the axes", padding=8)
@@ -4306,7 +4320,8 @@ class FrameTab(ttk.Frame):
             "minor_tick_length": max(0.0, to_float(self.minor_len_var.get(), 2.0)),
             "background": ("none" if self.transparent_var.get()
                            else self.background.color),
-            "figure_background": self.figure_background.color,
+            "figure_background": ("none" if self.clear_figure_var.get()
+                                  else self.figure_background.color),
             "left": self._fractions["left"], "bottom": self._fractions["bottom"],
             "x_length": self._fractions["x_length"],
             "y_length": self._fractions["y_length"],
@@ -9033,7 +9048,9 @@ class PlotWindow(tk.Toplevel):
             "minor_tick_length": float(frame["minor_tick_length"]),
             "background": ("none" if frame.get("transparent_background")
                            else safe_hex(frame.get("background"), "#ffffff")),
-            "figure_background": safe_hex(frame.get("figure_background"), "#ffffff"),
+            "figure_background": ("none" if frame.get("transparent_figure")
+                                  else safe_hex(frame.get("figure_background"),
+                                                "#ffffff")),
             "left": chosen[0], "bottom": chosen[1],
             "x_length": chosen[2], "y_length": chosen[3],
         }
@@ -14770,7 +14787,8 @@ class PlotWindow(tk.Toplevel):
                 transparent = self.frame_cfg.get("figure_background") == "none"
             # the picture is of the page, not of the zoomed view
             self.fig.savefig(path, dpi=dpi or self.base_dpi,
-                             bbox_inches="tight", transparent=bool(transparent),
+                             bbox_inches="tight", pad_inches=EXPORT_PAD,
+                             transparent=bool(transparent),
                              facecolor=self.fig.get_facecolor())
         finally:
             if selection is not None:
@@ -14808,12 +14826,33 @@ class PlotWindow(tk.Toplevel):
         return self.save_figure_clean()
 
     def save_figure_clean(self, *_args):
-        """The saved image must not contain the selection marks."""
+        """Write the diagram to a file: the graph, not the whole page.
+
+        What is saved is what `Copy figure to the clipboard` copies - the
+        graph and everything drawn beside it, cut out of the page with a
+        little air around it - so that the two ways out of the program
+        give the same picture.  The selection marks are never on it.
+        """
         selection = self.selection
         self.select_object(None, None)
         try:
             self.canvas.draw()
-            return self.toolbar.save_figure()
+            # matplotlib's own dialog knows every format it can write, and
+            # it is told through the settings to cut the page down
+            # the picture is of the page at its own resolution: how far
+            # the view happens to be zoomed must not change the file
+            settings = {"savefig.bbox": "tight",
+                        "savefig.pad_inches": EXPORT_PAD,
+                        "savefig.dpi": float(self.base_dpi)}
+            if self.frame_cfg.get("figure_background") == "none":
+                settings["savefig.transparent"] = True
+            with matplotlib.rc_context(settings):
+                written = self.toolbar.save_figure()
+                # the dialog remembers the folder in the same settings,
+                # which would be forgotten again when this block ends
+                folder = matplotlib.rcParams["savefig.directory"]
+            matplotlib.rcParams["savefig.directory"] = folder
+            return written
         finally:
             if selection is not None:
                 self.select_object(*selection)
@@ -18603,9 +18642,16 @@ The last tab of the axes dialog, also reachable with
 **Background**
 
 * **Plot area**: the colour behind the curves, or **Transparent plot area**
-  to let the colour around the axes show through (a transparent plot area
-  is also saved transparently into a PNG).
-* **Around the axes**: the colour of the rest of the window.
+  to let the colour around the axes show through.
+* **Around the axes**: the colour of the paper the graph sits on, or
+  **Transparent around the axes** to leave it away altogether.
+
+Both switches travel into the picture: with the second one ticked, a copied
+or saved **PNG, PDF or SVG has no background at all**, so the graph can be
+dropped onto a coloured slide or a printed page without a white box around
+it.  (JPEG has no transparency of its own and fills it with white.)  The
+starting state of both comes from the `Frame` tab of the settings, so every
+new diagram can begin transparent if that is what you want.
 
 Clicking any side of the frame on the diagram (the X axis line, the Y axis
 line, or the top and right sides when they are drawn) opens this dialog;
@@ -18716,7 +18762,7 @@ belong to the characters of that text, exactly as everywhere else.
 | Save graph as... | | The same, always asking for a new name. |
 | Import data (CSV, TXT, DAT)... | `Cmd/Ctrl+I` | Reads a text data file into the sheet; the separator is recognised automatically.  This is the **arrow button** of the toolbar. |
 | Export data (CSV, TXT, DAT)... | `Shift+Cmd/Ctrl+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
-| Export figure (image)... | `Cmd/Ctrl+E` | Writes the diagram as a picture (PNG, PDF, SVG, ...). |
+| Export figure (image)... | `Cmd/Ctrl+E` | Writes the graph as a picture (PNG, PDF, SVG, ...), cut out of the page. |
 | Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
 
@@ -18752,10 +18798,19 @@ nothing was changed since the last save.
 
 * **Export figure (image)...** (`Cmd/Ctrl+E`) is the same as the save
   button of the toolbar: a picture in any format matplotlib can write, and
-  the control points of a selected object are never on it.
+  the control points of a selected object are never on it.  What is written
+  is the **graph, not the whole page** - the page is cut down to what is
+  drawn on it, with a little air around that, exactly as `Copy figure to
+  the clipboard` does, so the two ways out of the program give the same
+  picture.  The **zoom of the view** never reaches the file either: a
+  picture is always of the page at the resolution the settings give it.
 * **Copy figure to the clipboard** (`Cmd/Ctrl+C` in the diagram window,
   with nothing selected) puts a 200 dpi picture on the clipboard, ready to
-  be pasted into a text editor, a presentation or an e-mail.  With an
+  be pasted into a text editor, a presentation or an e-mail.  Tick
+  **`Transparent around the axes`** in `Frame and origin` and that picture
+  has **no background at all** - it drops onto a coloured slide without a
+  white box around it.  Both switches of that section are carried into the
+  picture: the plot area and the paper around it, each on its own.  With an
   object **selected**, the same key copies that object instead, as before -
   so both uses of `Cmd/Ctrl+C` live side by side.  If the system has no
   tool for pictures on the clipboard, the program says where it wrote the
