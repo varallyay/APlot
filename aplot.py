@@ -141,7 +141,9 @@ from matplotlib.patches import (Ellipse, FancyBboxPatch, Polygon,
                                 Rectangle)
 from matplotlib.text import Text
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
-                               MultipleLocator, NullLocator)
+                               Formatter, FuncFormatter, LogFormatterSciNotation,
+                               LogLocator, MultipleLocator, NullFormatter,
+                               NullLocator)
 from matplotlib.transforms import Affine2D, Bbox, TransformedBbox
 
 APP_NAME = "APlot"
@@ -335,7 +337,30 @@ PAGE_BACKDROP = "#8f8f96"   # the desk the page lies on
 PAGE_EDGE = "#5a5a61"       # a thin line around the page
 PAGE_MARGIN = 14            # pixels of desk left around the page
 ZOOM_MIN, ZOOM_MAX = 0.15, 6.0
-ZOOM_STEP = 1.1             # one notch of the wheel
+# ...and however far it is zoomed, the page is never drawn larger than
+# this many pixels altogether.  Drawing one is the slow part of zooming,
+# and a page of tens of millions of pixels would crawl.
+ZOOM_MAX_PIXELS = 6.0e6
+# how much one notch of the wheel zooms.  1.05 is five per cent a notch -
+# small enough that a trackpad, which sends a stream of little pushes,
+# glides instead of jumping.  Raise it for coarser steps.
+ZOOM_STEP = 1.035
+# what counts as one notch when the system sends small numbers instead of
+# the 120 a mouse wheel clicks: macOS does this for both the wheel and the
+# trackpad.  Raise it if the zoom runs away under two fingers, lower it if
+# it is too slow to answer.
+ZOOM_WHEEL_UNIT = 4.0
+ZOOM_MAX_NOTCHES = 2.0      # no single push may zoom more than this
+ZOOM_SCROLL_LINES = 0.2     # lines the desk scrolls for one notch
+# pushes that arrive within this many milliseconds are gathered up and
+# drawn once: the page then follows the fingers instead of stuttering.
+# The wait grows with what the last drawing really cost, up to the second
+# number, so that a heavy diagram keeps answering the fingers instead of
+# spending all its time painting frames nobody sees.
+ZOOM_SETTLE_MS = 15
+ZOOM_SETTLE_MAX_MS = 120
+ZOOM_BUTTON_STEP = 1.25     # one press of - or + on the toolbar
+ZOOM_PRESETS = (50, 75, 100, 150, 200, 300)
 PLOT_RESIZE_STEP = 0.10     # `Resize graph`: one step is ten per cent
 # pixels the pointer has to travel before grabbing the paper, a curve or the
 # frame starts carrying the whole graph: below it the press is still a click
@@ -405,7 +430,20 @@ AXIS_OFF_NAMES = {"x": "No X axis", "y": "No left Y axis",
 AXIS_SCALES = [("Linear", "linear"), ("Log 10", "log10"), ("Log 2", "log2"),
                ("Log (natural)", "ln")]
 LOG_BASES = {"log10": 10.0, "log2": 2.0, "ln": float(np.e)}
+# what the note under `Major ticks interval` calls each of them
+LOG_BASE_NAMES = {"log10": "10", "log2": "2", "ln": "e"}
 LOG_FLOOR = 1e-12           # a logarithmic axis never reaches zero
+# how many major ticks a logarithmic axis may carry.  matplotlib thins them
+# out by itself unless it is told a number, and thinning is exactly what
+# `Major ticks interval` is there to decide.
+LOG_TICK_LIMIT = 400
+# the largest major step that is still divided by whole numbers.  Beyond it
+# there would be millions of them, so the step is divided evenly in the
+# logarithm instead - and the list of them is never built.
+LOG_SUBS_MAX = 100
+# and the widest step a file may ask for, so that `base ** step` can never
+# run away into infinity
+LOG_STEP_MAX = 300.0
 EMPTY_RANGE = (0.0, 1.0)    # what an axis shows while no curve belongs to it
 # the four sides of the plot area, as the pointer sees them
 FRAME_ENDS = {"bottom": ((0.0, 0.0), (1.0, 0.0)),
@@ -2365,6 +2403,103 @@ def clipboard_picture(widget=None):
         return None
 
 
+class QuietDraws:
+    """Hold back the redrawing while a diagram is being rebuilt.
+
+    Resizing the canvas makes matplotlib ask for a new drawing, and so
+    does everything the program does afterwards - which would paint the
+    whole diagram two or three times over for one turn of the wheel.  Used
+    as `with QuietDraws(window):`, the asking is swallowed and one drawing
+    is made at the end, where it belongs.
+    """
+
+    def __init__(self, window):
+        self.window = window
+        self.kept = None
+
+    def __enter__(self):
+        canvas = getattr(self.window, "canvas", None)
+        if canvas is None:
+            return self
+        waiting = getattr(canvas, "_idle_draw_id", None)
+        if waiting:                       # one was already on its way
+            try:
+                canvas._tkcanvas.after_cancel(waiting)
+            except (AttributeError, tk.TclError):
+                pass
+            canvas._idle_draw_id = None
+        self.kept = canvas.draw_idle
+        canvas.draw_idle = lambda *_a, **_k: None
+        self.window._quiet_draws = True
+        return self
+
+    def __exit__(self, *_error):
+        canvas = getattr(self.window, "canvas", None)
+        if canvas is not None and self.kept is not None:
+            canvas.draw_idle = self.kept
+        self.window._quiet_draws = False
+        return False
+
+
+class PointerSpot:
+    """Where the pointer is, in the shape the handlers expect of an event."""
+
+    __slots__ = ("x_root", "y_root")
+
+    def __init__(self, x_root, y_root):
+        self.x_root = float(x_root)
+        self.y_root = float(y_root)
+
+
+def e_power_text(value):
+    """One number of a `Log (natural)` axis, written as a power of `e`.
+
+    Such an axis is read in powers, not in numbers: `e^{2}` says what
+    7.389 does not.  A tick that does not fall on a whole power keeps its
+    exponent to two decimals.
+    """
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0 or not np.isfinite(value):
+        return ""
+    power = math.log(value)
+    whole = round(power)
+    # `mathdefault` keeps the letters in the font of the rest of the axis,
+    # the way matplotlib writes 10 to the power of something
+    if abs(power - whole) < 1e-6:
+        return "$\\mathdefault{e^{%d}}$" % int(whole)
+    return "$\\mathdefault{e^{%.2f}}$" % power
+
+
+class NaturalLogFormatter(Formatter):
+    """Writes the numbers of a `Log (natural)` axis as e, e squared, ..."""
+
+    def __call__(self, value, pos=None):
+        return e_power_text(value)
+
+
+def gestures_reach_tk():
+    """Whether the system hands pinch gestures to Tk.  It does not.
+
+    macOS sends a pinch to **Cocoa**, and Tk never sees it.  It can be
+    picked up from Cocoa with pyobjc - and that is what an earlier version
+    of this program did - but the callback then arrives from inside Tk's
+    own event loop, where Python has released the interpreter lock: the
+    program dies at once with
+
+        Fatal Python error: PyEval_RestoreThread: the function must be
+        called with the GIL held ... the GIL is released
+
+    There is no way to make that safe while Tk runs the loop, so the
+    gesture is not listened for at all.  What a trackpad *does* send to Tk
+    is the wheel, so two fingers zoom by sliding them with `Ctrl`/`Cmd`
+    held - and the toolbar has -, the zoom and + for the same thing.
+    """
+    return False
+
+
 def clipboard_serial(widget=None):
     """A mark that changes whenever the clipboard of the system changes.
 
@@ -3810,7 +3945,14 @@ class AxisTab(PairedFields, ttk.Frame):
         self.max_var = tk.StringVar(value=f"{high:g}")
         self.step_var = tk.StringVar(
             value="" if cfg["step"] in (None, 0) else f"{cfg['step']:g}")
+        self.step_note_var = tk.StringVar(value="")
         self.minor_var = tk.StringVar(value=str(cfg["minor"]))
+        # a number that means decades on a logarithmic axis and units on a
+        # linear one is not the same number: each scale keeps its own, so
+        # that switching between them does not leave 100 powers of ten
+        self._kept_steps = {"linear": "", "log": "1"}
+        self._kept_steps["log" if cfg["scale"] != "linear" else "linear"] = \
+            self.step_var.get()
         self._axis_color = safe_hex(cfg.get("axis_color", "#000000"), "#000000")
         self.label_on_var = tk.BooleanVar(value=cfg.get("label_on", True))
         self.ticks_on_var = tk.BooleanVar(value=cfg.get("ticks_on", True))
@@ -3823,6 +3965,7 @@ class AxisTab(PairedFields, ttk.Frame):
         self.gstyle_var = tk.StringVar(value=name_of(GRID_STYLES, grid["style"], "Dotted"))
         self.gwidth_var = tk.StringVar(value=f"{grid['width']:g}")
 
+        self._step_mode = "log" if cfg["scale"] != "linear" else "linear"
         self._build_top_box()
         self._build_label_box()
         self._build_range_box()
@@ -3830,6 +3973,7 @@ class AxisTab(PairedFields, ttk.Frame):
         self._align_columns((self.label_box, self.range_box,
                              self.grid_box))
         self._toggle_auto()
+        self._show_step_note()
 
     # -- the direction of the axis and the scale of its numbers -----------
     def direction_names(self):
@@ -3867,17 +4011,36 @@ class AxisTab(PairedFields, ttk.Frame):
             box, textvariable=self.scale_var, state="readonly",
             values=names(AXIS_SCALES), width=14)
         self.scale_box.grid(row=0, column=3, sticky="w")
-        hint = ("Standard runs the usual way, Reverse turns the axis round.  "
-                if self.which != "y2" else
-                "The right hand axis appears as soon as this is not "
-                '"No right Y axis";\nwithout a curve of its own it shows '
-                "0 ... 1.  ")
-        self._wide(ttk.Label(box, foreground="#666", justify="left",
-                             text=hint + "A logarithmic\nscale never reaches "
-                                         "zero: values at or below it are "
-                                         "left out."), 1, pady=(6, 0))
+        self.scale_box.bind("<<ComboboxSelected>>", self._scale_chosen)
         self.top_box = box
         return box
+
+    def scale_code(self):
+        """"linear", "log10", "log2" or "ln", as the box stands now."""
+        return code_of(AXIS_SCALES, self.scale_var.get(), "linear")
+
+    def _scale_chosen(self, _event=None):
+        """Another scale: the interval means something else now.
+
+        A hundred is a sensible interval between the ticks of a linear
+        axis and an absurd one between powers of ten, so each scale keeps
+        the number that was last typed for it and the note below the box
+        says what that number counts.
+        """
+        wanted = "log" if self.scale_code() != "linear" else "linear"
+        if wanted != self._step_mode:
+            self._kept_steps[self._step_mode] = self.step_var.get()
+            self.step_var.set(self._kept_steps.get(wanted, ""))
+            self._step_mode = wanted
+        self._show_step_note()
+        return True
+
+    def _show_step_note(self):
+        """The line under the interval box: what the number counts."""
+        scale = self.scale_code()
+        self.step_note_var.set("" if scale == "linear"
+                               else f"powers of {LOG_BASE_NAMES.get(scale, '10')}")
+        return self.step_note_var.get()
 
     # -- construction ------------------------------------------------------
     def _section(self, title, variable, **pack):
@@ -3909,9 +4072,6 @@ class AxisTab(PairedFields, ttk.Frame):
                          ttk.Spinbox(box, from_=-200, to=400, increment=1,
                                      width=SPIN_WIDTH,
                                      textvariable=self.label_pad_var))
-        self._wide(ttk.Label(box, foreground="#666", justify="left",
-                             text="Switch the section off to leave the label "
-                                  "away."), 3)
 
     def _build_range_box(self):
         """The numbers on the axis: their font, the range and the ticks."""
@@ -3938,23 +4098,23 @@ class AxisTab(PairedFields, ttk.Frame):
             box, 4,
             "From:", ttk.Entry(box, textvariable=self.min_var, width=ENTRY_WIDTH),
             "To:", ttk.Entry(box, textvariable=self.max_var, width=ENTRY_WIDTH))
-        # the step of the major ticks and the number of minor ones between
-        # them belong together: one line
+        # the interval of the major ticks and the number of minor ones
+        # between them belong together: one line
         self.step_entry, _minor = self._pair(
             box, 5,
-            "Step (major ticks):",
+            "Major ticks interval:",
             ttk.Entry(box, textvariable=self.step_var, width=ENTRY_WIDTH),
             "Minor ticks:",
             ttk.Spinbox(box, from_=0, to=20, increment=1, width=SPIN_WIDTH,
                         textvariable=self.minor_var))
-        self._wide(ttk.Separator(box, orient="horizontal"), 6, pady=(8, 6))
+        # what that number counts: nothing on a linear axis, powers on a
+        # logarithmic one - which is the one thing a reader cannot guess
+        self.step_note = ttk.Label(box, textvariable=self.step_note_var)
+        self.step_note.grid(row=6, column=1, columnspan=3, sticky="w",
+                            pady=(0, 2))
+        self._wide(ttk.Separator(box, orient="horizontal"), 7, pady=(8, 6))
         self.axis_color = ColorSwatch(box, self._axis_color)
-        ToolDialog.field(box, 7, "Axis colour:", self.axis_color)
-        self._wide(ttk.Label(
-            box, foreground="#666", justify="left",
-            text="The colour of this axis line and of its tick marks.\n"
-                 "Switch the section off to leave the numbers and both\n"
-                 "kinds of tick marks away."), 8)
+        ToolDialog.field(box, 8, "Axis colour:", self.axis_color)
 
     def _build_grid_box(self, color):
         """The grid: the section title switches the major lines on."""
@@ -3975,9 +4135,6 @@ class AxisTab(PairedFields, ttk.Frame):
                          ttk.Spinbox(box, from_=0.2, to=5, increment=0.2,
                                      width=SPIN_WIDTH,
                                      textvariable=self.gwidth_var))
-        self._wide(ttk.Label(
-            box, foreground="#666", justify="left",
-            text="The section title draws the major grid lines."), 3)
 
     # -- behaviour ---------------------------------------------------------
     def _toggle_auto(self):
@@ -4060,12 +4217,6 @@ class FrameTab(ttk.Frame):
         ToolDialog.field(box, 3, "Minor tick length:",
                          ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=8,
                                      textvariable=self.minor_len_var))
-        ttk.Label(box, foreground="#666", justify="left",
-                  text="\"No frame\" draws only the axes that are in use; the\n"
-                       "two \"with ticks\" styles put ticks on all four sides.\n"
-                       "The colour of each axis line is on its own page,\n"
-                       "as \"Axis colour\".").grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     def _build_background_box(self, cfg):
         box = ttk.LabelFrame(self, text="Background", padding=8)
@@ -4118,8 +4269,7 @@ class FrameTab(ttk.Frame):
         width_cm = self._fractions["x_length"] * self._factor("x_length", "cm")
         height_cm = self._fractions["y_length"] * self._factor("y_length", "cm")
         self.hint.configure(
-            text=f"Current size on the page: {width_cm:.1f} x {height_cm:.1f} cm "
-                 "(fractions keep it whatever the window does).")
+            text=f"Current size on the page: {width_cm:.1f} x {height_cm:.1f} cm")
 
     def _read_values(self):
         for key, var in self.value_vars.items():
@@ -4394,10 +4544,6 @@ class TitleTab(ttk.Frame):
         ttk.Button(legend_box, text="Reset positions",
                    command=self._reset_positions).grid(row=4, column=1,
                                                        sticky="w", pady=(6, 0))
-        ttk.Label(legend_box, foreground="#666", justify="left",
-                  text="Every curve has its own legend box: drag its frame to move\n"
-                       "it, click its text to change its text, size and colour."
-                  ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.title_box, self.legend_box = box, legend_box
 
     def apply(self):
@@ -8723,8 +8869,9 @@ class PlotWindow(tk.Toplevel):
             f"{ACCEL_NAME}+S: save   |   {ACCEL_NAME}+E: export   |   "
             "Arrow keys: move   |   Delete: remove\n"
             f"The page keeps its size: wheel to scroll, {ACCEL_NAME}+wheel "
-            f"to zoom, {ACCEL_NAME}+0 for its true size, middle button to "
-            "slide it   |   Right click the paper: Resize graph")
+            f"(or the toolbar) to zoom, {ACCEL_NAME}+0 for its true size, "
+            "middle button to slide it   |   "
+            "Right click the paper: Resize graph")
 
     def __init__(self, master, df: pd.DataFrame, config: Config, app=None,
                  layout=None, plot_style="line_symbol"):
@@ -8785,6 +8932,11 @@ class PlotWindow(tk.Toplevel):
         self._pending_shape = False
         self._shape_drag = None
         self._plot_drag = None          # dragging the whole plot area about
+        self._quiet_draws = False       # while a rebuild is under way
+        self._zoom_wanted = None        # where the pushes of the wheel add up
+        self._zoom_job = None           # ...and the moment they are drawn
+        self._zoom_spot = None          # the point they should keep still
+        self._zoom_cost = 0.0           # what the last drawing really took
         self._drag_before = None        # the diagram before the drag started
         self._change_depth = 0          # commands that call one another
         # where each curve stands in the stack; the drawings, the arrows and
@@ -9003,6 +9155,7 @@ class PlotWindow(tk.Toplevel):
                 "Picture: choose a file - or paste one, or drop one "
                 "into the diagram"))
         self.picture_button.bind("<Leave>", lambda _e: toolbar.set_message(""))
+        self._build_zoom_buttons(toolbar)
 
         try:            # the standard Save button must not save the marks
             save_button = toolbar._buttons.get("Save")
@@ -9067,6 +9220,21 @@ class PlotWindow(tk.Toplevel):
         self._bind_sliding(self.view)
         self._bind_sliding(widget)
         self._layout_page()
+
+    def zoom_gesture(self, factor):
+        """Zoom by `factor` around the pointer, wherever the wish came from.
+
+        The toolbar and the keyboard use it; a **pinch** does not reach it,
+        because the system never hands that gesture to Tk (see
+        `gestures_reach_tk`).  Two fingers zoom by sliding them with
+        `Ctrl`/`Cmd` held, which the system does send.
+        """
+        try:
+            x, y = self.winfo_pointerxy()
+        except tk.TclError:
+            x = y = None
+        spot = None if x is None else PointerSpot(x, y)
+        return self.zoom_by(max(1e-6, float(factor)), event=spot)
 
     def _bind_sliding(self, widget):
         """The middle button slides the page about, as in a picture viewer."""
@@ -9204,7 +9372,14 @@ class PlotWindow(tk.Toplevel):
 
     @staticmethod
     def _wheel_steps(event):
-        """How far the wheel was turned, as a number of notches."""
+        """How far the wheel was turned, as a number of notches.
+
+        It is a **fraction**, not a whole number, and that is the point: a
+        mouse wheel clicks once and sends 120, while a trackpad sends a
+        run of small pushes as the fingers slide.  Counting each of those
+        as a whole notch is what makes a trackpad jump; here each push is
+        worth its own small share of one, so the page glides.
+        """
         number = getattr(event, "num", 0)
         if number in (4, 6):
             return 1.0
@@ -9213,7 +9388,9 @@ class PlotWindow(tk.Toplevel):
         delta = float(getattr(event, "delta", 0) or 0)
         if not delta:
             return 0.0
-        return delta / (120.0 if abs(delta) >= 120 else abs(delta))
+        steps = (delta / 120.0 if abs(delta) >= 120
+                 else delta / max(1e-6, ZOOM_WHEEL_UNIT))
+        return max(-ZOOM_MAX_NOTCHES, min(ZOOM_MAX_NOTCHES, steps))
 
     def _on_wheel(self, event):
         """One notch of the wheel: scroll the desk, or zoom with Ctrl/Cmd."""
@@ -9230,18 +9407,87 @@ class PlotWindow(tk.Toplevel):
         if control:
             self.zoom_by(ZOOM_STEP ** steps, event=event)
             return "break"
+        lines = -steps * ZOOM_SCROLL_LINES
+        # a small push must still move the desk by at least one line, or a
+        # slow scroll on a trackpad would do nothing at all
+        lines = int(lines) or (1 if lines > 0 else -1 if lines < 0 else 0)
+        if not lines:
+            return "break"
         try:
             if sideways:
-                self.view.xview_scroll(int(-steps * 2), "units")
+                self.view.xview_scroll(lines, "units")
             else:
-                self.view.yview_scroll(int(-steps * 2), "units")
+                self.view.yview_scroll(lines, "units")
         except tk.TclError:
             return None
         return "break"
 
+    def zoom_ceiling(self):
+        """As far in as the page may be zoomed on this screen.
+
+        `ZOOM_MAX`, or less when the page is large: the whole page is
+        drawn at every step, so a very large one has to stop sooner to
+        stay quick under the fingers.
+        """
+        dpi = float(self.base_dpi) * self.screen_ratio()
+        pixels = max(1.0, self.page_size[0] * self.page_size[1] * dpi * dpi)
+        return max(ZOOM_MIN, min(ZOOM_MAX, math.sqrt(ZOOM_MAX_PIXELS / pixels)))
+
     def zoom_by(self, factor, event=None):
-        """Make the page larger or smaller on the screen."""
-        return self.set_zoom(self.zoom * float(factor), event=event)
+        """Make the page larger or smaller on the screen.
+
+        The pushes of a wheel or of two fingers on a trackpad arrive far
+        faster than a page can be drawn, so they are **gathered up**: each
+        one moves the wanted zoom, and a moment later the page is drawn
+        once, at the value the fingers have reached by then.  Without that
+        the drawing falls behind the fingers and the page seems to stutter.
+        """
+        wanted = (self._zoom_wanted if self._zoom_wanted is not None
+                  else self.zoom) * float(factor)
+        wanted = min(max(wanted, ZOOM_MIN), self.zoom_ceiling())
+        self._zoom_wanted = wanted
+        if event is not None:
+            self._zoom_spot = (getattr(event, "x_root", None),
+                               getattr(event, "y_root", None))
+        if self._zoom_job is None:
+            waiting = int(min(max(self._zoom_cost * 1000.0, ZOOM_SETTLE_MS),
+                              ZOOM_SETTLE_MAX_MS))
+            try:
+                self._zoom_job = self.after(waiting, self._apply_wanted_zoom)
+            except tk.TclError:
+                self._zoom_job = None
+                return self.set_zoom(wanted, event=event)
+        return wanted
+
+    def _apply_wanted_zoom(self):
+        """Draw the page at the zoom the pushes have added up to."""
+        self._zoom_job = None
+        wanted, self._zoom_wanted = self._zoom_wanted, None
+        spot, self._zoom_spot = self._zoom_spot, None
+        if wanted is None or not self.winfo_exists():
+            return False
+        holder = None
+        if spot is not None and spot[0] is not None:
+            holder = PointerSpot(spot[0], spot[1])
+        started = time.monotonic()
+        done = self.set_zoom(wanted, event=holder)
+        try:                       # paint it now, so the wait below is true
+            self.canvas.get_tk_widget().update_idletasks()
+        except tk.TclError:
+            pass
+        self._zoom_cost = time.monotonic() - started
+        return done
+
+    def zoom_settled(self):
+        """Draw a zoom that is still waiting, now.  Used by the tests."""
+        if self._zoom_job is not None:
+            try:
+                self.after_cancel(self._zoom_job)
+            except tk.TclError:
+                pass
+            self._zoom_job = None
+            self._apply_wanted_zoom()
+        return self.zoom
 
     def set_zoom(self, zoom, event=None):
         """Show the page at `zoom` times its own size.
@@ -9252,25 +9498,31 @@ class PlotWindow(tk.Toplevel):
         texts and the line widths all grow and shrink together.  When the
         pointer is over the page, the point under it stays under it.
         """
-        zoom = min(max(float(zoom), ZOOM_MIN), ZOOM_MAX)
+        zoom = min(max(float(zoom), ZOOM_MIN), self.zoom_ceiling())
         if abs(zoom - self.zoom) < 1e-6:
             return self.zoom
         held = self._page_point_at(event)
         ratio = zoom / self.zoom
         self.zoom = zoom
-        # the dragged distances of the title and the axis labels are in
-        # pixels of the screen, so they grow with the view
-        self.text_offset = {name: (value[0] * ratio, value[1] * ratio)
-                            for name, value in self.text_offset.items()}
-        self.fig.set_dpi(self.render_dpi())
-        self._layout_page()
-        self.apply_text_offsets()
-        self.refresh_shapes()
-        self.refresh_arrows()
-        self._refresh_handles()
+        # everything below asks for a new drawing; they are held back and
+        # one is made at the end, or the wheel would paint the diagram
+        # three times over for every push
+        with QuietDraws(self):
+            # the dragged distances of the title and the axis labels are in
+            # pixels of the screen, so they grow with the view
+            self.text_offset = {name: (value[0] * ratio, value[1] * ratio)
+                                for name, value in self.text_offset.items()}
+            self.fig.set_dpi(self.render_dpi())
+            self._layout_page()
+            self.update_idletasks()      # the widget takes its new size now
+            self.apply_text_offsets()
+            self.refresh_shapes()
+            self.refresh_arrows()
+            self._refresh_handles()
+            if held is not None:
+                self._keep_page_point(held, event)
         self.draw()
-        if held is not None:
-            self._keep_page_point(held, event)
+        self._show_zoom()
         self.flash(f"Zoom {self.zoom * 100:.0f}%")
         return self.zoom
 
@@ -9359,6 +9611,78 @@ class PlotWindow(tk.Toplevel):
         if redraw:
             self.draw()
         return self.page_size
+
+    def _build_zoom_buttons(self, toolbar):
+        """`-`, the zoom itself and `+`, at the end of the toolbar.
+
+        Zooming by gesture is not in the program's gift - the system keeps
+        pinches to itself (see `gestures_reach_tk`) - so it is here, one
+        click away, beside the wheel and the keyboard.
+        """
+        tk.Frame(toolbar, width=22, height=1).pack(side="left")
+
+        def small(text, command, hint):
+            button = tk.Button(toolbar, text=text, width=2, relief="flat",
+                               borderwidth=1, highlightthickness=0,
+                               command=command)
+            button.pack(side="left", padx=1, pady=2)
+            button.bind("<Enter>",
+                        lambda _e, words=hint: toolbar.set_message(words))
+            button.bind("<Leave>", lambda _e: toolbar.set_message(""))
+            return button
+
+        self.zoom_out_button = small(
+            "\u2212", lambda: self.zoom_gesture(1.0 / ZOOM_BUTTON_STEP),
+            f"Zoom out ({ACCEL_NAME}+minus, or {ACCEL_NAME} and the wheel)")
+        self.zoom_label = tk.Button(
+            toolbar, text="100%", width=6, relief="flat", borderwidth=1,
+            highlightthickness=0, command=self.show_zoom_menu)
+        self.zoom_label.pack(side="left", padx=1, pady=2)
+        self.zoom_label.bind(
+            "<Enter>", lambda _e: toolbar.set_message(
+                f"The zoom of the view - click for the usual ones "
+                f"({ACCEL_NAME}+0 is the true size of the page)"))
+        self.zoom_label.bind("<Leave>", lambda _e: toolbar.set_message(""))
+        self.zoom_in_button = small(
+            "+", lambda: self.zoom_gesture(ZOOM_BUTTON_STEP),
+            f"Zoom in ({ACCEL_NAME}+plus, or {ACCEL_NAME} and the wheel)")
+        self._show_zoom()
+        return toolbar
+
+    def _show_zoom(self):
+        """Write the zoom of the view on its button."""
+        button = getattr(self, "zoom_label", None)
+        if button is None:
+            return False
+        try:
+            button.configure(text=f"{self.zoom * 100:.0f}%")
+        except tk.TclError:
+            return False
+        return True
+
+    def show_zoom_menu(self, _event=None):
+        """The usual zooms, and the two that work themselves out."""
+        menu = tk.Menu(self, tearoff=0)
+        for percent in ZOOM_PRESETS:
+            menu.add_command(label=f"{percent}%",
+                             command=lambda one=percent: self.set_zoom(one / 100.0))
+        menu.add_separator()
+        menu.add_command(label="Fit the window", command=self.zoom_to_fit)
+        menu.add_command(label=f"True size ({ACCEL_NAME}+0)",
+                         command=self.reset_zoom)
+        self._zoom_menu = menu                  # kept, or Tk lets it go
+        button = self.zoom_label
+        try:
+            menu.tk_popup(button.winfo_rootx(),
+                          button.winfo_rooty() + button.winfo_height())
+        except tk.TclError:
+            return None
+        finally:
+            try:
+                menu.grab_release()
+            except tk.TclError:
+                pass
+        return menu
 
     def restyle_toolbar(self, toolbar):
         """Give matplotlib's own buttons the pastel icons of the program.
@@ -9621,6 +9945,79 @@ class PlotWindow(tk.Toplevel):
                              and axis._scale.base) - LOG_BASES[scale]) < 1e-9
         except (AttributeError, TypeError, ValueError):
             return False
+
+    @staticmethod
+    def log_major_base(base, step, limits=None):
+        """How far apart the major ticks of a logarithmic axis stand.
+
+        On such an axis the interval is not a distance but a **ratio**:
+        `Major ticks interval` counts powers of the base.  On a `Log 10`
+        axis one is the usual 1, 10, 100; two gives 1, 100, 10000; a half
+        gives 1, 3.16, 10, and so on.
+
+        An interval **wider than the axis itself** is not obeyed: it would
+        leave the axis with a single tick or none at all, which can never
+        be what was meant - and a file written while the number meant
+        nothing here may carry anything.  It is then read as one power.
+        """
+        base = float(base)
+        try:
+            step = float(step)
+        except (TypeError, ValueError):
+            step = 1.0
+        if not step or step <= 0 or not np.isfinite(step):
+            step = 1.0
+        step = min(step, LOG_STEP_MAX)         # so the power below is finite
+        spacing = base ** step
+        if not np.isfinite(spacing) or spacing <= 1.0000001:
+            return base
+        if limits:
+            try:
+                low, high = sorted(float(one) for one in limits)
+            except (TypeError, ValueError):
+                low = high = 0.0
+            if low > 0 and high > low and spacing > high / low:
+                return base                    # wider than the whole axis
+        return spacing
+
+    @staticmethod
+    def log_minor_subs(base, count):
+        """Where the minor ticks of a logarithmic axis stand.
+
+        They stand on the **whole numbers** between one major tick and the
+        next - 2, 3, ... 9 inside a decade - because that is what a reader
+        of such an axis looks for.  `Minor ticks` says how many of them are
+        drawn, and the ones kept are those that come nearest to standing at
+        even distances **on the paper**: one is 3, two are 2 and 5, three
+        are 2, 3 and 6, and eight are the whole decade, 2 to 9.
+
+        When the interval holds no whole number at all - a `Log 2` axis
+        holds none between 1 and 2 - or fewer than were asked for, it is
+        divided into equal parts of the **value** instead, which gives the
+        half, the quarters and so on.
+        """
+        base = float(base)
+        count = min(max(0, int(count)), LOG_SUBS_MAX)
+        if count <= 0 or not np.isfinite(base) or base <= 1.0:
+            return ()
+        top = int(math.floor(base)) if base <= LOG_SUBS_MAX + 1 else 0
+        inside = [float(one) for one in range(2, top + 1) if 1.0 < one < base]
+        if count > len(inside):        # no whole number fits, or too few
+            reach = base - 1.0
+            return tuple(1.0 + reach * one / (count + 1.0)
+                         for one in range(1, count + 1))
+        if count == len(inside):
+            return tuple(inside)
+        logs = {one: math.log(one) for one in inside}
+        span = math.log(base)
+        picked = []
+        for number in range(1, count + 1):
+            free = [one for one in inside if one not in picked]
+            if not free:
+                break
+            wanted = span * number / (count + 1.0)
+            picked.append(min(free, key=lambda one: abs(logs[one] - wanted)))
+        return tuple(sorted(picked))
 
     def apply_axis_scale(self, which, redraw=False):
         """Spread the numbers of one axis linearly or logarithmically."""
@@ -11352,7 +11749,9 @@ class PlotWindow(tk.Toplevel):
             "from matplotlib.legend import Legend",
             "from matplotlib.image import BboxImage",
             "from matplotlib.patches import Ellipse, Polygon, Rectangle",
-            "from matplotlib.ticker import (AutoMinorLocator, MultipleLocator,",
+            "from matplotlib.ticker import (AutoMinorLocator, FuncFormatter,",
+            "                               LogFormatterSciNotation, LogLocator,",
+            "                               MultipleLocator, NullFormatter,",
             "                               NullLocator)",
             "from matplotlib.transforms import Affine2D, Bbox, TransformedBbox",
             "",
@@ -11384,6 +11783,18 @@ class PlotWindow(tk.Toplevel):
             "    px, py = ax.transAxes.transform(centre)",
             "    return ax.transAxes + Affine2D().rotate_deg_around(",
             "        float(px), float(py), float(angle))",
+            "",
+            "",
+            "def e_power_text(value, _pos=None):",
+            '    """One number of a natural logarithmic axis, as a power of e."""',
+            "    value = float(value)",
+            "    if value <= 0 or not math.isfinite(value):",
+            "        return \"\"",
+            "    power = math.log(value)",
+            "    whole = round(power)",
+            "    if abs(power - whole) < 1e-6:",
+            "        return r\"$\\mathdefault{e^{%d}}$\" % int(whole)",
+            "    return r\"$\\mathdefault{e^{%.2f}}$\" % power",
             "",
             "",
             "fig = plt.figure(figsize=("
@@ -11524,8 +11935,36 @@ class PlotWindow(tk.Toplevel):
             step = axis_cfg.get("step")
             minor = int(axis_cfg.get("minor", 0) or 0)
             if scale != "linear":
-                # a logarithmic axis spaces its own ticks
-                pass
+                # on a logarithmic axis the step counts decades and the
+                # minor ticks stand on the whole numbers inside one
+                log_base = self.log_major_base(LOG_BASES.get(scale, 10.0),
+                                               step, (low, high))
+                out.append("%s.%saxis.set_major_locator(LogLocator("
+                           "base=%s, subs=(1.0,), numticks=%s))"
+                           % (name, axis_name, lit(float(log_base)),
+                              lit(int(LOG_TICK_LIMIT))))
+                subs = self.log_minor_subs(log_base, minor)
+                if subs:
+                    out.append("%s.%saxis.set_minor_locator(LogLocator("
+                               "base=%s, subs=%s, numticks=%s))"
+                               % (name, axis_name, lit(float(log_base)),
+                                  "(" + ", ".join(lit(float(one))
+                                                  for one in subs) + ",)",
+                                  lit(int(LOG_TICK_LIMIT))))
+                else:
+                    out.append("%s.%saxis.set_minor_locator(NullLocator())"
+                               % (name, axis_name))
+                out.append("%s.%saxis.set_minor_formatter(NullFormatter())"
+                           % (name, axis_name))
+                if scale == "ln":      # read in powers of e, not in numbers
+                    out.append("%s.%saxis.set_major_formatter("
+                               "FuncFormatter(e_power_text))"
+                               % (name, axis_name))
+                else:
+                    out.append("%s.%saxis.set_major_formatter("
+                               "LogFormatterSciNotation(base=%s))"
+                               % (name, axis_name,
+                                  lit(float(LOG_BASES.get(scale, 10.0)))))
             else:
                 if not axis_cfg.get("auto", True) and step:
                     out.append("%s.%saxis.set_major_locator(MultipleLocator(%s))"
@@ -12079,7 +12518,8 @@ class PlotWindow(tk.Toplevel):
         if figure:
             self.base_dpi = float(figure.get("dpi", self.base_dpi) or self.base_dpi)
             self.zoom = min(max(float(figure.get("zoom", self.zoom) or 1.0),
-                                ZOOM_MIN), ZOOM_MAX)
+                                ZOOM_MIN), ZOOM_MAX)   # the ceiling needs
+            self.zoom = min(self.zoom, self.zoom_ceiling())   # the page size
             self.fig.set_dpi(self.render_dpi())
             self.set_page_size(figure.get("width", self.page_size[0]),
                                figure.get("height", self.page_size[1]),
@@ -12375,6 +12815,8 @@ class PlotWindow(tk.Toplevel):
         # a curve that was drawn again (another style, another colour, new
         # data) comes back at its usual height: it is put back where the
         # user had moved it, before anything is painted
+        if getattr(self, "_quiet_draws", False):
+            return                       # one drawing is coming at the end
         self.apply_series_stack()
         self.canvas.draw_idle()
 
@@ -15329,15 +15771,24 @@ class PlotWindow(tk.Toplevel):
         if not self.axis_scale_matches(which):
             self.apply_axis_scale(which)
 
-        # a logarithmic axis brings its own tick locators, which are the
-        # only ones that make sense on it: the settings below are for the
-        # plain, linear spacing
+        # a logarithmic axis counts in ratios, not in distances, so the
+        # step and the minor ticks mean something else on it - but they
+        # mean it just as much (see log_major_base and log_minor_subs)
         log = scale != "linear"
+        step = cfg.get("step")
+        log_base = None
         if cfg["auto"]:
             if not log:
                 axis.set_major_locator(AutoLocator())
             ax.autoscale(enable=True, axis=axis_name)
             self.measure_data(ax)
+            if log:
+                # the range is the data's; the spacing is still asked for,
+                # and it is measured against the range the data gave
+                log_base = self.log_major_base(LOG_BASES.get(scale, 10.0),
+                                               step, self.current_limits(which))
+                axis.set_major_locator(LogLocator(base=log_base, subs=(1.0,),
+                                                  numticks=LOG_TICK_LIMIT))
         else:
             now_low, now_high = self.current_limits(which)
             low = cfg.get("min") if cfg.get("min") is not None else now_low
@@ -15347,9 +15798,11 @@ class PlotWindow(tk.Toplevel):
                 high = max(high, LOG_FLOOR * 10.0)
                 low = low if low > 0.0 else high / 1000.0
             (ax.set_xlim if which == "x" else ax.set_ylim)(low, high)
-            step = cfg.get("step")
             if log:
-                pass                     # the scale spaces its own ticks
+                log_base = self.log_major_base(LOG_BASES.get(scale, 10.0),
+                                               step, (low, high))
+                axis.set_major_locator(LogLocator(base=log_base, subs=(1.0,),
+                                                  numticks=LOG_TICK_LIMIT))
             elif step and step > 0:
                 count = int(round((high - low) / step)) + 1
                 if 1 < count <= 1000:
@@ -15360,7 +15813,19 @@ class PlotWindow(tk.Toplevel):
                 axis.set_major_locator(AutoLocator())
 
         minor = max(0, int(cfg.get("minor", 0)))
-        if not log:
+        if log:
+            subs = self.log_minor_subs(log_base, minor)
+            axis.set_minor_locator(
+                LogLocator(base=log_base, subs=subs, numticks=LOG_TICK_LIMIT)
+                if subs else NullLocator())
+            # the minor ticks of a logarithmic axis carry no numbers, just
+            # as they carry none on a linear one
+            axis.set_minor_formatter(NullFormatter())
+            # a natural logarithm is read in powers of e, not in numbers
+            axis.set_major_formatter(
+                NaturalLogFormatter() if scale == "ln"
+                else LogFormatterSciNotation(base=LOG_BASES.get(scale, 10.0)))
+        else:
             axis.set_minor_locator(AutoMinorLocator(minor + 1) if minor
                                    else NullLocator())
 
@@ -17079,17 +17544,70 @@ whatever happens to the window.  The window is only a view of the page:
 * When the window is **smaller**, scrollbars appear and the page can be
   moved about: with the **wheel** (`Shift`+wheel sideways), by dragging with
   the **middle button**, or with the scrollbars themselves.
-* **Zooming** changes how large the page is drawn, not what is on it:
-  `Ctrl/Cmd`+wheel zooms around the pointer - the point under it stays under
-  it - and `Ctrl/Cmd`+`+` and `Ctrl/Cmd`+`-` do the same from the keyboard.
-  `Ctrl/Cmd+0` goes back to the true size of the page.  The zoom runs from
-  15% to 600% and is shown in the message line of the toolbar.
+* **Zooming** changes how large the page is drawn, not what is on it.
+  There are three ways to it, and all three zoom around the **pointer** -
+  the point under it stays under it:
+  * `Ctrl/Cmd` held while the **wheel** turns, which is also what two
+    fingers sliding on a trackpad send;
+  * the **`-`**, the zoom and the **`+`** at the end of the toolbar, where
+    the zoom also opens a little menu of the usual ones, `Fit the window`
+    and `True size`;
+  * `Ctrl/Cmd`+`+` and `Ctrl/Cmd`+`-` from the keyboard, with `Ctrl/Cmd+0`
+    for the true size of the page.
+
+  The zoom starts at 15%, and is written both on the toolbar button and in
+  its message line.
 * The zoom is a property of the **view**, so it changes nothing that is
   saved or exported: a picture, a copy on the clipboard and an exported
   matplotlib program are always of the page itself.
 
 The size of the page is stored in the `.aplt` file together with the zoom,
 so a graph opens looking exactly as it was left.
+
+#### Zooming smoothly
+
+The whole page is drawn again at every step of a zoom, and that drawing is
+the slow part.  Three things keep it from stuttering:
+
+* **Every push is worth a fraction of a notch.**  A mouse wheel clicks once
+  and sends a big number; a trackpad sends a run of small pushes as the
+  fingers slide.  Each push moves the zoom by its own small share, so two
+  fingers glide instead of jumping.
+* **The pushes are gathered up.**  They arrive far faster than a page can be
+  drawn, so they are added together and the page is drawn **once**, at the
+  value the fingers have reached by then - never at a value they have long
+  passed.  The wait before that drawing grows with what the last one really
+  cost, so a heavy diagram keeps answering the fingers.
+* **One drawing, not three.**  Resizing the canvas used to make matplotlib
+  repaint the diagram two or three times for a single push; now the asking
+  is held back and one drawing is made at the end.
+
+Five constants at the top of `aplot.py` set the feel of it:
+
+| Constant | What it sets |
+| --- | --- |
+| `ZOOM_STEP` (1.035) | how much **one notch** zooms.  Raise it for coarser, faster steps, lower it for finer ones. |
+| `ZOOM_WHEEL_UNIT` (4.0) | what counts as **one notch** when the system sends small numbers instead of the 120 a mouse wheel clicks (macOS does this for both the wheel and the trackpad).  **Raise it if the zoom runs away under two fingers**, lower it if it is too slow to answer. |
+| `ZOOM_MAX_NOTCHES` (2.0) | the most a **single** push may zoom, so one flick cannot jump across the whole range. |
+| `ZOOM_SETTLE_MS` (15) and `ZOOM_SETTLE_MAX_MS` (120) | the shortest and the longest wait before the gathered pushes are drawn. |
+| `ZOOM_MAX_PIXELS` (6 million) | the largest the page is ever drawn.  However far you zoom in, the page stops here - a page of tens of millions of pixels would crawl.  It is why `Ctrl/Cmd`+`+` stops at a different place for a large page than for a small one. |
+| `ZOOM_BUTTON_STEP` (1.25) | one press of `-` or `+` on the toolbar. |
+| `ZOOM_SCROLL_LINES` (0.2) | how far the desk **scrolls** for one notch, in scroll units (one unit is a tenth of what the window shows). |
+| `ZOOM_PRESETS` | the percentages the zoom button's menu offers. |
+
+**Why there is no pinch gesture.**  macOS sends a pinch to **Cocoa**, and
+Tk never sees it.  It can be picked up from Cocoa with `pyobjc`, and an
+earlier version of this program did exactly that - but the gesture then
+calls back into Python from inside Tk's own event loop, where Python has
+let go of the interpreter lock, and the program dies on the spot:
+
+    Fatal Python error: PyEval_RestoreThread: the function must be called
+    with the GIL held ... the GIL is released
+
+There is no way to make that safe while Tk runs the loop, so APlot does not
+listen for the gesture at all.  What a trackpad *does* send to Tk is the
+wheel: **two fingers sliding with `Ctrl`/`Cmd` held zoom exactly as a pinch
+would**, and the `-` and `+` of the toolbar are always there.
 
 **The starting margins come from the size of the page.**  The numbers, the
 axis labels and the title are set in **points**, so the room they need is a
@@ -17132,7 +17650,7 @@ another place (see `Moving the whole graph`).
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
-| Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view (see `The page`). |
+| Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view around the pointer; the toolbar's `-`, zoom and `+` do the same (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
 | `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
 | `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
@@ -17957,8 +18475,51 @@ side by side** that decide what the axis is at all:
 | `Log (natural)` | Powers of `e`. |
 
 A logarithmic axis cannot reach zero: a range that starts at or below it is
-lifted onto the first positive decade, and the ticks are spaced by the
-scale itself rather than by `Step` and `Minor ticks`.
+lifted onto the first positive decade.
+
+**A `Log (natural)` axis is read in powers of `e`**: its numbers are
+written `e⁰`, `e¹`, `e²` ... rather than 1, 2.718, 7.389, which is what
+such an axis is for.  `Log 10` and `Log 2` keep the powers of ten and of
+two matplotlib writes for them.
+
+**`Major ticks interval` and `Minor ticks` work there too** - they simply
+count in ratios instead of distances.
+
+* **`Major ticks interval`** is how many **powers of the base** lie between
+  one major tick and the next, and the line under the box says which base
+  that is - `powers of 10`, `powers of 2`, `powers of e`.  On a `Log 10`
+  axis `1` gives the usual 1, 10, 100; `2` gives 10⁻⁴, 10⁻², 10⁰ ...;
+  `0.5` gives 1, 3.16, 10.  It works with an automatic range as well as
+  with one of your own - on a logarithmic axis the spacing of the ticks
+  and the range are two separate questions.
+* Because a hundred is a sensible interval on a linear axis and an absurd
+  one in powers of ten, **each scale keeps its own number**: switching to a
+  logarithmic scale offers `1`, switching back brings the linear number
+  you had.
+* **`Minor ticks`** stand on the **whole numbers** inside the interval -
+  2, 3, ... 9 within a decade - because that is what a reader of a
+  logarithmic axis looks for.  The number says how many are drawn, and the
+  ones kept are those that come nearest to standing at even distances on
+  the paper:
+
+  | Between 1 and 10 | The minor ticks |
+  | --- | --- |
+  | `1` | 3 |
+  | `2` | 2 and 5 |
+  | `3` | 2, 3 and 6 |
+  | `8` | 2, 3, 4, 5, 6, 7, 8, 9 - the whole decade |
+
+  An interval that holds **no whole number** - a `Log 2` axis holds none
+  between 1 and 2 - or fewer than were asked for is divided into equal
+  parts of the **value** instead: one minor tick is then the half (1.5 on
+  a `Log 2` axis), three are the quarters (1.25, 1.5, 1.75).
+
+  As on a linear axis, the minor ticks carry no numbers of their own.
+
+One limit keeps a number typed in haste - or left in an older file, where
+the interval meant nothing on a logarithmic axis - from asking the
+impossible: an interval **wider than the axis itself** would leave a single
+tick or none, so it is read as one power.
 
 The **right hand Y axis** is the one whose Direction says the most:
 
@@ -17993,8 +18554,10 @@ place on the page.
 * the **font size** of the numbers with their **Colour** next to it, and
   `Number offset [px]` (measured from the end of the tick marks),
 * **Automatic range and ticks**, or an explicit range - `From` and `To`
-  side by side on one line - and `Step (major ticks)` with `Minor ticks`
-  (how many minor ones sit between two major ones) on the next line,
+  side by side on one line - and `Major ticks interval` with `Minor ticks`
+  (how many minor ones sit between two major ones) on the next line.  On a
+  **logarithmic** axis the interval counts powers of the base, and a short
+  line under the box says which base; see `Direction and Scale` above,
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click

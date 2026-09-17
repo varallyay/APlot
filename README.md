@@ -970,17 +970,70 @@ whatever happens to the window.  The window is only a view of the page:
 * When the window is **smaller**, scrollbars appear and the page can be
   moved about: with the **wheel** (`Shift`+wheel sideways), by dragging with
   the **middle button**, or with the scrollbars themselves.
-* **Zooming** changes how large the page is drawn, not what is on it:
-  `Ctrl/Cmd`+wheel zooms around the pointer - the point under it stays under
-  it - and `Ctrl/Cmd`+`+` and `Ctrl/Cmd`+`-` do the same from the keyboard.
-  `Ctrl/Cmd+0` goes back to the true size of the page.  The zoom runs from
-  15% to 600% and is shown in the message line of the toolbar.
+* **Zooming** changes how large the page is drawn, not what is on it.
+  There are three ways to it, and all three zoom around the **pointer** -
+  the point under it stays under it:
+  * `Ctrl/Cmd` held while the **wheel** turns, which is also what two
+    fingers sliding on a trackpad send;
+  * the **`-`**, the zoom and the **`+`** at the end of the toolbar, where
+    the zoom also opens a little menu of the usual ones, `Fit the window`
+    and `True size`;
+  * `Ctrl/Cmd`+`+` and `Ctrl/Cmd`+`-` from the keyboard, with `Ctrl/Cmd+0`
+    for the true size of the page.
+
+  The zoom starts at 15%, and is written both on the toolbar button and in
+  its message line.
 * The zoom is a property of the **view**, so it changes nothing that is
   saved or exported: a picture, a copy on the clipboard and an exported
   matplotlib program are always of the page itself.
 
 The size of the page is stored in the `.aplt` file together with the zoom,
 so a graph opens looking exactly as it was left.
+
+#### Zooming smoothly
+
+The whole page is drawn again at every step of a zoom, and that drawing is
+the slow part.  Three things keep it from stuttering:
+
+* **Every push is worth a fraction of a notch.**  A mouse wheel clicks once
+  and sends a big number; a trackpad sends a run of small pushes as the
+  fingers slide.  Each push moves the zoom by its own small share, so two
+  fingers glide instead of jumping.
+* **The pushes are gathered up.**  They arrive far faster than a page can be
+  drawn, so they are added together and the page is drawn **once**, at the
+  value the fingers have reached by then - never at a value they have long
+  passed.  The wait before that drawing grows with what the last one really
+  cost, so a heavy diagram keeps answering the fingers.
+* **One drawing, not three.**  Resizing the canvas used to make matplotlib
+  repaint the diagram two or three times for a single push; now the asking
+  is held back and one drawing is made at the end.
+
+Five constants at the top of `aplot.py` set the feel of it:
+
+| Constant | What it sets |
+| --- | --- |
+| `ZOOM_STEP` (1.035) | how much **one notch** zooms.  Raise it for coarser, faster steps, lower it for finer ones. |
+| `ZOOM_WHEEL_UNIT` (4.0) | what counts as **one notch** when the system sends small numbers instead of the 120 a mouse wheel clicks (macOS does this for both the wheel and the trackpad).  **Raise it if the zoom runs away under two fingers**, lower it if it is too slow to answer. |
+| `ZOOM_MAX_NOTCHES` (2.0) | the most a **single** push may zoom, so one flick cannot jump across the whole range. |
+| `ZOOM_SETTLE_MS` (15) and `ZOOM_SETTLE_MAX_MS` (120) | the shortest and the longest wait before the gathered pushes are drawn. |
+| `ZOOM_MAX_PIXELS` (6 million) | the largest the page is ever drawn.  However far you zoom in, the page stops here - a page of tens of millions of pixels would crawl.  It is why `Ctrl/Cmd`+`+` stops at a different place for a large page than for a small one. |
+| `ZOOM_BUTTON_STEP` (1.25) | one press of `-` or `+` on the toolbar. |
+| `ZOOM_SCROLL_LINES` (0.2) | how far the desk **scrolls** for one notch, in scroll units (one unit is a tenth of what the window shows). |
+| `ZOOM_PRESETS` | the percentages the zoom button's menu offers. |
+
+**Why there is no pinch gesture.**  macOS sends a pinch to **Cocoa**, and
+Tk never sees it.  It can be picked up from Cocoa with `pyobjc`, and an
+earlier version of this program did exactly that - but the gesture then
+calls back into Python from inside Tk's own event loop, where Python has
+let go of the interpreter lock, and the program dies on the spot:
+
+    Fatal Python error: PyEval_RestoreThread: the function must be called
+    with the GIL held ... the GIL is released
+
+There is no way to make that safe while Tk runs the loop, so APlot does not
+listen for the gesture at all.  What a trackpad *does* send to Tk is the
+wheel: **two fingers sliding with `Ctrl`/`Cmd` held zoom exactly as a pinch
+would**, and the `-` and `+` of the toolbar are always there.
 
 **The starting margins come from the size of the page.**  The numbers, the
 axis labels and the title are set in **points**, so the room they need is a
@@ -1023,7 +1076,7 @@ another place (see `Moving the whole graph`).
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
-| Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view (see `The page`). |
+| Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view around the pointer; the toolbar's `-`, zoom and `+` do the same (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
 | `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
 | `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
@@ -1848,8 +1901,51 @@ side by side** that decide what the axis is at all:
 | `Log (natural)` | Powers of `e`. |
 
 A logarithmic axis cannot reach zero: a range that starts at or below it is
-lifted onto the first positive decade, and the ticks are spaced by the
-scale itself rather than by `Step` and `Minor ticks`.
+lifted onto the first positive decade.
+
+**A `Log (natural)` axis is read in powers of `e`**: its numbers are
+written `e⁰`, `e¹`, `e²` ... rather than 1, 2.718, 7.389, which is what
+such an axis is for.  `Log 10` and `Log 2` keep the powers of ten and of
+two matplotlib writes for them.
+
+**`Major ticks interval` and `Minor ticks` work there too** - they simply
+count in ratios instead of distances.
+
+* **`Major ticks interval`** is how many **powers of the base** lie between
+  one major tick and the next, and the line under the box says which base
+  that is - `powers of 10`, `powers of 2`, `powers of e`.  On a `Log 10`
+  axis `1` gives the usual 1, 10, 100; `2` gives 10⁻⁴, 10⁻², 10⁰ ...;
+  `0.5` gives 1, 3.16, 10.  It works with an automatic range as well as
+  with one of your own - on a logarithmic axis the spacing of the ticks
+  and the range are two separate questions.
+* Because a hundred is a sensible interval on a linear axis and an absurd
+  one in powers of ten, **each scale keeps its own number**: switching to a
+  logarithmic scale offers `1`, switching back brings the linear number
+  you had.
+* **`Minor ticks`** stand on the **whole numbers** inside the interval -
+  2, 3, ... 9 within a decade - because that is what a reader of a
+  logarithmic axis looks for.  The number says how many are drawn, and the
+  ones kept are those that come nearest to standing at even distances on
+  the paper:
+
+  | Between 1 and 10 | The minor ticks |
+  | --- | --- |
+  | `1` | 3 |
+  | `2` | 2 and 5 |
+  | `3` | 2, 3 and 6 |
+  | `8` | 2, 3, 4, 5, 6, 7, 8, 9 - the whole decade |
+
+  An interval that holds **no whole number** - a `Log 2` axis holds none
+  between 1 and 2 - or fewer than were asked for is divided into equal
+  parts of the **value** instead: one minor tick is then the half (1.5 on
+  a `Log 2` axis), three are the quarters (1.25, 1.5, 1.75).
+
+  As on a linear axis, the minor ticks carry no numbers of their own.
+
+One limit keeps a number typed in haste - or left in an older file, where
+the interval meant nothing on a logarithmic axis - from asking the
+impossible: an interval **wider than the axis itself** would leave a single
+tick or none, so it is read as one power.
 
 The **right hand Y axis** is the one whose Direction says the most:
 
@@ -1884,8 +1980,10 @@ place on the page.
 * the **font size** of the numbers with their **Colour** next to it, and
   `Number offset [px]` (measured from the end of the tick marks),
 * **Automatic range and ticks**, or an explicit range - `From` and `To`
-  side by side on one line - and `Step (major ticks)` with `Minor ticks`
-  (how many minor ones sit between two major ones) on the next line,
+  side by side on one line - and `Major ticks interval` with `Minor ticks`
+  (how many minor ones sit between two major ones) on the next line.  On a
+  **logarithmic** axis the interval counts powers of the base, and a short
+  line under the box says which base; see `Direction and Scale` above,
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click
