@@ -852,7 +852,7 @@ DEFAULTS = {
         "title_template": "Data visualization as a function of {x}",
         "y_label": "Y values",
         "line_style": "Solid", "line_width": 1.5,
-        "marker": "Circle", "marker_size": 7.0,
+        "marker": "Circle", "marker_size": 8.0,
         "marker_edge_width": 1.0, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
         "legend_frame": False, "legend_edge_color": "#000000",
@@ -8902,6 +8902,106 @@ class DataTable(ttk.Frame):
 # interactive plot window
 # --------------------------------------------------------------------------
 
+def style_factor(was_width, was_height, width, height):
+    """How much larger the graph has become, as one single number.
+
+    The two axes may not have changed by the same amount (one of them can
+    run into the edge of the page first), and a font has only one size, so
+    the two are averaged the way an area is: the square root of their
+    product.  Two axes both made ten per cent longer give exactly 1.1.
+    """
+    try:
+        x_factor = float(width) / float(was_width)
+        y_factor = float(height) / float(was_height)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 1.0
+    if not (np.isfinite(x_factor) and np.isfinite(y_factor)):
+        return 1.0
+    if x_factor <= 0.0 or y_factor <= 0.0:
+        return 1.0
+    return float(np.sqrt(x_factor * y_factor))
+
+
+def scale_style_document(document, factor):
+    """Every size drawn on the paper, multiplied by `factor`.
+
+    `Resize graph` does not only change the box the curves are drawn in:
+    the whole diagram grows or shrinks with it, the way a picture does.
+    A graph whose axes are twice as long therefore carries numbers twice
+    as large, lines twice as thick and tick marks twice as long.
+
+    Only the numbers that are a **length or a font size on the paper** are
+    touched.  The data, the ranges, the colours, the number of ticks and
+    the places of the objects are left exactly as they are - a place is a
+    fraction of the plot area, so it follows the plot area by itself.
+
+    Font sizes are whole points, so they are rounded to the nearest point
+    and never fall below one; every other size keeps its exact value.
+    """
+    factor = float(factor)
+    if not np.isfinite(factor) or factor <= 0.0 or abs(factor - 1.0) < 1e-12:
+        return document
+
+    def font(value):
+        try:
+            return max(1, int(round(float(value) * factor)))
+        except (TypeError, ValueError):
+            return value
+
+    def length(value):
+        try:
+            return float(value) * factor
+        except (TypeError, ValueError):
+            return value
+
+    def touch(holder, names, how):
+        if not isinstance(holder, dict):
+            return
+        for name in names:
+            if holder.get(name) is not None:
+                holder[name] = how(holder[name])
+
+    touch(document.get("title"), ("size",), font)
+    touch(document.get("title"), ("pad",), length)
+    touch(document.get("legend"), ("size",), font)
+    touch(document.get("frame"),
+          ("width", "major_tick_length", "minor_tick_length"), length)
+    for axis in (document.get("axes") or {}).values():
+        touch(axis, ("label_size", "tick_size"), font)
+        touch(axis, ("label_pad", "tick_pad"), length)
+        if isinstance(axis, dict):
+            touch(axis.get("grid"), ("width",), length)
+    offsets = document.get("text_offsets") or {}
+    for name, value in list(offsets.items()):
+        try:                      # how far a text was dragged, in pixels
+            offsets[name] = [float(value[0]) * factor,
+                             float(value[1]) * factor]
+        except (TypeError, ValueError, IndexError):
+            pass
+    for curve in document.get("series") or ():
+        if not isinstance(curve, dict):
+            continue
+        touch(curve, ("linewidth", "markersize", "markeredgewidth"), length)
+        touch(curve, ("legend_size",), font)
+        # the width of a bar is a fraction of the gap between two of them,
+        # and the number of bins is a count: neither is a size on the paper
+        touch(curve.get("bar_cfg"), ("edgewidth",), length)
+        touch(curve.get("error_cfg"),
+              ("capsize", "capthick", "elinewidth"), length)
+        touch(curve.get("histogram_cfg"), ("edgewidth",), length)
+        touch(curve.get("stairs_cfg"), ("width",), length)
+        touch(curve.get("pie_cfg"), ("edgewidth",), length)
+        touch(curve.get("pie_cfg"),
+              ("label_size", "name_size", "pct_size"), font)
+    for shape in document.get("shapes") or ():
+        touch(shape, ("width",), length)      # the line around a drawing
+    for arrow in document.get("arrows") or ():
+        touch(arrow, ("width", "size"), length)
+    for note in document.get("notes") or ():
+        touch(note, ("size",), font)
+    return document
+
+
 class PlotWindow(tk.Toplevel):
     """Figure window: all plot related interaction lives here."""
 
@@ -16331,6 +16431,11 @@ class PlotWindow(tk.Toplevel):
         kept inside the page; everything drawn in it - the curves, the
         legend boxes, the text boxes, the drawings and the arrows - keeps
         its place inside the plot area and follows.
+
+        The **look** of the diagram follows as well: the fonts, the line
+        widths, the tick marks and the distances of the texts are all
+        multiplied by the same factor (see `scale_style_document`), so a
+        graph made larger is the very same picture, only larger.
         """
         factor = float(factor)
         if factor <= 0:
@@ -16351,6 +16456,10 @@ class PlotWindow(tk.Toplevel):
         with self.changed("the size of the graph"):
             self.apply_frame({**cfg, "left": left, "bottom": bottom,
                               "x_length": new_width, "y_length": new_height})
+            # the axes may have run into the edge of the page, so the step
+            # the drawing really took is measured, not the one asked for
+            self.scale_graph_style(style_factor(width, height,
+                                                new_width, new_height))
         self.flash(f"The graph is {'larger' if factor > 1 else 'smaller'} - "
                    f"{new_width * 100:.0f}% x {new_height * 100:.0f}% of the page")
         return True
@@ -16360,13 +16469,37 @@ class PlotWindow(tk.Toplevel):
 
         It is the layout the program starts with - as large as the plot
         area can be while the numbers, the axis labels and the title still
-        have their room around it.
+        have their room around it.  The fonts, the line widths and the
+        tick marks follow the axes here too, so a graph that was made
+        smaller and then fitted to the page again is the one it started as.
         """
         left, bottom, width, height = self.default_position
+        was_width = float(self.frame_cfg.get("x_length") or width)
+        was_height = float(self.frame_cfg.get("y_length") or height)
         with self.changed("the size of the graph"):
             self.apply_frame({**self.frame_cfg, "left": left, "bottom": bottom,
                               "x_length": width, "y_length": height})
+            self.scale_graph_style(style_factor(was_width, was_height,
+                                                width, height))
         self.flash("The graph fills the page again")
+        return True
+
+    def scale_graph_style(self, factor):
+        """Multiply every size drawn on the paper by `factor`.
+
+        It belongs to `Resize graph` alone: nothing else in the program
+        changes the look of a diagram behind the user's back.  Dragging
+        the end of an axis, typing a length into `Frame and origin` or
+        resizing the window all leave the fonts and the lines exactly as
+        they were.
+        """
+        try:
+            factor = float(factor)
+        except (TypeError, ValueError):
+            return False
+        if not np.isfinite(factor) or factor <= 0.0 or abs(factor - 1.0) < 1e-9:
+            return False
+        self.apply_state(scale_style_document(self.to_state(), factor))
         return True
 
     def move_plot_area(self, left, bottom, redraw=True):
@@ -18043,6 +18176,43 @@ This changes the **graph on the page**, not the page and not the window:
 `Resize graph` makes the drawing itself bigger or smaller, the zoom only
 changes how large the page is shown, and the size of the page is set by
 `Page width` and `Page height` in the settings.
+
+#### The whole look is scaled with the graph
+
+`Resize graph` does not only move the four sides of the plot area: it
+scales the **whole drawing**, the way a picture is scaled.  Every size
+that is a length or a font on the paper is multiplied by the same factor
+as the axes, so a graph whose axes are **twice as long** is drawn with
+
+* a title, axis labels, numbers and legend texts of **twice the font
+  size** (12 pt becomes 24 pt),
+* curves **twice as thick** and markers twice as large (a line width of
+  1.5 becomes 3.0), with their edges to match,
+* **tick marks twice as long** - major and minor - and a frame and grid
+  lines twice as thick,
+* the numbers, the axis labels and the title standing **twice as far**
+  from the axes (`Number offset`, `Label offset` and `Title distance`),
+* the drawings, the arrows and the text boxes carrying twice as thick
+  lines, twice as large arrow heads and twice as large a font.
+
+Nothing else changes: the data, the ranges, the number of ticks, the
+colours and the **places** of everything in the plot area stay exactly as
+they are.  A place is kept as a fraction of the plot area, so it follows
+the plot area by itself and a text box that stood in the top right corner
+stands there afterwards too.  Font sizes are whole points, so they are
+rounded to the nearest point (and never fall below one).
+
+`Fit to page` scales the sizes back in the same way, so a graph that was
+made smaller a few times and then fitted to the page again is the graph it
+started as.  When the two axes did not change by the same amount - one of
+them can reach the edge of the page first - the factor used is the average
+of the two, the square root of their product.
+
+**Only this menu does it.**  Dragging the end of an axis, typing an axis
+length into `Frame and origin`, moving the graph about, resizing the
+window and zooming the view all leave the fonts and the line widths
+exactly where the user set them.  And every `Resize graph` choice is a
+single step of `Edit > Undo`, sizes included.
 
 ### Which frame lines are drawn
 

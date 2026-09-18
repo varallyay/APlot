@@ -1316,6 +1316,43 @@ This changes the **graph on the page**, not the page and not the window:
 changes how large the page is shown, and the size of the page is set by
 `Page width` and `Page height` in the settings.
 
+#### The whole look is scaled with the graph
+
+`Resize graph` does not only move the four sides of the plot area: it
+scales the **whole drawing**, the way a picture is scaled.  Every size
+that is a length or a font on the paper is multiplied by the same factor
+as the axes, so a graph whose axes are **twice as long** is drawn with
+
+* a title, axis labels, numbers and legend texts of **twice the font
+  size** (12 pt becomes 24 pt),
+* curves **twice as thick** and markers twice as large (a line width of
+  1.5 becomes 3.0), with their edges to match,
+* **tick marks twice as long** - major and minor - and a frame and grid
+  lines twice as thick,
+* the numbers, the axis labels and the title standing **twice as far**
+  from the axes (`Number offset`, `Label offset` and `Title distance`),
+* the drawings, the arrows and the text boxes carrying twice as thick
+  lines, twice as large arrow heads and twice as large a font.
+
+Nothing else changes: the data, the ranges, the number of ticks, the
+colours and the **places** of everything in the plot area stay exactly as
+they are.  A place is kept as a fraction of the plot area, so it follows
+the plot area by itself and a text box that stood in the top right corner
+stands there afterwards too.  Font sizes are whole points, so they are
+rounded to the nearest point (and never fall below one).
+
+`Fit to page` scales the sizes back in the same way, so a graph that was
+made smaller a few times and then fitted to the page again is the graph it
+started as.  When the two axes did not change by the same amount - one of
+them can reach the edge of the page first - the factor used is the average
+of the two, the square root of their product.
+
+**Only this menu does it.**  Dragging the end of an axis, typing an axis
+length into `Frame and origin`, moving the graph about, resizing the
+window and zooming the view all leave the fonts and the line widths
+exactly where the user set them.  And every `Resize graph` choice is a
+single step of `Edit > Undo`, sizes included.
+
 ### Which frame lines are drawn
 
 `Frame and origin` offers four frame styles.  `Full frame` and the two
