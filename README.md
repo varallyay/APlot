@@ -1072,7 +1072,7 @@ another place (see `Moving the whole graph`).
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
-| Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
+| Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter.  On a **picture** the four **corner** points keep its proportions and the four **side** points squeeze or stretch it (see `Resizing with the control points`). |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
@@ -1432,9 +1432,38 @@ drawing is true of it:
 * `Ctrl/Cmd+C` copies it and `Delete` removes it.
 
 It is laid at its **own proportions** to begin with, taking about a third
-of the width of the plot area; resizing is free, and
-`Its own proportions` in its properties undoes a squeeze, keeping the
-width.  A picture is never rotated, so it has no round handle above it.
+of the width of the plot area, and `Its own proportions` in its properties
+undoes a squeeze at any time, keeping the width.  A picture is never
+rotated, so it has no round handle above it.
+
+#### Resizing with the control points
+
+The eight control points of a selected object do two different things, and
+which is which is the same everywhere in the program:
+
+* the four points at the **corners** resize the object **diagonally**, and
+* the four points in the **middle of the sides** move that one side only,
+  so they squeeze the object or stretch it.
+
+For a **picture** the corners also **keep its proportions**.  A photograph
+pulled by a corner therefore stays the photograph it was - never a little
+taller or a little wider than it should be - however far the corner is
+dragged, and in whatever direction: the object follows the longer of the
+two directions the pointer went, and the corner opposite the one being
+dragged stays exactly where it is.  The side points are left free on
+purpose: they are the way to compress or elongate a picture deliberately.
+
+Holding **Shift** while dragging a corner **turns the rule around**.  On a
+picture `Shift` lets the corner resize it freely, and on the drawings -
+rectangles, ellipses, triangles and the rest, whose corners resize freely
+by default - `Shift` makes the corner keep the proportions the object has
+at that moment.  So a circle is kept a circle by holding `Shift`, and a
+logo is squashed on purpose in the same way.
+
+The proportions are measured **on the screen**, not in the coordinates of
+the axes, so a picture stays undistorted whatever the shape of the plot
+area, and it stays undistorted after the graph itself has been made
+smaller or larger.
 
 Its **properties** are short: `Frame` draws a line around it (style,
 thickness, colour - switched off to begin with) and `Opacity (0-1)` lets

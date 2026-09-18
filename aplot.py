@@ -295,6 +295,11 @@ ARROW_HEADS = [("Triangle head", "triangle"), ("Chevron head", "chevron"),
 # corners first, then the middle of the sides
 HANDLE_COUNT = 8
 ROTATE_HANDLE = 8           # the round control point above the object
+# the eight control points of a drawn object: the four corners come first,
+# then the middles of the four sides.  A corner may keep the proportions of
+# what it resizes; a side always stretches or squashes it.
+CORNER_HANDLES = (0, 1, 2, 3)
+SIDE_HANDLES = (4, 5, 6, 7)
 ROTATE_GAP = 26.0           # pixels between the object and that point
 ROTATE_SNAP = 15.0          # degrees, while Shift is held
 MIN_SHAPE_SIZE = 0.01       # in axes coordinates
@@ -847,7 +852,7 @@ DEFAULTS = {
         "title_template": "Data visualization as a function of {x}",
         "y_label": "Y values",
         "line_style": "Solid", "line_width": 1.5,
-        "marker": "Circle", "marker_size": 8.0,
+        "marker": "Circle", "marker_size": 7.0,
         "marker_edge_width": 1.0, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
         "legend_frame": False, "legend_edge_color": "#000000",
@@ -15080,7 +15085,43 @@ class PlotWindow(tk.Toplevel):
 
     OPPOSITE_HANDLE = {0: 2, 1: 3, 2: 0, 3: 1, 4: 6, 5: 7, 6: 4, 7: 5}
 
-    def _resize_shape(self, key, index, point):
+    @staticmethod
+    def _resize_ratio(drag, shift):
+        """The proportions this drag has to keep, or None to stretch freely.
+
+        A **picture** keeps its own shape when a corner is dragged - that
+        is what a picture is - while any other drawing is free.  `Shift`
+        turns the rule round, so a picture can be squashed on purpose and a
+        rectangle can be kept square.
+        """
+        if drag.get("index") not in CORNER_HANDLES:
+            return None                    # a side always stretches
+        locked = bool(drag.get("locked"))
+        return drag.get("ratio") if locked != bool(shift) else None
+
+    def shape_ratio(self, state):
+        """How wide one object is against its height, **on the screen**.
+
+        The plot area is not square, so the proportions a reader sees are
+        not the width and the height the object is stored with: they have
+        to be measured in pixels.
+        """
+        try:
+            wide = float(state["w"]) * self._axes_aspect()
+            tall = float(state["h"])
+            return wide / tall if tall > 1e-12 else None
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    def _resize_shape(self, key, index, point, ratio=None):
+        """Drag one control point of an object to its new place.
+
+        `ratio` keeps the proportions: the box is made to that width
+        against height (as it looks on the screen) around the control
+        point **opposite** the one being dragged, which is what a corner
+        of a picture does.  A side control point never gets one, so it
+        stretches or squashes the object as before.
+        """
         state = self.shape_state[key]
         angle = self.angle_of(state)
         anchor_before = None
@@ -15093,14 +15134,33 @@ class PlotWindow(tk.Toplevel):
             point = self._turn_point(point, self.shape_centre(state), -angle)
         x0, y0 = state["x"], state["y"]
         x1, y1 = x0 + state["w"], y0 + state["h"]
-        if index in (0, 3, 7):
-            x0 = point[0]
-        elif index in (1, 2, 5):
-            x1 = point[0]
-        if index in (0, 1, 4):
-            y0 = point[1]
-        elif index in (2, 3, 6):
-            y1 = point[1]
+        if ratio and index in CORNER_HANDLES:
+            # the corner across the box stays where it is, and the box is
+            # made as large as the pointer asks for while keeping its shape
+            aspect = self._axes_aspect() or 1.0
+            held_x = x1 if index in (0, 3) else x0
+            held_y = y1 if index in (0, 1) else y0
+            wide = max(abs(float(point[0]) - held_x) * aspect,
+                       MIN_SHAPE_SIZE * aspect)
+            tall = max(abs(float(point[1]) - held_y), MIN_SHAPE_SIZE)
+            if wide / tall > ratio:            # too wide: grow it downwards
+                tall = wide / ratio
+            else:
+                wide = tall * ratio
+            new_w, new_h = wide / aspect, tall
+            x0, x1 = ((held_x - new_w, held_x) if point[0] < held_x
+                      else (held_x, held_x + new_w))
+            y0, y1 = ((held_y - new_h, held_y) if point[1] < held_y
+                      else (held_y, held_y + new_h))
+        else:
+            if index in (0, 3, 7):
+                x0 = point[0]
+            elif index in (1, 2, 5):
+                x1 = point[0]
+            if index in (0, 1, 4):
+                y0 = point[1]
+            elif index in (2, 3, 6):
+                y1 = point[1]
         state["x"], state["w"] = min(x0, x1), max(MIN_SHAPE_SIZE, abs(x1 - x0))
         state["y"], state["h"] = min(y0, y1), max(MIN_SHAPE_SIZE, abs(y1 - y0))
         if anchor_before is not None:
@@ -15516,7 +15576,8 @@ class PlotWindow(tk.Toplevel):
                 state["y"], state["h"] = min(anchor[1], point[1]), abs(point[1] - anchor[1])
                 self.refresh_shape(key)
             elif drag["mode"] == "resize":
-                self._resize_shape(key, drag["index"], point)
+                self._resize_shape(key, drag["index"], point,
+                                   ratio=self._resize_ratio(drag, snap))
             else:
                 state = self.shape_state[key]
                 state["x"] = drag["origin"][0] + point[0] - drag["start"][0]
@@ -16121,6 +16182,11 @@ class PlotWindow(tk.Toplevel):
                   and self.shape_state[key]["kind"] in OPEN_SHAPES):
                 mode = "line-end"         # a line is dragged by its two ends
             self._shape_drag = {"key": key, "index": index, "mode": mode}
+            if mode == "resize" and kind == "shape":
+                state = self.shape_state[key]
+                self._shape_drag["ratio"] = self.shape_ratio(state)
+                self._shape_drag["locked"] = (state.get("kind")
+                                              == PICTURE_KIND)
             if mode == "line-end":
                 # the end that stays is remembered, so that dragging one end
                 # past the other one does not swap them mid-drag
@@ -17734,7 +17800,7 @@ another place (see `Moving the whole graph`).
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
-| Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter. |
+| Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter.  On a **picture** the four **corner** points keep its proportions and the four **side** points squeeze or stretch it (see `Resizing with the control points`). |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
 | Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
@@ -18094,9 +18160,38 @@ drawing is true of it:
 * `Ctrl/Cmd+C` copies it and `Delete` removes it.
 
 It is laid at its **own proportions** to begin with, taking about a third
-of the width of the plot area; resizing is free, and
-`Its own proportions` in its properties undoes a squeeze, keeping the
-width.  A picture is never rotated, so it has no round handle above it.
+of the width of the plot area, and `Its own proportions` in its properties
+undoes a squeeze at any time, keeping the width.  A picture is never
+rotated, so it has no round handle above it.
+
+#### Resizing with the control points
+
+The eight control points of a selected object do two different things, and
+which is which is the same everywhere in the program:
+
+* the four points at the **corners** resize the object **diagonally**, and
+* the four points in the **middle of the sides** move that one side only,
+  so they squeeze the object or stretch it.
+
+For a **picture** the corners also **keep its proportions**.  A photograph
+pulled by a corner therefore stays the photograph it was - never a little
+taller or a little wider than it should be - however far the corner is
+dragged, and in whatever direction: the object follows the longer of the
+two directions the pointer went, and the corner opposite the one being
+dragged stays exactly where it is.  The side points are left free on
+purpose: they are the way to compress or elongate a picture deliberately.
+
+Holding **Shift** while dragging a corner **turns the rule around**.  On a
+picture `Shift` lets the corner resize it freely, and on the drawings -
+rectangles, ellipses, triangles and the rest, whose corners resize freely
+by default - `Shift` makes the corner keep the proportions the object has
+at that moment.  So a circle is kept a circle by holding `Shift`, and a
+logo is squashed on purpose in the same way.
+
+The proportions are measured **on the screen**, not in the coordinates of
+the axes, so a picture stays undistorted whatever the shape of the plot
+area, and it stays undistorted after the graph itself has been made
+smaller or larger.
 
 Its **properties** are short: `Frame` draws a line around it (style,
 thickness, colour - switched off to begin with) and `Opacity (0-1)` lets
