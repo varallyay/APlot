@@ -164,8 +164,8 @@ APP_ICON_ROUNDING = 0.20        # how round the corners of the square are
 # without it the square fills the Dock tile edge to edge and reads bigger
 # than the icons beside it.  0.0 fills the tile completely.
 APP_ICON_MARGIN = 0.1
-APP_ICON_FLOOR = 0.02           # where the foot of the curve lies ...
-APP_ICON_CEILING = 0.94         # ... and how high its tallest peak reaches
+APP_ICON_FLOOR = 0.05           # where the foot of the curve lies ...
+APP_ICON_CEILING = 0.9         # ... and how high its tallest peak reaches
 # the peaks the spectrum of the icon is built from: (centre, width, height)
 APP_ICON_PEAKS = ((0.58, 0.170, 0.24), (0.44, 0.024, 0.22),
                   (0.525, 0.028, 0.48), (0.655, 0.038, 1.00),
@@ -255,12 +255,12 @@ FRAME_STYLES = [
 ]
 
 # matplotlib's own subplot position: left, bottom, width, height
-DEFAULT_POSITION = (0.13, 0.125, 0.775, 0.77)
-# the room the texts around the plot area really need, in inches: the tick
+DEFAULT_POSITION = (0.36, 0.36, 0.275, 0.275)
+## the room the texts around the plot area really need, in cm: the tick
 # numbers and the axis label on the left and below, a little air on the
 # right, and the title above.  The fractions of the page are worked out
 # from these, so that the labels fit whatever size the page is given.
-FIT_MARGINS = {"left": 1.25, "bottom": 0.85, "right": 0.35, "top": 0.55}
+FIT_MARGINS = {"left": 3.175, "bottom": 4.699, "right": 0.889, "top": 1.397}
 SIZE_UNITS = ["Fraction of page", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
@@ -474,10 +474,10 @@ MAX_AUTO_COLUMNS = 64      # a blank sheet never grows past this
 HISTOGRAM_BINS = 20        # a histogram counts into this many bins by default
 MAX_HISTOGRAM_BINS = 1000  # ... and never into more than this
 ROW_AXIS_LABEL = "Row"     # the X axis when the row number is the X value
-CLIPBOARD_DPI = 200        # the picture put on the clipboard is a good one
+CLIPBOARD_DPI = 300        # the picture put on the clipboard is a good one
 SCRIPT_SUFFIX = ".py"      # the diagram exported as a matplotlib program
-SPIN_WIDTH = 4             # characters in the little number boxes
-ENTRY_WIDTH = 12           # characters in the range and style boxes
+SPIN_WIDTH = 3             # characters in the little number boxes
+ENTRY_WIDTH = 7           # characters in the range and style boxes
 COMBO_WIDTH = 14           # characters in the style lists
 SELECT_FACE = to_rgba(SELECT_COLOR, 0.18)     # veil over a selected text
 SELECT_EDGE = to_rgba(SELECT_COLOR, 0.90)
@@ -828,7 +828,7 @@ def use_font_family(name):
 DEFAULTS = {
     "window": {
         "main_width": 950, "main_height": 520,
-        "plot_width": 960, "plot_height": 720,
+        "plot_width": 1200, "plot_height": 900,
         "dialogs_on_top": False,
     },
     # not shown in the settings window: what the program remembers by itself
@@ -836,17 +836,17 @@ DEFAULTS = {
         "ask_app_bundle": True,      # offer to build APlot.app in the Dock
     },
     "table": {
-        "rows": 12,
-        "columns": "X,Y1,Y2,Y3",
+        "rows": 40,
+        "columns": "X,Y1,Y2,Y3,Y4,Y5,Y6,Y7,Y8,Y9",
         "column_width": 110,
         "font_size": 10,
         "auto_extend": True,
     },
     "plot": {
-        "fig_width": 6.5, "fig_height": 4.8, "dpi": 100,
+        "fig_width": 29.7, "fig_height": 21.0, "dpi": 100,
         "title_template": "Data visualization as a function of {x}",
         "y_label": "Y values",
-        "line_style": "Dashed", "line_width": 1.5,
+        "line_style": "Solid", "line_width": 1.5,
         "marker": "Circle", "marker_size": 8.0,
         "marker_edge_width": 1.0, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
@@ -859,10 +859,10 @@ DEFAULTS = {
     },
     "fonts": {
         "family": DEFAULT_FONT_FAMILY,
-        "title": 18, "axis_label": 18, "tick_label": 16, "legend": 14,
+        "title": 12, "axis_label": 12, "tick_label": 12, "legend": 12,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
-        "title_pad": 12.0, "axis_label_pad": 7.0, "tick_label_pad": 10.0,
+        "title_pad": 12.0, "axis_label_pad": 6.0, "tick_label_pad": 7.0,
     },
     "grid": {
         "major": False, "minor": False, "color": "#b0b0b0",
@@ -914,8 +914,8 @@ SETTINGS_SPEC = [
     ]),
     ("plot", "Plot", [
         # a list of two settings puts them side by side on one line
-        [("fig_width", "Page width [inch]", "float"),
-         ("fig_height", "Page height [inch]", "float")],
+        [("fig_width", "Page width [cm]", "float"),
+         ("fig_height", "Page height [cm]", "float")],
         ("dpi", "Resolution [dpi]", "int"),
         ("title_template", "Title ({x} = name of the X column)", "text"),
         ("y_label", "Default Y axis label", "text"),
@@ -929,8 +929,8 @@ SETTINGS_SPEC = [
         ("legend_location", "Legend position", "choice", LEGEND_LOCATIONS),
         ("legend_frame", "Legend box frame", "bool"),
         ("legend_edge_color", "Legend frame colour", "color"),
-        ("legend_background", "Legend background", "color"),
-        ("legend_transparent", "Transparent legend background", "bool"),
+        [("legend_background", "Legend background", "color"),
+         ("legend_transparent", "Transparent legend background", "bool")],
         ("fill_under", "Fill under the curves", "bool"),
         ("fill_follows_line", "Fill colour follows the curve", "bool"),
         [("fill_color", "Fill colour (when it does not)", "color"),
@@ -1488,14 +1488,35 @@ class PairedFields:
 
     @staticmethod
     def _pair(box, row, first_text, first_widget, second_text, second_widget,
-              pady=3):
+              pady=2):
         """Two settings on one line: label, widget, label, widget."""
-        ttk.Label(box, text=first_text).grid(row=row, column=0, sticky="w",
-                                             padx=(0, 8), pady=pady)
+        if isinstance(first_text, str):
+            label1 = ttk.Label(box, text=first_text)
+            text1 = first_text
+        else:
+            label1 = first_text
+            text1 = first_text.cget("text")
+            
+        label1.grid(row=row, column=0, sticky="w", padx=(0, 4), pady=pady)
         first_widget.grid(row=row, column=1, sticky="w", pady=pady)
-        ttk.Label(box, text=second_text).grid(row=row, column=2, sticky="w",
-                                              padx=(16, 8), pady=pady)
+        if text1 and first_widget:
+            try:
+                Tooltip(first_widget, "Set the " + text1.rstrip(":").replace(" [px]", " in pixels").lower())
+            except Exception: pass
+            
+        if isinstance(second_text, str):
+            label2 = ttk.Label(box, text=second_text)
+            text2 = second_text
+        else:
+            label2 = second_text
+            text2 = second_text.cget("text")
+            
+        label2.grid(row=row, column=2, sticky="w", padx=(8, 4), pady=pady)
         second_widget.grid(row=row, column=3, sticky="w", pady=pady)
+        if text2 and second_widget:
+            try:
+                Tooltip(second_widget, "Set the " + text2.rstrip(":").replace(" [px]", " in pixels").lower())
+            except Exception: pass
         return first_widget, second_widget
 
     @staticmethod
@@ -1503,6 +1524,11 @@ class PairedFields:
         """One widget across the whole width of a section."""
         widget.grid(row=row, column=0, columnspan=columnspan, sticky="ew",
                     pady=pady)
+        try:
+            if isinstance(widget, ttk.Checkbutton):
+                Tooltip(widget, "Toggle " + widget.cget("text").lower())
+        except Exception:
+            pass
         return widget
 
     def _align_columns(self, boxes):
@@ -1658,7 +1684,7 @@ class ColorSwatch(ttk.Frame):
                                  highlightthickness=1, highlightbackground="#777")
         self.preview.pack(side="left")
         self.preview.bind("<Button-1>", lambda _e: self.choose())
-        ttk.Button(self, text="Choose...", width=10, command=self.choose).pack(
+        ttk.Button(self, text="Choose...", width=6, command=self.choose).pack(
             side="left", padx=(5, 0))
         self._redraw()
 
@@ -2649,10 +2675,14 @@ class ToolDialog(tk.Toplevel):
             take_focus()
 
     @staticmethod
-    def field(parent, row, text, widget, pady=3):
+    def field(parent, row, text, widget, pady=2):
         ttk.Label(parent, text=text).grid(row=row, column=0, sticky="w",
-                                          padx=(0, 8), pady=pady)
+                                          padx=(0, 4), pady=pady)
         widget.grid(row=row, column=1, sticky="w", pady=pady)
+        if text and widget:
+            try:
+                Tooltip(widget, "Set the " + text.rstrip(":").replace(" [px]", " in pixels").lower())
+            except Exception: pass
         return widget
 
 
@@ -3962,6 +3992,7 @@ class AxisTab(PairedFields, ttk.Frame):
         self._axis_color = safe_hex(cfg.get("axis_color", "#000000"), "#000000")
         self.label_on_var = tk.BooleanVar(value=cfg.get("label_on", True))
         self.ticks_on_var = tk.BooleanVar(value=cfg.get("ticks_on", True))
+        self.tick_labels_on_var = tk.BooleanVar(value=cfg.get("tick_labels_on", True))
         self.gmajor_var = tk.BooleanVar(value=grid["major"])
         self.gminor_var = tk.BooleanVar(value=grid["minor"])
         self.direction_var = tk.StringVar(
@@ -4052,8 +4083,12 @@ class AxisTab(PairedFields, ttk.Frame):
     def _section(self, title, variable, **pack):
         """A section whose title is its own check button."""
         box = ttk.LabelFrame(self, padding=8)
-        check = ttk.Checkbutton(box, text=title, variable=variable)
-        box.configure(labelwidget=check)
+        if variable is not None:
+            check = ttk.Checkbutton(box, text=title, variable=variable)
+            box.configure(labelwidget=check)
+        else:
+            box.configure(text=title)
+            check = None
         box.pack(fill="x", **pack)
         return box, check
 
@@ -4081,13 +4116,14 @@ class AxisTab(PairedFields, ttk.Frame):
 
     def _build_range_box(self):
         """The numbers on the axis: their font, the range and the ticks."""
-        box, check = self._section("Tick range, labels and fonts",
-                                   self.ticks_on_var, pady=(10, 0))
-        self.range_box, self.ticks_check = box, check
+        box, check_section = self._section("Tick range, labels and fonts",
+                                           self.ticks_on_var, pady=(10, 0))
+        self.range_box, self.ticks_check = box, check_section
         # the size and the colour of the numbers stand side by side
         self.tick_color = ColorSwatch(box, self._tick_color)
+        check = ttk.Checkbutton(box, text="Numbers font size:", variable=self.tick_labels_on_var)
         self._pair(box, 0,
-                   "Numbers (ticks) font size:",
+                   check,
                    ttk.Spinbox(box, from_=4, to=48, increment=1, width=SPIN_WIDTH,
                                textvariable=self.tick_size_var),
                    "Colour:", self.tick_color)
@@ -4166,6 +4202,7 @@ class AxisTab(PairedFields, ttk.Frame):
             "axis_color": self.axis_color.color,
             "label_on": bool(self.label_on_var.get()),
             "ticks_on": bool(self.ticks_on_var.get()),
+            "tick_labels_on": bool(self.tick_labels_on_var.get()),
             "direction": self.direction_code(),
             "scale": code_of(AXIS_SCALES, self.scale_var.get(), "linear"),
             "grid": {
@@ -4219,13 +4256,13 @@ class FrameTab(ttk.Frame):
                                       state="readonly", values=names(FRAME_STYLES),
                                       width=26))
         ToolDialog.field(box, 1, "Thickness:",
-                         ttk.Spinbox(box, from_=0, to=10, increment=0.2, width=8,
+                         ttk.Spinbox(box, from_=0, to=10, increment=0.2, width=SPIN_WIDTH,
                                      textvariable=self.width_var))
         ToolDialog.field(box, 2, "Major tick length:",
-                         ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=8,
+                         ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=SPIN_WIDTH,
                                      textvariable=self.major_len_var))
         ToolDialog.field(box, 3, "Minor tick length:",
-                         ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=8,
+                         ttk.Spinbox(box, from_=0, to=30, increment=0.5, width=SPIN_WIDTH,
                                      textvariable=self.minor_len_var))
 
     def _build_background_box(self, cfg):
@@ -4251,7 +4288,7 @@ class FrameTab(ttk.Frame):
         box.pack(fill="x", pady=(10, 0))
 
         units = ttk.Combobox(box, textvariable=self.unit_var, state="readonly",
-                             values=SIZE_UNITS, width=18)
+                             values=SIZE_UNITS, width=COMBO_WIDTH)
         ToolDialog.field(box, 0, "Units:", units)
         units.bind("<<ComboboxSelected>>", self._change_unit)
 
@@ -4262,7 +4299,7 @@ class FrameTab(ttk.Frame):
         for row, (key, text) in enumerate(labels, start=1):
             ToolDialog.field(box, row, text,
                              ttk.Entry(box, textvariable=self.value_vars[key],
-                                       width=12))
+                                       width=ENTRY_WIDTH))
         ttk.Button(box, text="Default layout", command=self._reset).grid(
             row=5, column=1, sticky="w", pady=(6, 0))
         self.hint = ttk.Label(box, foreground="#666")
@@ -4273,9 +4310,9 @@ class FrameTab(ttk.Frame):
         unit = unit or self._unit
         if unit == SIZE_UNITS[0]:
             return 1.0
-        inches = self.plot.page_size          # the page, not the window
-        size = inches[0] if key in ("left", "x_length") else inches[1]
-        return size * 2.54 if unit == "cm" else size
+        cm_size = self.plot.page_size          # the page, not the window
+        size = cm_size[0] if key in ("left", "x_length") else cm_size[1]
+        return size / 2.54 if unit == "inch" else size
 
     def _show_values(self):
         for key, var in self.value_vars.items():
@@ -4529,13 +4566,13 @@ class TitleTab(ttk.Frame):
         field(box, 0, "Text:", ttk.Entry(box, textvariable=self.title_var,
                                          width=34))
         field(box, 1, "Font size:",
-              ttk.Spinbox(box, from_=4, to=48, increment=1, width=8,
+              ttk.Spinbox(box, from_=4, to=48, increment=1, width=SPIN_WIDTH,
                           textvariable=self.title_size_var))
         self.title_color = ColorSwatch(
             box, safe_hex(plot.fonts["title_color"], "#000000"))
         field(box, 2, "Font colour:", self.title_color)
         field(box, 3, "Distance from the axes [px]:",
-              ttk.Spinbox(box, from_=-200, to=400, increment=1, width=8,
+              ttk.Spinbox(box, from_=-200, to=400, increment=1, width=SPIN_WIDTH,
                           textvariable=self.title_pad_var))
         ttk.Button(box, text="Reset dragged texts",
                    command=plot.reset_text_offsets).grid(row=4, column=1,
@@ -4548,14 +4585,14 @@ class TitleTab(ttk.Frame):
               ttk.Checkbutton(legend_box, text="Show legends",
                               variable=self.legend_visible_var))
         field(legend_box, 1, "Font size (all):",
-              ttk.Spinbox(legend_box, from_=4, to=72, increment=1, width=8,
+              ttk.Spinbox(legend_box, from_=4, to=72, increment=1, width=SPIN_WIDTH,
                           textvariable=self.legend_size_var))
         self.legend_color = ColorSwatch(
             legend_box, safe_hex(plot.fonts["legend_color"], "#000000"))
         field(legend_box, 2, "Font colour (all):", self.legend_color)
         field(legend_box, 3, "Start position:",
               ttk.Combobox(legend_box, textvariable=self.legend_loc_var,
-                           state="readonly", values=LEGEND_LOCATIONS, width=16))
+                           state="readonly", values=LEGEND_LOCATIONS, width=COMBO_WIDTH))
         ttk.Button(legend_box, text="Reset positions",
                    command=self._reset_positions).grid(row=4, column=1,
                                                        sticky="w", pady=(6, 0))
@@ -9013,7 +9050,7 @@ class PlotWindow(tk.Toplevel):
                     # every axis carries its own colour and its two switches
                     "axis_color": safe_hex(config.get("frame", "color"),
                                            "#000000"),
-                    "label_on": True, "ticks_on": True,
+                    "label_on": True, "ticks_on": True, "tick_labels_on": True,
                     # which way the axis runs, and how its numbers are spread
                     "direction": "standard", "scale": "linear",
                     "grid": dict(grid_defaults)}
@@ -9028,18 +9065,18 @@ class PlotWindow(tk.Toplevel):
                           float(plot_cfg["fig_height"]))
         self.base_dpi = float(plot_cfg["dpi"])
         self.zoom = 1.0
-        self.fig = Figure(figsize=self.page_size, dpi=self.base_dpi)
+        self.fig = Figure(figsize=(self.page_size[0] / 2.54, self.page_size[1] / 2.54), dpi=self.base_dpi)
         self.ax = self.fig.add_subplot(111)
-        self.default_position = self.fit_position()
+        self.default_position = DEFAULT_POSITION
         frame = config.section("frame")
         chosen = (float(frame["left"]), float(frame["bottom"]),
                   float(frame["x_length"]), float(frame["y_length"]))
-        # the settings offer a starting place for the plot area; while it is
-        # the one the program was built with, the page itself decides - a
-        # small page needs wider margins for the very same texts
-        if all(abs(one - other) < 1e-9
-               for one, other in zip(chosen, DEFAULT_POSITION)):
+        # Migrate old default config to the new centered quarter layout
+        if all(abs(one - other) < 1e-9 for one, other in zip(chosen, (0.35, 0.35, 0.36, 0.36))):
             chosen = self.default_position
+        
+        # We now use the exact fractions requested in the settings (DEFAULT_POSITION)
+        # instead of overriding them dynamically with fit_position().
         self.frame_cfg = {
             "style": code_of(FRAME_STYLES, frame["style"], "none"),
             "width": float(frame["width"]),
@@ -9299,8 +9336,8 @@ class PlotWindow(tk.Toplevel):
         the widget and the figure would argue about one pixel for ever.
         """
         dpi = self.render_dpi()
-        return (max(1, int(self.page_size[0] * dpi + 1e-8)),
-                max(1, int(self.page_size[1] * dpi + 1e-8)))
+        return (max(1, int(self.page_size[0] / 2.54 * dpi + 1e-8)),
+                max(1, int(self.page_size[1] / 2.54 * dpi + 1e-8)))
 
     def _fix_page_size(self):
         """Tell the figure the true size of the page again.
@@ -9313,12 +9350,12 @@ class PlotWindow(tk.Toplevel):
         """
         if getattr(self, "_fixing_page", False):
             return False
-        if (abs(self.fig.get_figwidth() - self.page_size[0]) <= 1e-6
-                and abs(self.fig.get_figheight() - self.page_size[1]) <= 1e-6):
+        if (abs(self.fig.get_figwidth() * 2.54 - self.page_size[0]) <= 1e-6
+                and abs(self.fig.get_figheight() * 2.54 - self.page_size[1]) <= 1e-6):
             return False
         self._fixing_page = True
         try:
-            self.fig.set_size_inches(*self.page_size, forward=False)
+            self.fig.set_size_inches(self.page_size[0] / 2.54, self.page_size[1] / 2.54, forward=False)
         except (ValueError, tk.TclError):
             return False
         finally:
@@ -9447,7 +9484,7 @@ class PlotWindow(tk.Toplevel):
         stay quick under the fingers.
         """
         dpi = float(self.base_dpi) * self.screen_ratio()
-        pixels = max(1.0, self.page_size[0] * self.page_size[1] * dpi * dpi)
+        pixels = max(1.0, (self.page_size[0] / 2.54) * (self.page_size[1] / 2.54) * dpi * dpi)
         return max(ZOOM_MIN, min(ZOOM_MAX, math.sqrt(ZOOM_MAX_PIXELS / pixels)))
 
     def zoom_by(self, factor, event=None):
@@ -9554,8 +9591,8 @@ class PlotWindow(tk.Toplevel):
             return self.zoom
         room_w = max(1, view.winfo_width()) - 2 * PAGE_MARGIN
         room_h = max(1, view.winfo_height()) - 2 * PAGE_MARGIN
-        page_w = self.page_size[0] * self.base_dpi * self.screen_ratio()
-        page_h = self.page_size[1] * self.base_dpi * self.screen_ratio()
+        page_w = (self.page_size[0] / 2.54) * self.base_dpi * self.screen_ratio()
+        page_h = (self.page_size[1] / 2.54) * self.base_dpi * self.screen_ratio()
         if page_w <= 0 or page_h <= 0:
             return self.zoom
         return self.set_zoom(min(room_w / page_w, room_h / page_h))
@@ -9604,7 +9641,7 @@ class PlotWindow(tk.Toplevel):
         the title - are set in points, so the room they need is a length,
         not a fraction: a small page has to keep proportionally wider
         margins for exactly the same texts.  `FIT_MARGINS` holds those
-        lengths in inches and this turns them into fractions of the page.
+        lengths in cm and this turns them into fractions of the page.
         """
         width, height = page or self.page_size
         width = max(1.0, float(width))
@@ -9618,12 +9655,12 @@ class PlotWindow(tk.Toplevel):
                 round(max(MIN_AXIS_SIZE, 1.0 - bottom - top), 4))
 
     def set_page_size(self, width, height, redraw=True):
-        """Give the page another size in inches, and lay it out again."""
+        """Give the page another size in cm, and lay it out again."""
         width = max(1.0, float(width))
         height = max(1.0, float(height))
         self.page_size = (width, height)
-        self.default_position = self.fit_position()
-        self.fig.set_size_inches(width, height)
+        self.default_position = DEFAULT_POSITION
+        self.fig.set_size_inches(width / 2.54, height / 2.54)
         self._layout_page()
         if redraw:
             self.draw()
@@ -10145,11 +10182,14 @@ class PlotWindow(tk.Toplevel):
                         "label_on": bool(self.axis_cfg[which].get("label_on",
                                                                   True)),
                         "ticks_on": bool(self.axis_cfg[which].get("ticks_on",
-                                                                  True))}
+                                                                  True)),
+                        "tick_labels_on": bool(self.axis_cfg[which].get("tick_labels_on",
+                                                                        True))}
                 for which in ("x", "y")}
             for which in ("x", "y"):
                 self.apply_axis(which, {**self.axis_cfg[which], "label": "",
-                                        "label_on": False, "ticks_on": False},
+                                        "label_on": False, "ticks_on": False,
+                                        "tick_labels_on": False},
                                 redraw=False)
             # the square itself is not touched here: the pie may already be
             # drawn (a window that opens as a pie draws it first of all)
@@ -10168,6 +10208,7 @@ class PlotWindow(tk.Toplevel):
                     "label": saved.get("label", fallback[which]),
                     "label_on": saved.get("label_on", True),
                     "ticks_on": saved.get("ticks_on", True),
+                    "tick_labels_on": saved.get("tick_labels_on", True),
                     "auto": True, "min": None, "max": None}, redraw=False)
             self._axis_memory = None
             self._pie_span = None
@@ -10222,28 +10263,32 @@ class PlotWindow(tk.Toplevel):
         x_ticks = bool(self.axis_cfg["x"].get("ticks_on", True)) and x_shown
         y_ticks = bool(self.axis_cfg["y"].get("ticks_on", True))
         y2_ticks = bool(self.axis_cfg["y2"].get("ticks_on", True))
+        x_tick_labels = x_ticks and bool(self.axis_cfg["x"].get("tick_labels_on", True))
+        y_tick_labels = y_ticks and bool(self.axis_cfg["y"].get("tick_labels_on", True))
+        y2_tick_labels = y2_ticks and bool(self.axis_cfg["y2"].get("tick_labels_on", True))
+        
         self.ax.xaxis.set_visible(x_shown)
         self.ax.xaxis.set_ticks_position("top" if top else "bottom")
         self.ax.xaxis.set_label_position("top" if top else "bottom")
         self.ax.tick_params(axis="x", which="both",
                             top=(both or top) and x_ticks,
                             bottom=(both or not top) and x_ticks,
-                            labeltop=top and x_ticks,
-                            labelbottom=(not top) and x_ticks)
+                            labeltop=top and x_tick_labels,
+                            labelbottom=(not top) and x_tick_labels)
         # with a closed frame the opposite side keeps its tick marks, but not
         # when the right hand Y axis has a scale of its own
         self.ax.yaxis.set_visible(left)
         self.ax.tick_params(axis="y", which="both",
                             left=(left or both) and y_ticks,
                             right=(both and not right) and y_ticks,
-                            labelleft=left and y_ticks, labelright=False)
+                            labelleft=left and y_tick_labels, labelright=False)
         if self.ax2 is not None:
             self.ax2.set_visible(right)
             self.ax2.yaxis.set_ticks_position("right")
             self.ax2.yaxis.set_label_position("right")
             self.ax2.tick_params(axis="y", which="both", left=False,
                                  right=right and y2_ticks,
-                                 labelleft=False, labelright=right and y2_ticks)
+                                 labelleft=False, labelright=right and y2_tick_labels)
         self._apply_y_grid()
         self._apply_axis_colors()
         # a curve that moved to the other scale changes which axes lies
@@ -11815,8 +11860,8 @@ class PlotWindow(tk.Toplevel):
             "",
             "",
             "fig = plt.figure(figsize=("
-            f"{lit(float(self.fig.get_figwidth()))}, "
-            f"{lit(float(self.fig.get_figheight()))}), dpi=DPI)",
+            f"{lit(round(self.page_size[0], 4))} / 2.54, "
+            f"{lit(round(self.page_size[1], 4))} / 2.54), dpi=DPI)",
         ]
         figure_bg = cfg.get("figure_background", "#ffffff")
         out.append("fig.set_facecolor(%s)" % lit("none" if figure_bg == "none"
@@ -11909,6 +11954,7 @@ class PlotWindow(tk.Toplevel):
                            % (name, "x" if which == "x" else "y"))
             axis_name = "x" if which == "x" else "y"
             ticks_on = bool(axis_cfg.get("ticks_on", True))
+            tick_labels_on = ticks_on and bool(axis_cfg.get("tick_labels_on", True))
             # the numbers are spread linearly or logarithmically
             scale = self.axis_scale(which)
             if scale != "linear":
@@ -11930,20 +11976,20 @@ class PlotWindow(tk.Toplevel):
                            "bottom=%s, labeltop=%s, labelbottom=%s)"
                            % ((both or top) and ticks_on,
                               (both or not top) and ticks_on,
-                              top and ticks_on, (not top) and ticks_on))
+                              top and tick_labels_on, (not top) and tick_labels_on))
             elif which == "y":
                 out.append("ax.yaxis.set_visible(%s)" % left)
                 out.append("ax.tick_params(axis='y', which='both', left=%s, "
                            "right=%s, labelleft=%s, labelright=False)"
                            % ((left or both) and ticks_on,
                               (both and not right) and ticks_on,
-                              left and ticks_on))
+                              left and tick_labels_on))
             else:
                 out.append("ax2.yaxis.set_ticks_position('right')")
                 out.append("ax2.yaxis.set_label_position('right')")
                 out.append("ax2.tick_params(axis='y', which='both', left=False, "
                            "right=%s, labelleft=False, labelright=%s)"
-                           % (ticks_on, ticks_on))
+                           % (ticks_on, tick_labels_on))
             # the limits are read as they stand: a reversed axis already
             # hands them over the other way round
             low, high = self.current_limits(which)
@@ -12442,6 +12488,7 @@ class PlotWindow(tk.Toplevel):
                 "axis_color": self.axis_color(which),
                 "label_on": bool(cfg.get("label_on", True)),
                 "ticks_on": bool(cfg.get("ticks_on", True)),
+                "tick_labels_on": bool(cfg.get("tick_labels_on", True)),
                 "direction": self.axis_direction(which),
                 "scale": self.axis_scale(which),
                 "grid": dict(cfg["grid"]),
@@ -15791,6 +15838,7 @@ class PlotWindow(tk.Toplevel):
                               "#000000")
         label_on = bool(cfg.get("label_on", stored.get("label_on", True)))
         ticks_on = bool(cfg.get("ticks_on", stored.get("ticks_on", True)))
+        tick_labels_on = bool(cfg.get("tick_labels_on", stored.get("tick_labels_on", True)))
         direction = chosen
         scale = str(cfg.get("scale", stored.get("scale", "linear")))
         if scale != "linear" and scale not in LOG_BASES:
@@ -15888,7 +15936,8 @@ class PlotWindow(tk.Toplevel):
             "label_color": label_color, "tick_color": tick_color,
             "label_pad": label_pad, "tick_pad": tick_pad,
             "axis_color": axis_color, "label_on": label_on,
-            "ticks_on": ticks_on, "direction": direction, "scale": scale,
+            "ticks_on": ticks_on, "tick_labels_on": tick_labels_on,
+            "direction": direction, "scale": scale,
             "grid": dict(grid),
         }
         # the axis runs the usual way or backwards, and a range that could
