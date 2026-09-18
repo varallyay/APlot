@@ -261,6 +261,11 @@ DEFAULT_POSITION = (0.36, 0.36, 0.275, 0.275)
 # right, and the title above.  The fractions of the page are worked out
 # from these, so that the labels fit whatever size the page is given.
 FIT_MARGINS = {"left": 3.175, "bottom": 4.699, "right": 0.889, "top": 1.397}
+# `Resize graph > Fit to page` leaves this much white in cm between the
+# edge of the page and the diagram - the diagram being everything that is
+# drawn: the plot area with its numbers, labels, title and legend boxes.
+PAGE_FIT_MARGIN = 0.5
+PAGE_FIT_ROUNDS = 6         # how many times the fit measures itself again
 SIZE_UNITS = ["Fraction of page", "cm", "inch"]
 
 LEGEND_LOCATIONS = ["best", "upper right", "upper left", "lower left",
@@ -16464,24 +16469,125 @@ class PlotWindow(tk.Toplevel):
                    f"{new_width * 100:.0f}% x {new_height * 100:.0f}% of the page")
         return True
 
-    def fit_to_page(self, _event=None):
-        """`Resize graph > Fit to page`: the graph fills the whole page.
+    def drawn_size(self):
+        """The room the whole diagram takes on the page, in cm.
 
-        It is the layout the program starts with - as large as the plot
-        area can be while the numbers, the axis labels and the title still
-        have their room around it.  The fonts, the line widths and the
-        tick marks follow the axes here too, so a graph that was made
-        smaller and then fitted to the page again is the one it started as.
+        Not the plot area alone: the numbers, the axis labels, the title,
+        the legend boxes and everything drawn in the diagram are measured
+        with it - the same box an exported picture is cropped to.  It is
+        `(width, height, middle x, middle y)`, all of them in cm from the
+        bottom left corner of the page, or None when nothing can be
+        measured (a window that has never been drawn).
         """
-        left, bottom, width, height = self.default_position
-        was_width = float(self.frame_cfg.get("x_length") or width)
-        was_height = float(self.frame_cfg.get("y_length") or height)
+        try:
+            box = self.fig.get_tightbbox(self._renderer())
+        except (AttributeError, RuntimeError, ValueError, tk.TclError):
+            return None
+        if box is None:
+            return None
+        try:                       # matplotlib measures it in inches
+            width, height = float(box.width) * 2.54, float(box.height) * 2.54
+            middle_x = (float(box.x0) + float(box.x1)) / 2.0 * 2.54
+            middle_y = (float(box.y0) + float(box.y1)) / 2.0 * 2.54
+        except (TypeError, ValueError):
+            return None
+        if not (np.isfinite(width) and np.isfinite(height)):
+            return None
+        if width <= 1e-6 or height <= 1e-6:
+            return None
+        return width, height, middle_x, middle_y
+
+    def fit_to_page(self, _event=None):
+        """`Resize graph > Fit to page`: the diagram fills the whole page.
+
+        The graph is made as large as it can be while the whole of it -
+        the plot area **and** the numbers, the axis labels, the title and
+        the legend boxes around it - still stands on the page with about
+        `PAGE_FIT_MARGIN` cm of white around it, and it is put in the
+        middle of the page.  The two directions are fitted on their own,
+        so the white left over is the same strip on all four sides; on a
+        small page a long title can keep a millimetre or two of it, since
+        a font size is a whole number of points and cannot shrink further.
+
+        The fonts, the line widths and the tick marks grow with the axes
+        (see `scale_style_document`), so the whole diagram is scaled like
+        a picture: what fills the page is the same graph, larger.  That is
+        also why the fit converges in one or two rounds - it is measured
+        again after every round, because a font size is a whole number of
+        points and cannot follow the axes to the last per cent.
+        """
+        room_w = max(1.0, float(self.page_size[0]) - 2.0 * PAGE_FIT_MARGIN)
+        room_h = max(1.0, float(self.page_size[1]) - 2.0 * PAGE_FIT_MARGIN)
+        page_middle = (float(self.page_size[0]) / 2.0,
+                       float(self.page_size[1]) / 2.0)
+        done = False
         with self.changed("the size of the graph"):
-            self.apply_frame({**self.frame_cfg, "left": left, "bottom": bottom,
-                              "x_length": width, "y_length": height})
-            self.scale_graph_style(style_factor(was_width, was_height,
-                                                width, height))
-        self.flash("The graph fills the page again")
+            for _round in range(PAGE_FIT_ROUNDS):
+                drawn = self.drawn_size()
+                if drawn is None:
+                    break
+                width, height, middle_x, middle_y = drawn
+                # the two directions are fitted on their own, so the white
+                # left over is the same margin on all four sides; the room
+                # the texts need does not follow one axis alone, which is
+                # why the fit is measured again after every round
+                factor_x = room_w / width
+                factor_y = room_h / height
+                moved = (abs(middle_x - page_middle[0]) / self.page_size[0],
+                         abs(middle_y - page_middle[1]) / self.page_size[1])
+                if (abs(factor_x - 1.0) < 0.002 and abs(factor_y - 1.0) < 0.002
+                        and max(moved) < 0.002):
+                    break             # as large and as central as it gets
+                done = self._fit_round(factor_x, factor_y, page_middle) or done
+            # should the rounds have stopped a hair over the margin, one
+            # last even step takes the whole diagram back inside it
+            drawn = self.drawn_size()
+            if drawn is not None:
+                guard = min(room_w / drawn[0], room_h / drawn[1])
+                if guard < 0.999:
+                    done = self._fit_round(guard, guard, page_middle) or done
+        if not done:
+            self.flash("The graph already fills the page")
+            return False
+        self.flash("The graph fills the page")
+        return True
+
+    def _fit_round(self, factor_x, factor_y, page_middle):
+        """One round of `Fit to page`: grow the graph, then centre it.
+
+        The growing comes first and keeps the middle of the plot area
+        where it is; only then is the diagram measured again and carried
+        to the middle of the page.  The plot area is not in the middle of
+        its own drawing - the numbers and the labels stand on two sides of
+        it - so the two steps cannot be done in one.
+        """
+        cfg = self.frame_cfg
+        width = float(cfg.get("x_length", 0.7))
+        height = float(cfg.get("y_length", 0.7))
+        left = float(cfg.get("left", 0.13))
+        bottom = float(cfg.get("bottom", 0.125))
+        new_width = min(max(width * factor_x, MIN_AXIS_SIZE), 1.0)
+        new_height = min(max(height * factor_y, MIN_AXIS_SIZE), 1.0)
+        grew = (abs(new_width - width) > 1e-9
+                or abs(new_height - height) > 1e-9)
+        if grew:
+            middle_x = left + width / 2.0
+            middle_y = bottom + height / 2.0
+            left = min(max(middle_x - new_width / 2.0, 0.0), 1.0 - new_width)
+            bottom = min(max(middle_y - new_height / 2.0, 0.0),
+                         1.0 - new_height)
+            self.apply_frame({**cfg, "left": left, "bottom": bottom,
+                              "x_length": new_width, "y_length": new_height})
+            self.scale_graph_style(style_factor(width, height,
+                                                new_width, new_height))
+        drawn = self.drawn_size()
+        if drawn is None:
+            return grew
+        shift_x = (page_middle[0] - drawn[2]) / float(self.page_size[0])
+        shift_y = (page_middle[1] - drawn[3]) / float(self.page_size[1])
+        if max(abs(shift_x), abs(shift_y)) < 1e-6:
+            return grew
+        self.move_plot_area(left + shift_x, bottom + shift_y)
         return True
 
     def scale_graph_style(self, factor):
@@ -17896,14 +18002,14 @@ listen for the gesture at all.  What a trackpad *does* send to Tk is the
 wheel: **two fingers sliding with `Ctrl`/`Cmd` held zoom exactly as a pinch
 would**, and the `-` and `+` of the toolbar are always there.
 
-**The starting margins come from the size of the page.**  The numbers, the
-axis labels and the title are set in **points**, so the room they need is a
-length and not a fraction: a small page has to keep proportionally wider
-margins for exactly the same texts.  A new diagram therefore begins with a
-plot area worked out from the page - the same layout `Fit to page` and
-`Default layout` give - and nothing is ever cut off at the edge.  A size
-and origin of your own, typed in `Frame and origin` or set in the `Frame`
-tab of the settings, is used as it stands.
+**A new diagram starts at a set place on the page**, the one the `Frame`
+tab of the settings holds (`left`, `bottom`, `x_length`, `y_length` as
+fractions of the page) - and `Default layout` in `Frame and origin` puts
+that place back.  It is deliberately modest, so that there is room to work
+around the graph; `Resize graph > Fit to page` is the one command that
+blows the whole diagram up to fill the page.  A size and origin of your
+own, typed in `Frame and origin` or set in the settings, is used as it
+stands.
 
 ### Clicking
 
@@ -18164,7 +18270,17 @@ ends with `Resize graph`:
 | --- | --- |
 | `Smaller` | Takes **ten per cent** off the length of both axes. |
 | `Larger` | Puts **ten per cent** on. |
-| `Fit to page` | The graph fills the whole page again - the layout the program starts with, worked out from the size of the page so that the numbers, the axis labels and the title have exactly the room they need. |
+| `Fit to page` | The diagram is made **as large as the page allows**: the whole of it - the plot area *and* the numbers, the axis labels, the title and the legend boxes - is grown and centred until only a narrow strip of white is left around it (half a centimetre, `PAGE_FIT_MARGIN`). |
+
+`Fit to page` measures the **whole drawing**, not the plot area alone:
+the numbers, the axis labels, the title, the legend boxes and every text
+box, drawing or arrow count, exactly as they do when a picture is
+exported.  The two directions are fitted separately, so the same narrow
+strip of white is left on all four sides, and the diagram is put in the
+middle of the page.  Asking for it twice does nothing the second time -
+the program says `The graph already fills the page` - and on a small page
+a long title may keep a millimetre or two of the strip for itself, because
+a font size is a whole number of points and cannot shrink any further.
 
 `Smaller` and `Larger` keep the **middle** of the graph where it is, so it
 grows and shrinks in place, and the graph is kept inside the page.
@@ -18202,11 +18318,12 @@ the plot area by itself and a text box that stood in the top right corner
 stands there afterwards too.  Font sizes are whole points, so they are
 rounded to the nearest point (and never fall below one).
 
-`Fit to page` scales the sizes back in the same way, so a graph that was
-made smaller a few times and then fitted to the page again is the graph it
-started as.  When the two axes did not change by the same amount - one of
-them can reach the edge of the page first - the factor used is the average
-of the two, the square root of their product.
+`Fit to page` scales the sizes in the same way, by however much it had to
+grow the axes, so the diagram that fills the page is the same picture, only
+larger.  When the two axes did not change by the same amount - `Fit to
+page` fits the two directions on their own, and one of them can reach the
+edge of the page first - the factor the fonts and the lines follow is the
+average of the two, the square root of their product.
 
 **Only this menu does it.**  Dragging the end of an axis, typing an axis
 length into `Frame and origin`, moving the graph about, resizing the
@@ -18992,8 +19109,10 @@ the commands of that diagram after a separator: `Axes properties...`,
 * **Width (length of the X axis)** and **Height (length of the Y axis)**.
 * **Y axis distance from the left** and **X axis distance from the bottom**
   - the position of the origin inside the window.
-* **Default layout** puts back the layout the page itself asks for -
-  the same one as `Resize graph > Fit to page`.
+* **Default layout** puts back the place a new diagram starts at (the one
+  in the `Frame` tab of the settings).  It moves and resizes the plot area
+  only: unlike `Resize graph`, it leaves the fonts and the line widths
+  alone.  To fill the page, use `Resize graph > Fit to page`.
 
 The four numbers are the same values as `left`, `bottom`, `width` and
 `height` of a matplotlib axes, so `left + width` and `bottom + height` must

@@ -1035,14 +1035,14 @@ listen for the gesture at all.  What a trackpad *does* send to Tk is the
 wheel: **two fingers sliding with `Ctrl`/`Cmd` held zoom exactly as a pinch
 would**, and the `-` and `+` of the toolbar are always there.
 
-**The starting margins come from the size of the page.**  The numbers, the
-axis labels and the title are set in **points**, so the room they need is a
-length and not a fraction: a small page has to keep proportionally wider
-margins for exactly the same texts.  A new diagram therefore begins with a
-plot area worked out from the page - the same layout `Fit to page` and
-`Default layout` give - and nothing is ever cut off at the edge.  A size
-and origin of your own, typed in `Frame and origin` or set in the `Frame`
-tab of the settings, is used as it stands.
+**A new diagram starts at a set place on the page**, the one the `Frame`
+tab of the settings holds (`left`, `bottom`, `x_length`, `y_length` as
+fractions of the page) - and `Default layout` in `Frame and origin` puts
+that place back.  It is deliberately modest, so that there is room to work
+around the graph; `Resize graph > Fit to page` is the one command that
+blows the whole diagram up to fill the page.  A size and origin of your
+own, typed in `Frame and origin` or set in the settings, is used as it
+stands.
 
 ### Clicking
 
@@ -1303,7 +1303,17 @@ ends with `Resize graph`:
 | --- | --- |
 | `Smaller` | Takes **ten per cent** off the length of both axes. |
 | `Larger` | Puts **ten per cent** on. |
-| `Fit to page` | The graph fills the whole page again - the layout the program starts with, worked out from the size of the page so that the numbers, the axis labels and the title have exactly the room they need. |
+| `Fit to page` | The diagram is made **as large as the page allows**: the whole of it - the plot area *and* the numbers, the axis labels, the title and the legend boxes - is grown and centred until only a narrow strip of white is left around it (half a centimetre, `PAGE_FIT_MARGIN`). |
+
+`Fit to page` measures the **whole drawing**, not the plot area alone:
+the numbers, the axis labels, the title, the legend boxes and every text
+box, drawing or arrow count, exactly as they do when a picture is
+exported.  The two directions are fitted separately, so the same narrow
+strip of white is left on all four sides, and the diagram is put in the
+middle of the page.  Asking for it twice does nothing the second time -
+the program says `The graph already fills the page` - and on a small page
+a long title may keep a millimetre or two of the strip for itself, because
+a font size is a whole number of points and cannot shrink any further.
 
 `Smaller` and `Larger` keep the **middle** of the graph where it is, so it
 grows and shrinks in place, and the graph is kept inside the page.
@@ -1341,11 +1351,12 @@ the plot area by itself and a text box that stood in the top right corner
 stands there afterwards too.  Font sizes are whole points, so they are
 rounded to the nearest point (and never fall below one).
 
-`Fit to page` scales the sizes back in the same way, so a graph that was
-made smaller a few times and then fitted to the page again is the graph it
-started as.  When the two axes did not change by the same amount - one of
-them can reach the edge of the page first - the factor used is the average
-of the two, the square root of their product.
+`Fit to page` scales the sizes in the same way, by however much it had to
+grow the axes, so the diagram that fills the page is the same picture, only
+larger.  When the two axes did not change by the same amount - `Fit to
+page` fits the two directions on their own, and one of them can reach the
+edge of the page first - the factor the fonts and the lines follow is the
+average of the two, the square root of their product.
 
 **Only this menu does it.**  Dragging the end of an axis, typing an axis
 length into `Frame and origin`, moving the graph about, resizing the
@@ -2131,8 +2142,10 @@ the commands of that diagram after a separator: `Axes properties...`,
 * **Width (length of the X axis)** and **Height (length of the Y axis)**.
 * **Y axis distance from the left** and **X axis distance from the bottom**
   - the position of the origin inside the window.
-* **Default layout** puts back the layout the page itself asks for -
-  the same one as `Resize graph > Fit to page`.
+* **Default layout** puts back the place a new diagram starts at (the one
+  in the `Frame` tab of the settings).  It moves and resizes the plot area
+  only: unlike `Resize graph`, it leaves the fonts and the line widths
+  alone.  To fill the page, use `Resize graph > Fit to page`.
 
 The four numbers are the same values as `left`, `bottom`, `width` and
 `height` of a matplotlib axes, so `left + width` and `bottom + height` must
