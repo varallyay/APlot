@@ -2061,6 +2061,25 @@ place on the page.
   (how many minor ones sit between two major ones) on the next line.  On a
   **logarithmic** axis the interval counts powers of the base, and a short
   line under the box says which base; see `Direction and Scale` above,
+
+  **`From` and `To` always say what the axis says.**  While the range is
+  automatic the two boxes are a *report*, not a setting: the axis works
+  its two ends out from the data, and the boxes are read again whenever
+  the diagram changes - new data, a curve carried to the other scale, a
+  step of `Undo`, even the zoom and the pan tools of the toolbar, which
+  move the ends without going through the program at all.  Each of the
+  three pages reports its own axis, so the left and the right Y scale can
+  never be mistaken for one another.
+
+  **Switching `Automatic range and ticks` off** hands the two boxes to
+  you, starting from the range that is on the screen, and nothing writes
+  in them again until you switch it back on.  **Switching it back on**
+  puts the range the data gives into them straight away, so the numbers
+  standing there are the ones the axis is about to take; the axis itself
+  changes when `Apply` or `OK` is pressed.  After every `Apply` the boxes
+  are read from the axes once more, so what they show is what was really
+  taken - a range that had to be tidied (a logarithmic axis, say) shows
+  as it ended up, not as it was asked for.
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click

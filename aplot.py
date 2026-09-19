@@ -883,7 +883,7 @@ DEFAULTS = {
         "color": "#000000",
         "major_tick_length": 8.0, "minor_tick_length": 4.0,
         "background": "#ffffff", "transparent_background": True,
-        "figure_background": "#ffffff", "transparent_figure": False,
+        "figure_background": "#ffffff", "transparent_figure": True,
         "left": DEFAULT_POSITION[0], "bottom": DEFAULT_POSITION[1],
         "x_length": DEFAULT_POSITION[2], "y_length": DEFAULT_POSITION[3],
     },
@@ -4190,9 +4190,53 @@ class AxisTab(PairedFields, ttk.Frame):
 
     # -- behaviour ---------------------------------------------------------
     def _toggle_auto(self):
-        state = "disabled" if self.auto_var.get() else "normal"
+        automatic = bool(self.auto_var.get())
+        state = "disabled" if automatic else "normal"
         for widget in (self.min_entry, self.max_entry, self.step_entry):
             widget.configure(state=state)
+        # the two numbers follow the switch at once: turning the automatic
+        # range on shows the range the data gives, turning it off starts
+        # from the range that is on the screen.  Leaving the numbers of a
+        # range that is no longer in force standing in the boxes is how a
+        # dialog comes to say something the diagram does not.
+        limits = (self.plot.automatic_limits(self.which) if automatic
+                  else self.plot.current_limits(self.which))
+        if limits is not None:
+            self._show_range(*limits)
+
+    def _show_range(self, low, high):
+        """Put one range into the two boxes, if it is not already there."""
+        try:
+            wanted = (f"{float(low):g}", f"{float(high):g}")
+        except (TypeError, ValueError):
+            return False
+        if (self.min_var.get(), self.max_var.get()) == wanted:
+            return False
+        self.min_var.set(wanted[0])
+        self.max_var.set(wanted[1])
+        return True
+
+    def sync_range(self, force=False):
+        """Show the range the axis really has at this moment.
+
+        The boxes of an **automatic** axis are a report, not a setting:
+        the axis works its two ends out from the data, and they change
+        under an open dialog whenever the diagram does - new data, a curve
+        moved to the other scale, a step of Undo, the zoom tool of the
+        toolbar.  They are therefore read again every time the diagram is
+        drawn.
+
+        While the range is set **by hand** the boxes belong to the user
+        and are left alone; `force` (used right after Apply) reads them
+        again anyway, so that what the axis took is what they show.
+        """
+        if not (force or self.auto_var.get()):
+            return False
+        try:
+            low, high = self.plot.current_limits(self.which)
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            return False
+        return self._show_range(low, high)
 
     def values(self):
         low, high = self.plot.current_limits(self.which)
@@ -4407,6 +4451,14 @@ class AxesDialog(ToolDialog):
         ttk.Button(bar, text="OK", command=self._ok).pack(side="right", padx=(0, 6))
         self.bind("<Return>", lambda _e: self.apply())
 
+    def sync_ranges(self, force=False):
+        """Let every axis page show the range its axis really has."""
+        for tab in self.tabs.values():
+            try:
+                tab.sync_range(force=force)
+            except tk.TclError:
+                pass
+
     def select_tab(self, which):
         """which: 'title', 'x', 'y', 'y2' or 'frame'."""
         if which == "frame":
@@ -4436,6 +4488,10 @@ class AxesDialog(ToolDialog):
         self.plot.apply_frame(frame, redraw=False)
         self.frame_tab._show_values()
         self.plot.draw()
+        # an automatic axis has just worked its range out again, and a
+        # range given by hand may have been tidied: the boxes show what
+        # the axes took, never what they were asked for
+        self.sync_ranges(force=True)
         return True
 
     def _ok(self):
@@ -9177,6 +9233,7 @@ class PlotWindow(tk.Toplevel):
         self.zoom = 1.0
         self.fig = Figure(figsize=(self.page_size[0] / 2.54, self.page_size[1] / 2.54), dpi=self.base_dpi)
         self.ax = self.fig.add_subplot(111)
+        self.watch_limits(self.ax)
         self.default_position = DEFAULT_POSITION
         frame = config.section("frame")
         chosen = (float(frame["left"]), float(frame["bottom"]),
@@ -10250,6 +10307,7 @@ class PlotWindow(tk.Toplevel):
             return self.ax2
         ax2 = self.ax.twinx()          # same X axis, its own Y scale
         self.ax2 = ax2
+        self.watch_limits(ax2)
         ax2.patch.set_visible(False)
         ax2.grid(False)
         for spine in ax2.spines.values():
@@ -12992,7 +13050,29 @@ class PlotWindow(tk.Toplevel):
         if getattr(self, "_quiet_draws", False):
             return                       # one drawing is coming at the end
         self.apply_series_stack()
+        self.sync_axes_dialog()
         self.canvas.draw_idle()
+
+    def sync_axes_dialog(self):
+        """An open `Axes properties` follows the ranges of the diagram.
+
+        Whatever moved an automatic range - new data, a curve carried to
+        the other scale, Undo, the zoom tool of the toolbar - the two
+        boxes of that axis say what the axis says.  A range set by hand is
+        the user's own and is not touched.
+        """
+        if getattr(self, "_measuring", False):
+            return False        # a range is being tried out, not set
+        dialog = self._dialogs.get("axes")
+        if dialog is None:
+            return False
+        try:
+            if not dialog.winfo_exists():
+                return False
+            dialog.sync_ranges()
+        except (AttributeError, tk.TclError):
+            return False
+        return True
 
     def default_legend_state(self, index):
         """Start position of the index-th legend box, from the chosen corner."""
@@ -15859,6 +15939,58 @@ class PlotWindow(tk.Toplevel):
             return (0.0, 1.0) if self.ax2 is None else self.ax2.get_ylim()
         return self.ax.get_ylim()
 
+    def watch_limits(self, ax):
+        """Tell an open `Axes properties` whenever this axes changes range.
+
+        The zoom and the pan tools of the toolbar move the two ends
+        without going through the program at all, so the dialog is told by
+        matplotlib itself rather than by the command that did it.
+        """
+        try:
+            for event in ("xlim_changed", "ylim_changed"):
+                ax.callbacks.connect(event, lambda _ax: self.sync_axes_dialog())
+        except (AttributeError, TypeError):
+            return False
+        return True
+
+    def automatic_limits(self, which):
+        """The two ends the data would give this axis, without setting them.
+
+        `Automatic range and ticks` is a promise about the data, and the
+        dialog has to be able to show what that promise says before it is
+        applied.  The axis is measured exactly the way the automatic range
+        measures it and then put back as it was - the two ends and the two
+        automatic flags of both axes - so nothing on the screen moves.
+        """
+        if which == "y2" and self.ax2 is None:
+            return None
+        try:
+            ax, _axis, name = self._axis_pair(which)
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            return None
+        # a twinned axes shares its X with the other one, so both are put
+        # back, not only the one that was measured
+        family = [one for one in (self.ax, self.ax2) if one is not None]
+        keep = [(one, one.get_xlim(), one.get_ylim(),
+                 one.get_autoscalex_on(), one.get_autoscaley_on())
+                for one in family]
+        self._measuring = True
+        try:
+            ax.autoscale(enable=True, axis=name)
+            self.measure_data(ax, scalex=(name == "x"), scaley=(name == "y"))
+            found = ax.get_xlim() if name == "x" else ax.get_ylim()
+            return float(found[0]), float(found[1])
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        finally:
+            for one, x_limits, y_limits, auto_x, auto_y in keep:
+                try:
+                    one.set_xlim(x_limits, emit=False, auto=auto_x)
+                    one.set_ylim(y_limits, emit=False, auto=auto_y)
+                except (AttributeError, RuntimeError, ValueError):
+                    pass
+            self._measuring = False
+
     def _axis_pair(self, which):
         """(axes, axis, "x"/"y") of one of the three axis pages."""
         if which == "y2":
@@ -16891,6 +17023,7 @@ class PlotWindow(tk.Toplevel):
     def open_axes_dialog(self, which="x"):
         existing = self._dialogs.get("axes")
         if existing is not None and existing.winfo_exists():
+            existing.sync_ranges()          # the ranges may have moved on
             existing.select_tab(which)      # jump to the requested tab
             existing.lift()
             existing.focus_force()
@@ -19028,6 +19161,25 @@ place on the page.
   (how many minor ones sit between two major ones) on the next line.  On a
   **logarithmic** axis the interval counts powers of the base, and a short
   line under the box says which base; see `Direction and Scale` above,
+
+  **`From` and `To` always say what the axis says.**  While the range is
+  automatic the two boxes are a *report*, not a setting: the axis works
+  its two ends out from the data, and the boxes are read again whenever
+  the diagram changes - new data, a curve carried to the other scale, a
+  step of `Undo`, even the zoom and the pan tools of the toolbar, which
+  move the ends without going through the program at all.  Each of the
+  three pages reports its own axis, so the left and the right Y scale can
+  never be mistaken for one another.
+
+  **Switching `Automatic range and ticks` off** hands the two boxes to
+  you, starting from the range that is on the screen, and nothing writes
+  in them again until you switch it back on.  **Switching it back on**
+  puts the range the data gives into them straight away, so the numbers
+  standing there are the ones the axis is about to take; the axis itself
+  changes when `Apply` or `OK` is pressed.  After every `Apply` the boxes
+  are read from the axes once more, so what they show is what was really
+  taken - a range that had to be tidied (a logarithmic axis, say) shows
+  as it ended up, not as it was asked for.
 * **Axis colour** at the end of the section: the colour of *this* axis line
   and of *its* tick marks.  Each of the three axes has its own, so a black
   bottom axis and a red right axis - matching a red curve - are one click
