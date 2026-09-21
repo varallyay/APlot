@@ -476,6 +476,9 @@ AXIS_CHECK_FONT = 10       # the x_B / x_T / y_L / y_R labels
 HEADER_COLOR = "#1a5fb4"
 # the letter of a column, and the number of a row, the block touches
 HEADER_ACTIVE = "#d0e2fb"
+# the writing of the summary strip at the foot of the sheet: the blue of
+# the row numbers and the column letters, on the plain background
+STATUS_TEXT_COLOR = HEADER_COLOR
 LETTER_WIDTH = 56          # the clickable strip under the check buttons
 # a table column is never narrower than its two check buttons
 MIN_COLUMN_WIDTH = 104
@@ -4399,6 +4402,38 @@ class FrameTab(ttk.Frame):
                            "x_length": width, "y_length": height}
         self._show_values()
 
+    def sync_all(self):
+        """Read the whole page again: the frame, the colours and the size.
+
+        This page holds a copy of everything it shows, and what it holds is
+        what `Apply` sends back to the diagram.  So whenever the diagram
+        changes underneath it - `Resize graph`, an axis pulled by its end,
+        a step of `Undo`, a file opened - the copy has to follow, or the
+        next `Apply` would quietly put the old size and the old colours
+        back alongside the one thing the user really changed.
+        """
+        cfg = self.plot.frame_cfg
+        try:
+            self.style_var.set(name_of(FRAME_STYLES, cfg.get("style", "none"),
+                                       names(FRAME_STYLES)[0]))
+            self.width_var.set(f"{float(cfg.get('width', 1.0)):g}")
+            self.major_len_var.set(
+                f"{float(cfg.get('major_tick_length', 3.5)):g}")
+            self.minor_len_var.set(
+                f"{float(cfg.get('minor_tick_length', 2.0)):g}")
+            background = cfg.get("background", "#ffffff")
+            self.transparent_var.set(background == "none")
+            if background != "none":
+                self.background.set_color(background)
+            paper = cfg.get("figure_background", "#ffffff")
+            self.clear_figure_var.set(paper == "none")
+            if paper != "none":
+                self.figure_background.set_color(paper)
+        except (tk.TclError, TypeError, ValueError):
+            return False
+        self.sync_position()
+        return True
+
     # -- result ------------------------------------------------------------
     def values(self):
         self._read_values()
@@ -4469,6 +4504,11 @@ class AxesDialog(ToolDialog):
             self.notebook.select(self.tabs.get(which, self.tabs["x"]))
 
     def apply(self):
+        """Everything the four pages say, in one step of Undo."""
+        with self.plot.changed("the axes and the frame"):
+            return self._apply()
+
+    def _apply(self):
         self.title_tab.apply()
         for which, tab in self.tabs.items():
             cfg = tab.values()
@@ -4717,8 +4757,10 @@ class TitleFontDialog(ToolDialog):
         self.bind("<Return>", lambda _e: self.apply())
 
     def apply(self):
-        self.tab.apply()
-        self.plot.draw()
+        with self.plot.changed("the title and the fonts"):
+            self.tab.apply()
+            self.plot.draw()
+        return True
 
     def _reset_positions(self):
         self.tab._reset_positions()
@@ -6353,6 +6395,7 @@ class DataTable(ttk.Frame):
         self._fill_dragging = False
         self._fill_start_bounds = None
         self._fill_target_row = None
+        self._fill_point = None         # where the handle is being held
         self._fill_auto_scroll_timer = None
         self._row_selecting = False
         self._row_press = None
@@ -6426,10 +6469,15 @@ class DataTable(ttk.Frame):
         v_scroll.grid(row=2, column=2, sticky="ns")
         h_scroll.grid(row=3, column=1, sticky="ew")
 
-        # Summary status bar at the bottom (Sum, Average, Count, Min, Max)
+        # Summary status bar at the bottom (Sum, Average, Count, Min, Max).
+        # The strip keeps the plain background of the window; only its
+        # writing is blue - the blue of the row numbers and the column
+        # letters, so the numbers about a block and the heads of that block
+        # are plainly the same family.
         self.status_bar = ttk.Frame(self)
         self.status_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2, 0))
-        self.status_label = ttk.Label(self.status_bar, text="", foreground="#444",
+        self.status_label = ttk.Label(self.status_bar, text="",
+                                      foreground=STATUS_TEXT_COLOR,
                                       font=("TkDefaultFont", 9))
         self.status_label.pack(side="left", padx=4)
 
@@ -7160,6 +7208,7 @@ class DataTable(ttk.Frame):
         self._fill_dragging = True
         self._fill_start_bounds = bounds
         self._fill_target_row = bounds[2]
+        self._fill_point = None
         self._show_fill_feedback(bounds[2], bounds[2], bounds[1], bounds[3])
         return "break"
 
@@ -7172,20 +7221,75 @@ class DataTable(ttk.Frame):
         except (tk.TclError, AttributeError):
             tree_x = event.x
             tree_y = event.y
+        # held against the bottom (or the top) edge, the table scrolls on
+        # by itself, so a series can be pulled far past the rows that
+        # happen to be on the screen
+        self._fill_point = (tree_x, tree_y)
+        if self._fill_edge_step(tree_y):
+            self._start_fill_auto_scroll()
+        else:
+            self._stop_fill_auto_scroll()
+        return self._aim_fill(tree_x, tree_y)
 
-        row_id = self.tree.identify_row(tree_y)
+    def _row_near(self, y):
+        """The row at that height, or the nearest one above it.
+
+        The last row of a sheet rarely ends exactly at the bottom of the
+        table, and below it there is no row to identify at all.  Pulling
+        the handle into that empty strip means the last row, not "nowhere".
+        """
+        for step in range(0, 240, 4):
+            try:
+                row_id = self.tree.identify_row(max(0, y - step))
+            except tk.TclError:
+                return None
+            if row_id and self.tree.exists(row_id):
+                try:
+                    return int(row_id)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def _fill_edge_step(self, y):
+        """1 down, -1 up, 0 when the pointer is not at an edge of the table."""
+        try:
+            height = self.tree.winfo_height()
+            header = self._header_height()
+        except tk.TclError:
+            return 0
+        if y > height - AUTO_SCROLL_EDGE:
+            return 1
+        if y < header + AUTO_SCROLL_EDGE:
+            return -1
+        return 0
+
+    def _aim_fill(self, tree_x, tree_y):
+        """Where the handle is being pulled to, and what that would fill.
+
+        The pointer is pulled back inside the table first: past the edge
+        there is no row to ask about, and the row wanted there is the last
+        one on the screen - which the automatic scrolling keeps replacing
+        with the next one.
+        """
+        try:
+            header = self._header_height()
+            tree_y = min(max(tree_y, header + 2),
+                         max(header + 2, self.tree.winfo_height() - 2))
+            tree_x = min(max(tree_x, 2), max(2, self.tree.winfo_width() - 2))
+        except tk.TclError:
+            pass
+
         col_id = self.tree.identify_column(tree_x)
 
         r0, c0, r1, c1 = self._fill_start_bounds
-        
+
         target_r = r1
         target_c = c1
-        
-        if row_id and self.tree.exists(row_id):
-            hover_r = int(row_id)
-        else:
-            hover_r = r1
-            
+
+        hovered = self._row_near(tree_y)
+        hover_r = r1 if hovered is None else hovered
+
+
         if col_id:
             hover_c = int(col_id.replace('#', '')) - 1
         else:
@@ -7475,14 +7579,26 @@ class DataTable(ttk.Frame):
             self._fill_auto_scroll_timer = None
 
     def _fill_auto_scroll_step(self):
+        """One row of scrolling while the handle is held against an edge."""
         self._fill_auto_scroll_timer = None
         if not getattr(self, "_fill_dragging", False):
             return
-        self._yview("scroll", 1, "units")
-        if self._fill_target_row < len(self.df) - 1:
-            self._fill_target_row += 1
-            r0, c0, r1, c1 = self._fill_start_bounds
-            self._show_fill_feedback(r1 + 1, self._fill_target_row, c0, c1)
+        point = getattr(self, "_fill_point", None)
+        step = self._fill_edge_step(point[1]) if point else 0
+        if not step:
+            return
+        first, last = self.tree.yview()
+        if step > 0 and last >= 1.0:
+            return              # the last row of the sheet is on the screen
+        if step < 0 and first <= 0.0:
+            return              # the first one is
+        self._yview("scroll", step, "units")
+        try:
+            self.tree.update_idletasks()
+        except tk.TclError:
+            return
+        # the row that has just come into view is the one being pulled to
+        self._aim_fill(*point)
         self._start_fill_auto_scroll()
 
     # -- row tree interactions (line numbers on the left) ------------------
@@ -13053,6 +13169,19 @@ class PlotWindow(tk.Toplevel):
         self.sync_axes_dialog()
         self.canvas.draw_idle()
 
+    def sync_frame_dialog(self):
+        """An open `Frame and origin` follows the diagram it belongs to."""
+        dialog = self._dialogs.get("axes")
+        if dialog is None:
+            return False
+        try:
+            if not dialog.winfo_exists():
+                return False
+            dialog.frame_tab.sync_all()
+        except (AttributeError, tk.TclError):
+            return False
+        return True
+
     def sync_axes_dialog(self):
         """An open `Axes properties` follows the ranges of the diagram.
 
@@ -16089,6 +16218,9 @@ class PlotWindow(tk.Toplevel):
         self.refresh_shapes()
         self.refresh_arrows()
         self._refresh_handles()
+        # an open `Frame and origin` holds a copy of all of this: it reads
+        # the new page, so that its next Apply cannot put the old one back
+        self.sync_frame_dialog()
         if redraw:
             self.draw()
 
@@ -17616,6 +17748,12 @@ the handle is pulled over.
 * While the handle is being pulled, the **status bar** at the bottom says
   what will be written: *"Series, step 2:  5, 7, 9, ...   (7 rows)"* or
   *"Fill down: the value is copied into 3 more rows"*.
+* **Held against the bottom edge of the sheet, the table scrolls on by
+  itself**, one row at a time, and the fill follows it down - so a series
+  can be pulled far past the rows that happen to be on the screen without
+  letting go of the button.  The top edge does the same upwards.  Bringing
+  the pointer back inside the table stops it at once, and the scrolling
+  ends at the last (or the first) row of the sheet.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
@@ -17725,7 +17863,10 @@ the sheet is rewritten so that it goes on saying what it said before:
 
 Whenever a block of cells is selected in the table, the status bar at the bottom
 of the window immediately shows a live statistical summary of the numeric
-cells:
+cells.  The strip keeps the plain background of the window and writes in
+the **blue of the row numbers and the column letters**, so the numbers at
+the foot of the sheet plainly belong with the heads of the block they are
+about:
 
 > `Average: 24.50   Count: 12   Sum: 294.00   Min: 10.00   Max: 45.00`
 
@@ -19227,7 +19368,11 @@ The last tab of the axes dialog, also reachable with
 * **Plot area**: the colour behind the curves, or **Transparent plot area**
   to let the colour around the axes show through.
 * **Around the axes**: the colour of the paper the graph sits on, or
-  **Transparent around the axes** to leave it away altogether.
+  **Transparent around the axes** to leave it away altogether.  This one
+  is **ticked to begin with**, so a copied or saved picture drops onto a
+  slide or a page with nothing around the graph; untick it (here or in the
+  `Frame` tab of the settings, for every new diagram) to get the white
+  paper back.
 
 Both switches travel into the picture: with the second one ticked, a copied
 or saved **PNG, PDF or SVG has no background at all**, so the graph can be
@@ -19265,6 +19410,15 @@ the commands of that diagram after a separator: `Axes properties...`,
   in the `Frame` tab of the settings).  It moves and resizes the plot area
   only: unlike `Resize graph`, it leaves the fonts and the line widths
   alone.  To fill the page, use `Resize graph > Fit to page`.
+
+**The page follows the diagram.**  This window holds a copy of everything
+it shows - the frame, the two background colours and the four numbers of
+the size - and that copy is what `Apply` sends back.  So whenever the
+diagram changes while the window stands open (`Resize graph`, an axis
+pulled by its end, the graph dragged about, a step of `Undo`, a file
+opened), the page reads the diagram again.  Changing only a colour
+afterwards therefore changes only that colour: it can no longer drag the
+graph back to a size it had a minute ago.
 
 The four numbers are the same values as `left`, `bottom`, `width` and
 `height` of a matplotlib axes, so `left + width` and `bottom + height` must
@@ -19323,9 +19477,12 @@ happen.  With nothing on the list both lines are grey.
 
 **One command, one step.**  Pasting an object, duplicating it or bringing
 it to the front is a single step even though the program does several
-things for it, so one `Undo` puts everything back as it was.  The last
-60 steps are kept; opening a file starts a fresh, empty list, because the
-file itself is the state to go back to.
+things for it, so one `Undo` puts everything back as it was.  Pressing
+`Apply` or `OK` in `Axes properties` is one step too, however many pages
+of it were changed at once - `Undo the axes and the frame` puts the whole
+window back - and so is `Apply` in `Title and fonts`.  The last 60 steps
+are kept; opening a file starts a fresh, empty list, because the file
+itself is the state to go back to.
 
 **What a step remembers.**  A change in a sheet remembers that sheet - its
 values, its formulas and its column names; a change in a diagram remembers

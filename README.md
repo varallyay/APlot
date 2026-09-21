@@ -516,6 +516,12 @@ the handle is pulled over.
 * While the handle is being pulled, the **status bar** at the bottom says
   what will be written: *"Series, step 2:  5, 7, 9, ...   (7 rows)"* or
   *"Fill down: the value is copied into 3 more rows"*.
+* **Held against the bottom edge of the sheet, the table scrolls on by
+  itself**, one row at a time, and the fill follows it down - so a series
+  can be pulled far past the rows that happen to be on the screen without
+  letting go of the button.  The top edge does the same upwards.  Bringing
+  the pointer back inside the table stops it at once, and the scrolling
+  ends at the last (or the first) row of the sheet.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
@@ -625,7 +631,10 @@ the sheet is rewritten so that it goes on saying what it said before:
 
 Whenever a block of cells is selected in the table, the status bar at the bottom
 of the window immediately shows a live statistical summary of the numeric
-cells:
+cells.  The strip keeps the plain background of the window and writes in
+the **blue of the row numbers and the column letters**, so the numbers at
+the foot of the sheet plainly belong with the heads of the block they are
+about:
 
 > `Average: 24.50   Count: 12   Sum: 294.00   Min: 10.00   Max: 45.00`
 
@@ -2127,7 +2136,11 @@ The last tab of the axes dialog, also reachable with
 * **Plot area**: the colour behind the curves, or **Transparent plot area**
   to let the colour around the axes show through.
 * **Around the axes**: the colour of the paper the graph sits on, or
-  **Transparent around the axes** to leave it away altogether.
+  **Transparent around the axes** to leave it away altogether.  This one
+  is **ticked to begin with**, so a copied or saved picture drops onto a
+  slide or a page with nothing around the graph; untick it (here or in the
+  `Frame` tab of the settings, for every new diagram) to get the white
+  paper back.
 
 Both switches travel into the picture: with the second one ticked, a copied
 or saved **PNG, PDF or SVG has no background at all**, so the graph can be
@@ -2165,6 +2178,15 @@ the commands of that diagram after a separator: `Axes properties...`,
   in the `Frame` tab of the settings).  It moves and resizes the plot area
   only: unlike `Resize graph`, it leaves the fonts and the line widths
   alone.  To fill the page, use `Resize graph > Fit to page`.
+
+**The page follows the diagram.**  This window holds a copy of everything
+it shows - the frame, the two background colours and the four numbers of
+the size - and that copy is what `Apply` sends back.  So whenever the
+diagram changes while the window stands open (`Resize graph`, an axis
+pulled by its end, the graph dragged about, a step of `Undo`, a file
+opened), the page reads the diagram again.  Changing only a colour
+afterwards therefore changes only that colour: it can no longer drag the
+graph back to a size it had a minute ago.
 
 The four numbers are the same values as `left`, `bottom`, `width` and
 `height` of a matplotlib axes, so `left + width` and `bottom + height` must
@@ -2223,9 +2245,12 @@ happen.  With nothing on the list both lines are grey.
 
 **One command, one step.**  Pasting an object, duplicating it or bringing
 it to the front is a single step even though the program does several
-things for it, so one `Undo` puts everything back as it was.  The last
-60 steps are kept; opening a file starts a fresh, empty list, because the
-file itself is the state to go back to.
+things for it, so one `Undo` puts everything back as it was.  Pressing
+`Apply` or `OK` in `Axes properties` is one step too, however many pages
+of it were changed at once - `Undo the axes and the frame` puts the whole
+window back - and so is `Apply` in `Title and fonts`.  The last 60 steps
+are kept; opening a file starts a fresh, empty list, because the file
+itself is the state to go back to.
 
 **What a step remembers.**  A change in a sheet remembers that sheet - its
 values, its formulas and its column names; a change in a diagram remembers
