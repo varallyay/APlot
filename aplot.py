@@ -180,12 +180,20 @@ PLOT_STYLES = [
     ("Line", "line", "Continuous curve without markers"),
     ("Scatter", "scatter", "Discrete symbols/markers only"),
     ("Bar Chart", "bar", "Vertical bar chart"),
-    ("Error Bar", "errorbar", "Points with vertical error bars and caps"),
+    ("Error Bar (Median, SD)", "errorbar",
+     "Points with error bars of one length: x, median, SD, median, SD, ..."),
+    ("Error Bar (Median, +error, -error)", "errorbar_pm",
+     "Error bars of two lengths: x, median, +error, -error, median, ..."),
     ("Histogram", "histogram", "Counts the values of a column into bins"),
     ("Stairs", "stairs", "A stepped outline of the values (ax.stairs)"),
     ("2D Histogram", "hist2d", "Counts the X/Y pairs in a grid (ax.hist2d)"),
     ("Pie Chart", "pie", "The values of one column as slices (ax.pie)"),
 ]
+
+# the two error bar styles: one column of error beside the values, or two
+# (upwards and downwards).  Everything that is true of an error bar diagram
+# is true of both of them.
+ERROR_STYLES = ("errorbar", "errorbar_pm")
 
 ERROR_SOURCES = [
     ("Next column (x, mean, std)", "pair"),
@@ -319,9 +327,11 @@ COPYABLE = ("shape", "arrow", "note")   # a legend or an axis label is not copie
 # which object hides which: the stack, from the very back to the very front.
 # The curves take part in it too, so a drawing can be pushed behind a graph
 # and a graph can be brought in front of another one.
-STACK_KINDS = ("series", "shape", "arrow", "note")
+# the axes come last: with two objects at the same height the axis is
+# the one in front, which is where the frame has always been drawn
+STACK_KINDS = ("series", "shape", "arrow", "note", "axis")
 STACK_NAMES = {"series": "Curve", "shape": "Drawing", "arrow": "Arrow",
-               "note": "Text box", "picture": "Picture"}
+               "note": "Text box", "picture": "Picture", "axis": "Axis"}
 Z_STACK_BASE = 2.0          # the very back of the stack (a plain curve sits here)
 Z_STACK_STEP = 0.02         # the usual distance between two neighbours
 Z_STACK_SPAN = 3.0          # the whole stack stays inside base ... base + span
@@ -335,10 +345,16 @@ GAP_MARK = "<GAP>"
 # whole curve fits between two places of the stack and nothing of another
 # object can ever slide in between them.
 Z_SERIES_SPREAD = 0.006
-Z_DEFAULT = {"shape": 5.0, "arrow": 5.0, "note": 6.0, "series": 2.0}
+# an axis - its line, its tick marks, its numbers and its label - stands
+# at 2.5 to begin with: where matplotlib draws the frame, in front of
+# the curves.  It is one member of the stack like anything else, so it
+# can be sent behind a drawing and brought out again.
+Z_DEFAULT = {"shape": 5.0, "arrow": 5.0, "note": 6.0, "series": 2.0,
+             "axis": 2.5}
 # the styles whose curve is a whole group of drawn things (every bar, every
 # slice), which the exported program has to move together
-STACK_CONTAINERS = ("bar", "errorbar", "stairs", "pie", "histogram")
+STACK_CONTAINERS = ("bar", "errorbar", "errorbar_pm", "stairs", "pie",
+                    "histogram")
 PASTE_STEP = 14.0           # pixels: how far a pasted copy sits from the original
 NUDGE_STEP = 1.0            # pixels: one press of an arrow key
 NUDGE_BIG_STEP = 10.0       # pixels: with Shift
@@ -1960,6 +1976,19 @@ def _paint_errorbar(draw, box):
           ICON_BLUE, 0.10)
 
 
+def _paint_errorbar_pm(draw, box):
+    """The same points, with the bar longer downwards than upwards."""
+    for x, y, up, down in ((0.24, 0.62, 0.12, 0.28), (0.50, 0.42, 0.10, 0.24),
+                           (0.76, 0.54, 0.09, 0.22)):
+        _path(draw, box, [(x, y - down), (x, y + up)], ICON_INK, 0.05)
+        _path(draw, box, [(x - 0.09, y - down), (x + 0.09, y - down)],
+              ICON_INK, 0.05)
+        _path(draw, box, [(x - 0.09, y + up), (x + 0.09, y + up)],
+              ICON_INK, 0.05)
+    _dots(draw, box, [(0.24, 0.62), (0.50, 0.42), (0.76, 0.54)],
+          ICON_BLUE, 0.10)
+
+
 def _paint_stairs(draw, box):
     _path(draw, box, [(0.10, 0.78), (0.34, 0.78), (0.34, 0.48),
                       (0.58, 0.48), (0.58, 0.64), (0.84, 0.64),
@@ -1994,6 +2023,7 @@ PLOT_ICON_PAINTERS = {
     "scatter": _paint_scatter,
     "bar": _paint_bar,
     "errorbar": _paint_errorbar,
+    "errorbar_pm": _paint_errorbar_pm,
     "histogram": _paint_histogram,
     "stairs": _paint_stairs,
     "hist2d": _paint_hist2d,
@@ -3744,6 +3774,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
         "bar": ("bar_box",),
         "histogram": ("bar_box",),
         "errorbar": ("marker_box", "line_box", "error_box"),
+        "errorbar_pm": ("marker_box", "line_box", "error_box"),
         "stairs": ("stairs_box",),
         "hist2d": ("hist2d_box",),
         "pie": ("pie_box",),
@@ -3780,7 +3811,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
             # these draw an artist of their own instead of the curve
             self.line_on_var.set(False)
             self.marker_on_var.set(False)
-        elif st == "errorbar":
+        elif st in ERROR_STYLES:
             self.marker_on_var.set(True)
         self._update_section_visibility()
         self._apply()
@@ -6121,18 +6152,55 @@ class RegressionDialog(ToolDialog):
         self.column_list.delete(0, "end")
         for name in names:
             self.column_list.insert("end", name)
+        errors = self.error_columns()
         chosen = []
         for index, name in enumerate(names):
+            if str(name) in errors:
+                continue           # a column of error bars is not a curve
             if table is not None and table.column_axis(name) in ("L", "R"):
                 chosen.append(index)
         if not chosen:
-            chosen = list(range(len(names)))
+            chosen = [index for index, name in enumerate(names)
+                      if str(name) not in errors] or list(range(len(names)))
         for index in chosen:
             self.column_list.selection_set(index)
         self.x_label.configure(
             text=(f"X values: the first column, \"{self.x_name()}\""
                   if names else "This sheet has no column to fit."))
         return names
+
+    def error_columns(self):
+        """The columns that hold the error bars of another column.
+
+        A curve drawn with error bars reads the length of its bars from a
+        column of its own.  That column is the scatter of the measurement,
+        not a measurement in its own right, so a curve fitted to it would
+        be a curve fitted to the noise: it is left out of the choice when
+        the window opens.  It is still in the list and can be ticked by
+        hand, and nothing stops a fit of it then.
+        """
+        found = set()
+        for window in self.app.open_windows():
+            try:
+                for _mean, error in dict(window.error_partner).items():
+                    found.add(str(error))
+                for _mean, low in dict(window.error_partner_low).items():
+                    found.add(str(low))
+                for column, style in dict(window.series_style).items():
+                    if style not in ERROR_STYLES:
+                        continue
+                    cfg = window.error_cfg.get(column) or {}
+                    kind = str(cfg.get("type", "pair"))
+                    if kind == "column" and cfg.get("column"):
+                        found.add(str(cfg["column"]))
+                    elif kind == "pair":
+                        for partner in (window.partner_column(column),
+                                        window.partner_low_column(column)):
+                            if partner:
+                                found.add(str(partner))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return found
 
     def chosen_columns(self):
         names = self.column_names()
@@ -9238,6 +9306,8 @@ class PlotWindow(tk.Toplevel):
         self.pie_texts: dict = {}             # column -> the texts drawn on it
         # in an error bar diagram: mean column -> the std column beside it
         self.error_partner: dict = {}
+        # the column of the error downwards, for the style that has one
+        self.error_partner_low: dict = {}
         self.lines: list[Line2D] = []
         self.series: dict = {}          # Y column name -> curve
         self.x_col = str(df.columns[0]) if len(df.columns) else ""
@@ -9335,8 +9405,12 @@ class PlotWindow(tk.Toplevel):
                     "label_on": True, "ticks_on": True, "tick_labels_on": True,
                     # which way the axis runs, and how its numbers are spread
                     "direction": "standard", "scale": "linear",
+                    # where the axis stands in the stack: in front of the
+                    # diagram to begin with, each of the three on its own
+                    # step so that none of them is tied with another
+                    "z": Z_DEFAULT["axis"] + step * Z_STACK_STEP,
                     "grid": dict(grid_defaults)}
-            for which in ("x", "y", "y2")
+            for step, which in enumerate(("x", "y", "y2"))
         }
         # no curve belongs to the right hand scale yet: it is not drawn
         self.axis_cfg["y2"]["direction"] = "off"
@@ -10514,11 +10588,17 @@ class PlotWindow(tk.Toplevel):
         """
         if self.only_pies():
             return []                  # a pie stands on no axis
-        sides = ["top" if self.x_side == "top" else "bottom"]
+        sides = []
+        # `No X axis` in the Direction box takes the line away as well: no
+        # element of that axis is drawn at all.  (A closed frame is a frame
+        # around the plot area, not an axis, and keeps all four of its
+        # sides.)
+        if self.axis_direction("x") != "off":
+            sides.append("top" if self.x_side == "top" else "bottom")
         right = self.right_axis_active()
-        if self.left_axis_active() or not right:
+        if (self.left_axis_active() or not right) and self.left_axis_shown():
             sides.append("left")
-        if right:
+        if right and self.axis_direction("y2") != "off":
             sides.append("right")
         return sides
 
@@ -10537,6 +10617,14 @@ class PlotWindow(tk.Toplevel):
         """
         top = self.x_side == "top"
         both = self.frame_cfg.get("style") in ("box_in", "box_out")
+        # `No X axis` (or no left / right Y axis) takes the line of that
+        # axis away as well, so the sides are worked out again here - the
+        # Direction box can change them without the frame dialog
+        if not self.only_pies():
+            used = self.used_sides()
+            closed = str(self.frame_cfg.get("style", "none")) != "none"
+            for name, spine in self.ax.spines.items():
+                spine.set_visible(closed or name in used)
         if self.axis_direction("y2") != "off" and self.ax2 is None:
             self.ensure_right_axis()     # asked for, without a curve on it
         right = self.right_axis_active()
@@ -10764,7 +10852,7 @@ class PlotWindow(tk.Toplevel):
         elif series_st in ("bar", "histogram", "stairs", "hist2d", "pie"):
             l_style = "none"        # the artist beside the curve is the plot
             m_style = "None"
-        elif series_st == "errorbar":
+        elif series_st in ERROR_STYLES:
             l_style = "none"
             m_style = code_of(MARKERS, plot_cfg["marker"], "o")
             if m_style.lower() == "none":
@@ -10796,6 +10884,14 @@ class PlotWindow(tk.Toplevel):
         self.series_axis[y_col] = "right" if target is self.ax2 else "left"
         self.fill_state.setdefault(y_col, self.default_fill_state(plot_cfg))
         self.refresh_series_visuals(y_col)
+        # a curve drawn for the first time is given a place of its own at
+        # the front of the stack.  Two curves at the same height are drawn
+        # in whatever order matplotlib happens to hold them, and the parts
+        # of a curve - its error bars, its filling - stand a little above
+        # its own line, so a tie lets one curve's error bars cross another
+        # curve: exactly how a fitted line comes out looking dashed.
+        if str(y_col) not in self.series_z:
+            self.set_series_zorder(y_col, self.top_z())
         return line
 
     def _clear_bar(self, column):
@@ -10867,6 +10963,27 @@ class PlotWindow(tk.Toplevel):
                     except Exception:
                         pass
 
+    def partner_low_column(self, column):
+        """The column that holds the **downward** error bars of one curve.
+
+        Only `Error Bar (Median, +error, -error)` has one: its columns are
+        read in threes - the values, the error upwards and the error
+        downwards - so it is the second column after the values.  The other
+        error bar style draws one length both ways and has none.
+        """
+        found = self.error_partner_low.get(column)
+        if found and found in self.df.columns:
+            return found
+        if self.series_style.get(column, self.plot_style) != "errorbar_pm":
+            return None
+        names = [str(one) for one in self.df.columns]
+        text = str(column)
+        if text in names:
+            index = names.index(text) + 2
+            if index < len(names):
+                return names[index]
+        return None
+
     def partner_column(self, column):
         """The column that holds the error bars of one curve.
 
@@ -10886,13 +11003,41 @@ class PlotWindow(tk.Toplevel):
                 return names[index]
         return None
 
-    def _error_from_column(self, name, y_arr):
-        """The error bar lengths read from one column of the table."""
+    def series_rows(self, column):
+        """The rows of the table this curve was really drawn from.
+
+        A diagram that holds more than one sheet - a fitted curve beside
+        its measurements, say - has rows that belong to the other sheet,
+        and this column is empty in them.  The curve skips those rows
+        (see `_series_data`), so anything else read for that curve has to
+        skip exactly the same ones, or it would be read a row too early
+        from the very first gap onwards.
+        """
+        column = str(column or "")
+        if not column or column not in self.df.columns:
+            return None
+        try:
+            return ~pd.isna(self.df[column])
+        except (TypeError, ValueError):
+            return None
+
+    def _error_from_column(self, name, y_arr, rows=None):
+        """The error bar lengths read from one column of the table.
+
+        `rows` is the mask of the rows the curve itself was drawn from, so
+        that the n-th bar belongs to the n-th point and not to the n-th
+        row of a table that holds other sheets as well.
+        """
         name = str(name or "")
         if not name or name not in self.df.columns:
             return None
-        values = pd.to_numeric(self.df[name], errors="coerce").to_numpy(float)
-        values = np.abs(values)
+        values = pd.to_numeric(self.df[name], errors="coerce")
+        if rows is not None:
+            try:
+                values = values[rows]
+            except (IndexError, KeyError, TypeError, ValueError):
+                pass
+        values = np.abs(values.to_numpy(float))
         if len(values) >= len(y_arr):
             return values[:len(y_arr)]
         return np.pad(values, (0, len(y_arr) - len(values)),
@@ -10901,7 +11046,7 @@ class PlotWindow(tk.Toplevel):
     def refresh_errorbar(self, column):
         self._clear_errorbar(column)
         st = self.series_style.get(column, self.plot_style)
-        if st != "errorbar":
+        if st not in ERROR_STYLES:
             return None
         line = self.series.get(column)
         if line is None:
@@ -10920,11 +11065,19 @@ class PlotWindow(tk.Toplevel):
         err_val = float(cfg.get("value", 5.0))
         y_arr = np.asarray(y_data, dtype=float)
 
+        rows = self.series_rows(column)
         if err_type == "pair":
             # the column right after this one holds the standard deviation
-            yerr = self._error_from_column(self.partner_column(column), y_arr)
+            yerr = self._error_from_column(self.partner_column(column), y_arr,
+                                           rows)
             if yerr is None:            # no column left over: fall back to 5 %
                 yerr = np.abs(y_arr * 0.05)
+            elif st == "errorbar_pm":
+                # ...and the one after that the error downwards, which may
+                # be a different length: matplotlib wants [down, up]
+                down = self._error_from_column(self.partner_low_column(column),
+                                               y_arr, rows)
+                yerr = np.vstack([yerr if down is None else down, yerr])
         elif err_type == "percent":
             yerr = np.abs(y_arr * (err_val / 100.0))
         elif err_type == "fixed":
@@ -10934,7 +11087,7 @@ class PlotWindow(tk.Toplevel):
             std = float(np.std(finite_y)) if len(finite_y) > 1 else 1.0
             yerr = np.full_like(y_arr, std)
         elif err_type == "column":
-            yerr = self._error_from_column(cfg.get("column", ""), y_arr)
+            yerr = self._error_from_column(cfg.get("column", ""), y_arr, rows)
             if yerr is None:
                 yerr = np.abs(y_arr * 0.05)
         else:
@@ -11679,13 +11832,17 @@ class PlotWindow(tk.Toplevel):
 
     # -- what every style draws beside (or instead of) its curve -----------
     # the styles that draw an artist of their own next to the curve
-    EXTRA_ARTISTS = ("bar", "errorbar", "histogram", "stairs", "hist2d", "pie")
+    EXTRA_ARTISTS = ("bar", "errorbar", "errorbar_pm", "histogram", "stairs",
+                     "hist2d", "pie")
     # ... and those whose curve is not drawn at all: that artist is the plot
     CARRIER_ONLY = ("bar", "histogram", "stairs", "hist2d", "pie")
 
     def clear_extras(self, column, keep=None):
         """Remove what every other style drew beside this curve."""
+        keep = "errorbar" if keep in ERROR_STYLES else keep
         for style in self.EXTRA_ARTISTS:
+            if style in ERROR_STYLES:
+                style = "errorbar"        # the two of them share one artist
             if style != keep:
                 getattr(self, f"_clear_{style}")(column)
 
@@ -11719,7 +11876,10 @@ class PlotWindow(tk.Toplevel):
             # user chose.  A new curve gets its line and marker from
             # _create_line, and changing the style from _on_style_changed.
             if st in self.EXTRA_ARTISTS:
-                getattr(self, f"refresh_{st}")(column)
+                # both error bar styles are drawn by the same method: one
+                # of them simply reads a second column of error
+                name = "errorbar" if st in ERROR_STYLES else st
+                getattr(self, f"refresh_{name}")(column)
         self.refresh_fill(column)
 
     # -- filled area under a curve -----------------------------------------
@@ -11872,7 +12032,7 @@ class PlotWindow(tk.Toplevel):
         """
         columns = [str(one) for one in columns]
         if self.plot_style == "histogram":
-            return columns, {}
+            return columns, {}, {}
         if self.plot_style == "pie":
             # one pie fills the whole plot area, so exactly one column is
             # drawn: the first one that holds numbers.  The first column of
@@ -11880,22 +12040,26 @@ class PlotWindow(tk.Toplevel):
             candidates = columns[1:] or columns[:1]
             for name in candidates:
                 if self.has_numbers(self.df, name):
-                    return [name], {}
-            return candidates[:1], {}
+                    return [name], {}, {}
+            return candidates[:1], {}, {}
         if self.row_numbers_mode():
-            return columns[:1], {}
+            return columns[:1], {}, {}
         if len(columns) < 2:
-            return [], {}
+            return [], {}, {}
         rest = columns[1:]
-        if self.plot_style != "errorbar":
-            return rest, {}
-        curves, partner = [], {}
-        for index in range(0, len(rest), 2):
+        if self.plot_style not in ERROR_STYLES:
+            return rest, {}, {}
+        # one error column per curve, or two of them: upwards and downwards
+        step = 3 if self.plot_style == "errorbar_pm" else 2
+        curves, partner, lower = [], {}, {}
+        for index in range(0, len(rest), step):
             mean = rest[index]
             curves.append(mean)
             if index + 1 < len(rest):
                 partner[mean] = rest[index + 1]
-        return curves, partner
+            if step == 3 and index + 2 < len(rest):
+                lower[mean] = rest[index + 2]
+        return curves, partner, lower
 
     def _plot_data(self, _plot_cfg=None):
         columns = list(self.df.columns)
@@ -11903,8 +12067,9 @@ class PlotWindow(tk.Toplevel):
             return 0
         x_col = columns[0]
         sides = self.layout.get("y", {})
-        curves, partner = self.curve_columns(columns)
+        curves, partner, lower = self.curve_columns(columns)
         self.error_partner = dict(partner)
+        self.error_partner_low = dict(lower)
         for y_col in curves:
             x, y = self.series_points(self.df, x_col, y_col,
                                       style=self.plot_style)
@@ -11966,8 +12131,9 @@ class PlotWindow(tk.Toplevel):
             self.layout = self._clean_layout(df, layout)
             self.x_side = self.layout["x_side"]
         sides = self.layout.get("y", {})
-        curves, partner = self.curve_columns(columns)
+        curves, partner, lower = self.curve_columns(columns)
         self.error_partner = dict(partner)
+        self.error_partner_low = dict(lower)
 
         for y_col in curves:
             x, y = self.series_points(df, x_col, y_col)
@@ -12049,11 +12215,12 @@ class PlotWindow(tk.Toplevel):
             if std not in columns:
                 columns.append(std)
         for name in list(self.series):     # ... the ones only implied by it
-            if self.series_style.get(name, self.plot_style) != "errorbar":
+            if self.series_style.get(name, self.plot_style) not in ERROR_STYLES:
                 continue
-            partner = self.partner_column(name)
-            if partner is not None and partner not in columns:
-                columns.append(partner)
+            for partner in (self.partner_column(name),
+                            self.partner_low_column(name)):
+                if partner is not None and partner not in columns:
+                    columns.append(partner)
         for cfg in self.error_cfg.values():
             name = str(cfg.get("column", ""))
             if name and name not in columns:
@@ -12189,6 +12356,10 @@ class PlotWindow(tk.Toplevel):
                 out.append("ax.spines[%s].set_color(%s)"
                            % (lit(name), lit(self.axis_color(
                                self.spine_owner(name)))))
+                out.append("ax.spines[%s].set_zorder(%s)"
+                           % (lit(name), lit(float(
+                               self.object_z("axis", self.spine_owner(name))
+                               or Z_DEFAULT["axis"]))))
         out.append("ax.tick_params(which='both', width=%s, direction=%s)"
                    % (lit(cfg["width"]),
                       lit("in" if style == "box_in" else "out")))
@@ -12196,6 +12367,12 @@ class PlotWindow(tk.Toplevel):
                    % lit(cfg["major_tick_length"]))
         out.append("ax.tick_params(which='minor', length=%s)"
                    % lit(cfg["minor_tick_length"]))
+        # the ticks, the numbers and the label of an axis stand at its own
+        # height, exactly as they do on the screen
+        for which, artist in (("x", "ax.xaxis"), ("y", "ax.yaxis")):
+            out.append("%s.set_zorder(%s)"
+                       % (artist, lit(float(self.object_z("axis", which)
+                                            or Z_DEFAULT["axis"]))))
 
         for which in ("x", "y", "y2"):
             if which == "y2" and not right:
@@ -12364,7 +12541,7 @@ class PlotWindow(tk.Toplevel):
                     f"label={lit(str(line.get_label()))})"
                 )
                 out.append(f"curves[{lit(str(column))}] = bars_{tag}[0]")
-            elif st == "errorbar":
+            elif st in ERROR_STYLES:
                 e_cfg = self.error_cfg.get(column, {})
                 err_type = e_cfg.get("type", "percent")
                 err_val = float(e_cfg.get("value", 5.0))
@@ -12374,7 +12551,16 @@ class PlotWindow(tk.Toplevel):
                 ec = store_color(e_cfg.get("color", line.get_color()))
                 values = f"np.asarray(DATA[{lit(str(column))}], float)"
                 partner = self.partner_column(column)
-                if err_type == "pair" and partner in self.df.columns:
+                lower = self.partner_low_column(column)
+                if (err_type == "pair" and st == "errorbar_pm"
+                        and partner in self.df.columns
+                        and lower in self.df.columns):
+                    # two columns beside this one: the error upwards and the
+                    # error downwards, which matplotlib takes as [down, up]
+                    out.append(f"yerr_{tag} = np.vstack(["
+                               f"np.abs(np.asarray(DATA[{lit(str(lower))}], float)), "
+                               f"np.abs(np.asarray(DATA[{lit(str(partner))}], float))])")
+                elif err_type == "pair" and partner in self.df.columns:
                     # the column beside this one holds the standard deviation
                     out.append(f"yerr_{tag} = np.abs(np.asarray("
                                f"DATA[{lit(str(partner))}], float))")
@@ -12769,6 +12955,8 @@ class PlotWindow(tk.Toplevel):
                 "label_size": cfg["label_size"], "tick_size": cfg["tick_size"],
                 "label_color": cfg["label_color"], "tick_color": cfg["tick_color"],
                 "label_pad": cfg["label_pad"], "tick_pad": cfg["tick_pad"],
+                "z": float(self.object_z("axis", which)
+                           or cfg.get("z") or Z_DEFAULT["axis"]),
                 "axis_color": self.axis_color(which),
                 "label_on": bool(cfg.get("label_on", True)),
                 "ticks_on": bool(cfg.get("ticks_on", True)),
@@ -12858,6 +13046,9 @@ class PlotWindow(tk.Toplevel):
             "x_side": self.x_side,
             "error_partner": {str(mean): str(std)
                               for mean, std in self.error_partner.items()},
+            # the second error column of `Error Bar (Median, +error, -error)`
+            "error_partner_low": {str(mean): str(low) for mean, low
+                                  in self.error_partner_low.items()},
         }
 
     def apply_state(self, state):
@@ -12895,6 +13086,10 @@ class PlotWindow(tk.Toplevel):
         if isinstance(pairs, dict):      # which column holds which error
             self.error_partner = {str(mean): str(std)
                                   for mean, std in pairs.items()}
+        lows = state.get("error_partner_low")
+        if isinstance(lows, dict):       # ...and which one the error downwards
+            self.error_partner_low = {str(mean): str(low)
+                                      for mean, low in lows.items()}
 
         saved_series = state.get("series")
         if saved_series is not None:
@@ -13047,6 +13242,12 @@ class PlotWindow(tk.Toplevel):
         self.refresh_fills()
         self.refresh_legend()
         self.apply_font_family()     # after everything has been drawn again
+        # a graph written before every curve had a place of its own can
+        # carry two of them at the same height: they are spread out again,
+        # which changes nothing that can be seen but makes the order one
+        # that `Bring to front` and `Send to back` can work on
+        if not self.stack_is_tidy():
+            self._restack(redraw=False)
         # everything is there now: the two axes can be laid in the order the
         # stack asks for, and the drawn objects handed to the right one
         self.apply_stack_layers()
@@ -13166,6 +13367,7 @@ class PlotWindow(tk.Toplevel):
         if getattr(self, "_quiet_draws", False):
             return                       # one drawing is coming at the end
         self.apply_series_stack()
+        self.apply_axis_stack()
         self.sync_axes_dialog()
         self.canvas.draw_idle()
 
@@ -13251,7 +13453,7 @@ class PlotWindow(tk.Toplevel):
             container = self.bar_containers.get(column)
         elif style == "histogram":
             container = self.bar_containers.get(f"hist_{column}")
-        elif style == "errorbar":
+        elif style in ERROR_STYLES:
             container = self.errorbar_containers.get(column)
             # the marker of the curve and one error bar through it, so the
             # sample in front of the text looks like a point of the diagram
@@ -14440,10 +14642,89 @@ class PlotWindow(tk.Toplevel):
     def stack_store(self, kind):
         """The dictionary that keeps the state of one kind of object."""
         return {"shape": self.shape_state, "arrow": self.arrow_state,
-                "note": self.note_state}.get(kind)
+                "note": self.note_state, "axis": self.axis_cfg}.get(kind)
+
+    def axis_key(self, key):
+        """The axis page ("x", "y", "y2") one name means.
+
+        An axis is found under the pointer as the **side** of the plot area
+        it is drawn on - "bottom", "left" and so on - while everything that
+        is remembered about it belongs to its page.  Both names reach the
+        same axis here.
+        """
+        name = str(key)
+        if name in ("x", "y", "y2"):
+            return name
+        if name in FRAME_ENDS:
+            return self.spine_owner(name)
+        return None
+
+    def axis_drawn(self, which):
+        """True while this axis is drawn at all, line, ticks and numbers."""
+        which = self.axis_key(which)
+        if which is None or which not in self.axis_cfg:
+            return False
+        if self.axis_direction(which) == "off":
+            return False
+        if which == "y":
+            return self.left_axis_shown()
+        if which == "y2":
+            return self.ax2 is not None and self.right_axis_active()
+        return True
+
+    def axis_artists(self, which):
+        """Everything matplotlib draws for one axis, as artists.
+
+        The `Axis` itself carries the tick marks, the numbers, the label -
+        and the grid lines of that axis, which matplotlib draws inside it -
+        so all of them travel together; the lines of the plot area it sits
+        on are the rest of it.
+        """
+        which = self.axis_key(which)
+        found = []
+        if which == "x":
+            found.append(self.ax.xaxis)
+            found += [self.ax.spines[name] for name in HORIZONTAL_SIDES
+                      if name in self.ax.spines]
+        elif which == "y":
+            found.append(self.ax.yaxis)
+            if "left" in self.ax.spines:
+                found.append(self.ax.spines["left"])
+            if not self.right_axis_active() and "right" in self.ax.spines:
+                found.append(self.ax.spines["right"])
+        elif which == "y2":
+            if self.ax2 is not None:
+                found.append(self.ax2.yaxis)
+            if self.right_axis_active() and "right" in self.ax.spines:
+                found.append(self.ax.spines["right"])
+        return found
+
+    def apply_axis_z(self, which):
+        """Put one axis, with everything drawn for it, at its own height."""
+        which = self.axis_key(which)
+        if which is None:
+            return False
+        cfg = self.axis_cfg.get(which) or {}
+        z = cfg.get("z")
+        z = float(Z_DEFAULT["axis"]) if z is None else float(z)
+        for artist in self.axis_artists(which):
+            try:
+                artist.set_zorder(z)
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return True
+
+    def apply_axis_stack(self):
+        """Every axis back at the height it was given, after a redraw."""
+        for which in ("x", "y", "y2"):
+            self.apply_axis_z(which)
+        return True
 
     def object_name(self, kind, key=None):
         """What one object is called in a menu or in a message."""
+        if kind == "axis":
+            side = self.axis_side(key) or str(key)
+            return SIDE_NAMES.get(side, STACK_NAMES["axis"])
         if kind == "shape":
             state = self.shape_state.get(key) or {}
             if state.get("kind") == PICTURE_KIND:
@@ -14519,6 +14800,12 @@ class PlotWindow(tk.Toplevel):
 
     def object_z(self, kind, key):
         """Where one object stands in the stack now, or None."""
+        if kind == "axis":
+            which = self.axis_key(key)
+            if which is None or not self.axis_drawn(which):
+                return None       # an axis that is not drawn is not a member
+            z = (self.axis_cfg.get(which) or {}).get("z")
+            return float(Z_DEFAULT["axis"]) if z is None else float(z)
         if kind == "series":
             if key not in self.series:
                 return None
@@ -14539,6 +14826,12 @@ class PlotWindow(tk.Toplevel):
         """Put one object at height `z` and remember it there."""
         if kind == "series":
             return self.set_series_zorder(key, z)
+        if kind == "axis":
+            which = self.axis_key(key)
+            if which is None or which not in self.axis_cfg:
+                return False
+            self.axis_cfg[which]["z"] = float(z)
+            return self.apply_axis_z(which)
         store = self.stack_store(kind)
         state = None if store is None else store.get(key)
         if state is None:
@@ -14703,11 +14996,36 @@ class PlotWindow(tk.Toplevel):
             self.draw()
         return order
 
-    def top_z(self):
-        """The height a new object needs to stand in front of everything."""
-        heights = [self.object_z(kind, key) for kind, key in self.stack_members()]
+    def top_z(self, kinds=None):
+        """The height a new object needs to stand in front of everything.
+
+        The **axes** are left out of the count: their lines, tick marks and
+        numbers are drawn over the diagram to begin with, and something
+        newly drawn belongs in front of the other objects, not in front of
+        the frame.  `Bring to front` still lifts anything over them.
+        """
+        kinds = tuple(kinds) if kinds else tuple(one for one in STACK_KINDS
+                                                 if one != "axis")
+        heights = [self.object_z(kind, key)
+                   for kind, key in self.stack_members() if kind in kinds]
         heights = [one for one in heights if one is not None]
         return (max(heights) if heights else Z_STACK_BASE) + Z_STACK_STEP
+
+    def stack_is_tidy(self):
+        """True when every object really stands above the one before it.
+
+        Two objects at the same height are drawn in the order matplotlib
+        happens to hold them, which is not an order the user can change -
+        and since the parts of a curve are drawn a little above its line,
+        a tie can put one curve's error bars over another curve.  A file
+        written before every curve was given a place of its own carries
+        such ties, so `Bring to front` has to be able to break them.
+        """
+        heights = [self.object_z(kind, key)
+                   for kind, key in self.stack_members()]
+        heights = [one for one in heights if one is not None]
+        return all(later > earlier
+                   for earlier, later in zip(heights, heights[1:]))
 
     def move_in_stack(self, kind, key, step=1):
         """One step forward (step = 1) or backward (step = -1) in the stack.
@@ -14716,6 +15034,8 @@ class PlotWindow(tk.Toplevel):
         past exactly one other object - a drawing walks behind the curves
         one by one, and a curve can be brought out in front of the others.
         """
+        if kind == "axis":
+            key = self.axis_key(key)     # a side name means its axis page
         order = self.stack_members()
         try:
             index = order.index((kind, key))
@@ -14723,6 +15043,15 @@ class PlotWindow(tk.Toplevel):
             return False
         target = max(0, min(len(order) - 1, index + int(step)))
         if target == index:
+            if not self.stack_is_tidy():
+                # it cannot move any further, but the stack has objects
+                # standing at the same height: laying it out again is what
+                # the user asked for, and it does show
+                self.restack(order)
+                self.flash(f"{self.object_name(kind, key)} is "
+                           + ("in front of everything now" if step > 0
+                              else "behind everything now"))
+                return True
             self.flash(f"{self.object_name(kind, key)} is already "
                        + ("in front of everything" if step > 0
                           else "behind everything"))
@@ -14773,6 +15102,9 @@ class PlotWindow(tk.Toplevel):
         name = self.series_at(self._mouse_event(x, y))
         if name is not None:
             candidates.append(("series", name))
+        side = self.frame_side_at(x, y)
+        if side is not None and self.axis_key(side) is not None:
+            candidates.append(("axis", self.axis_key(side)))
         if not candidates:
             return (None, None)
         candidates.sort(key=lambda one: self.object_z(*one) or 0.0)
@@ -16283,8 +16615,13 @@ class PlotWindow(tk.Toplevel):
                        labelcolor=tick_color, pad=self.points(tick_pad))
 
         # the scale comes first: telling matplotlib about it throws away
-        # the tick locators, which the range below sets
+        # the tick locators, which the range below sets.  The height of the
+        # axis is its place in the stack, not something this page sets, so
+        # it is carried over from what was there (or from the file).
+        height = cfg.get("z", stored.get("z"))
         self.axis_cfg[which] = {**stored, "scale": scale}
+        if height is not None:
+            self.axis_cfg[which]["z"] = float(height)
         if not self.axis_scale_matches(which):
             self.apply_axis_scale(which)
 
@@ -16368,8 +16705,12 @@ class PlotWindow(tk.Toplevel):
             "axis_color": axis_color, "label_on": label_on,
             "ticks_on": ticks_on, "tick_labels_on": tick_labels_on,
             "direction": direction, "scale": scale,
+            # the place of the axis in the stack is not this page's to set:
+            # it comes from the file, or from where the user put it
+            "z": float(Z_DEFAULT["axis"] if height is None else height),
             "grid": dict(grid),
         }
+        self.apply_axis_z(which)
         # the axis runs the usual way or backwards, and a range that could
         # not be shown on a logarithmic scale is lifted off zero
         self.apply_axis_scale(which)
@@ -17519,6 +17860,13 @@ the program itself, so nothing beyond numpy is needed.
   ticked for plotting are chosen to begin with; click, `Shift`-click or
   `Ctrl/Cmd`-click to choose others.  The **first column holds the X
   values** (a first column of names counts the rows instead).
+  **A column that holds error bars is not chosen.**  The scatter of a
+  measurement is not a measurement of its own, so a curve fitted to it
+  would be a curve fitted to the noise: whichever column a drawn curve
+  reads its bars from (the one after it, or the one named in
+  `Curve properties > Source`) is left unticked, and only the means are
+  fitted and drawn.  It is still in the list, so it can be ticked by hand
+  if you really want a curve through it.
 * **Parameters**: one line for every parameter of the method.  Leaving the
   `Start value` empty lets the program work it out from the data, which is
   what usually happens.  Typing one in says where the fit should set out
@@ -17643,10 +17991,18 @@ an immediate action with a style menu:
   * **Bar Chart**: Vertical rectangular bars for categorical, discrete, or
     binned data. Bar width, fill opacity (alpha), edge line width, and colors
     can be customized in Curve Properties.
-  * **Error Bar**: Data points with vertical error bars and horizontal end caps.
-    Error bounds can be calculated automatically (as a percentage, a fixed
-    value, or standard deviation) or driven directly from a separate column in
-    the spreadsheet table.
+  * **Error Bar (Median, SD)**: Data points with vertical error bars and
+    horizontal end caps, the **same length up and down**.  The columns are
+    read **in pairs** - `x`, median, SD, median, SD, ... - so two Y columns
+    make one curve.  The length can also be worked out by the program (a
+    percentage, a fixed value, the standard deviation of the column) or
+    taken from any other column; see `Error Bar properties`.
+  * **Error Bar (Median, +error, -error)**: the same points with a bar that
+    may be **longer one way than the other**.  Its columns are read **in
+    threes** - `x`, median, error upwards, error downwards, median, ... -
+    so three Y columns make one curve and the next three the one after it.
+    Everything else (the marker, the caps, the colours) works exactly as in
+    the other error bar style.
   * **Histogram**: The distribution of a column of raw values, counted by
     the diagram itself into a given number of bins (20 by default, set per
     curve in `Curve properties`). Every column is a sample of its own, and
@@ -17912,7 +18268,8 @@ depends on the kind of diagram:
 | Diagram | The columns |
 | --- | --- |
 | Line + Symbol, Line, Scatter, Bar Chart | `x`, `y1`, `y2`, `y3`, ... - one curve per column |
-| Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
+| Error Bar (Median, SD) | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
+| Error Bar (Median, +error, -error) | `x`, `mean1`, `up1`, `down1`, `mean2`, ... - **in threes** |
 | Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
 | Only the first column filled | that column is the **curve** and the X axis is the **row number** |
 | The first column holds **names** (no numbers at all) | every other column is a curve and the X axis is the **row number** |
@@ -17920,7 +18277,12 @@ depends on the kind of diagram:
 An **error bar** diagram therefore reads the columns two by two: the third
 column is the length of the error bar of the second one, the fifth belongs
 to the fourth, and so on.  Five columns give **two** curves with their own
-error bars, seven columns give three, and so on.  The `std` columns are used
+error bars, seven columns give three, and so on.  The **(Median, +error,
+-error)** style reads them three by three instead: the third column is how
+far the bar reaches **up** from the second one and the fourth how far it
+reaches **down**, then the fifth column is the next curve.  Seven columns
+give **two** curves there.  Both lengths are taken as lengths, so a minus
+sign in front of the downward error changes nothing.  The `std` columns are used
 up as the errors and are not drawn as curves of their own, so every one of
 them has to stay ticked in the strip above the table.  A last `mean` column
 with no `std` beside it still gets a curve (with a 5 % error, which can be
@@ -18338,17 +18700,18 @@ out of the image that the save button of the toolbar writes.
 ### Which object is in front
 
 Everything drawn inside the plot area stands in one **stack**: the curves,
-the drawings, the pictures, the arrows and the text boxes together.  What
-is higher in the stack is painted over what is lower, and every one of them
-can be moved up and down in it - so a picture can be pushed **behind** the
-curves as a background, and one curve can be brought out **in front of**
-another one.
+the drawings, the pictures, the arrows, the text boxes **and the three
+axes** together.  What is higher in the stack is painted over what is
+lower, and every one of them can be moved up and down in it - so a picture
+can be pushed **behind** the curves as a background, one curve can be
+brought out **in front of** another one, and a drawing can be laid over the
+frame or sent back under it.
 
 * A **right click** on any of them (`Ctrl`+click on a Mac, or the right
   button of the mouse) opens a small menu.  Its first line names what was
   found under the pointer - `Curve`, `Drawing`, `Picture`, `Arrow`,
-  `Text box`, or `The paper of the diagram` when the pointer was on the
-  empty paper.
+  `Text box`, `Bottom X axis` and the other axis names, or `The paper of
+  the diagram` when the pointer was on the empty paper.
 * Four commands move it: **Bring to front** and **Send to back** take it
   the whole way in one click, while **Bring forward** and **Send backward**
   lift it past exactly **one** neighbour - clicking the same line again and
@@ -18365,9 +18728,20 @@ another one.
   the diagram and paste.
 * What the pointer finds is what is **in front** at that point, so after a
   curve has been moved over a drawing the same click reaches the curve.
-* A newly drawn object always appears in front of everything, and the whole
-  order is written into the `.aplt` file and into the exported matplotlib
-  program.
+* A newly drawn object always appears in front of everything, and so does
+  a **curve drawn for the first time** - a fitted curve above all, which
+  lands on top of the measurements it was fitted to and is never crossed by
+  their markers or error bars.  The whole order is written into the `.aplt`
+  file and into the exported matplotlib program.
+* **Every object has a place of its own.**  Two objects at the same height
+  are painted in whatever order matplotlib happens to hold them, which is
+  no order at all to a reader and none the user can change; and since the
+  parts of a curve are drawn a little above its own line, a tie can let one
+  curve's error bars cross another curve, which makes a line look dashed
+  where it passes them.  A graph written before this was so opens with its
+  stack spread out again - nothing that can be seen changes - and
+  `Bring to front` on an object that is tied with its neighbours breaks the
+  tie instead of reporting that there is nothing to do.
 * The stack reaches **across both Y scales**.  Matplotlib draws one set of
   axes completely before the other, so a drawing could otherwise never
   stand over a curve of the **right hand** scale, whatever its place in the
@@ -18380,6 +18754,23 @@ another one.
   themselves but move as **one** object, so something pushed behind a
   filled curve disappears under the filling completely, not only under the
   line.
+* **An axis is one object too**, and all of it moves together: its line on
+  the plot area, its **tick marks, its numbers and its label** - and the
+  **grid lines** of that axis, which matplotlib draws with it.  Each of the
+  three axes has a height of its own, and all three stand **in front of
+  the diagram** to begin with, which is where the frame has always been
+  drawn.  Two things follow from that:
+  * the numbers and the tick marks are no longer stuck **behind**
+    everything: a drawing laid over the axis hides them only if it is
+    brought in front of that axis on purpose;
+  * a **grid** now stands in front of the curves with its axis.  One
+    `Send to back` on that axis puts the grid (and its numbers) under the
+    curves again, which is the classic look.
+  Right click the axis **line** to reach its menu, and the height is kept
+  in the `.aplt` file and written into the exported matplotlib program.
+* Something newly drawn is placed in front of the other **objects** but
+  still **behind the axes**, so adding a drawing never hides the frame by
+  itself.
 
 ### Drawing rectangles, triangles, circles, ellipses and lines
 
@@ -18621,7 +19012,17 @@ single step of `Edit > Undo`, sizes included.
 An axis that carries no curve is not only left without a frame line: its
 **numbers, tick marks and label disappear** as well, so a diagram whose
 every curve is on the right hand scale has no empty left axis standing
-next to it.  The Y **grid** follows the Y axis whose numbers are shown, so
+next to it.
+
+**`No X axis` (and `No left / right Y axis`) in the `Direction` box now
+takes the line away too.**  Switching an axis off leaves *nothing* of it:
+no line, no tick marks, no numbers, no label.  `Standard` and `Reverse`
+always draw at least the **line**, even with the
+`Tick range, labels and fonts` section switched off, and the numbers, the
+ticks and the label come with it as their own switches say.  A **closed**
+frame style (`Full frame`, `Frame with ticks`) is a frame around the plot
+area rather than an axis, so it keeps all four of its sides whatever the
+`Direction` box says.  The Y **grid** follows the Y axis whose numbers are shown, so
 it is drawn once, on the scale it belongs to.
 
 ### Turning the drawings and the text boxes
@@ -18992,9 +19393,12 @@ and moves it (see `Moving the whole graph`), so the properties need the
 second click, exactly like a text box or a drawing.
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 9 styles: **Line + Symbol**,
-**Line**, **Scatter**, **Bar Chart**, **Error Bar**, **Histogram**,
-**Stairs**, **2D Histogram** and **Pie Chart**.  The dialog shows exactly
+representation of any individual curve between all 10 styles: **Line +
+Symbol**, **Line**, **Scatter**, **Bar Chart**, **Error Bar (Median, SD)**,
+**Error Bar (Median, +error, -error)**, **Histogram**, **Stairs**,
+**2D Histogram** and **Pie Chart**.  A single curve switched to an error
+bar style by hand reads the column after it (or the two columns after it)
+for its errors.  The dialog shows exactly
 the sections that style can use, and nothing else:
 
 | Style | Sections |
@@ -19003,7 +19407,8 @@ the sections that style can use, and nothing else:
 | Line | Legend, Line, Fill under the curve |
 | Scatter | Legend, Marker, Fill under the curve |
 | Bar Chart | Legend, Bar properties |
-| Error Bar | Legend, Marker, Line, Error bar properties |
+| Error Bar (Median, SD) | Legend, Marker, Line, Error bar properties |
+| Error Bar (Median, +error, -error) | Legend, Marker, Line, Error bar properties |
 | Histogram | Legend, Histogram properties |
 | Stairs | Legend, Stairs properties |
 | 2D Histogram | Legend, 2D histogram properties |
@@ -19069,7 +19474,9 @@ for a 2D histogram.
   * `Source`: determines how error bars are calculated:
     * `Next column (x, mean, std)` **(default)**: the column standing right
       after this one holds the length of the error bars - see
-      `What the columns mean` above.
+      `What the columns mean` above.  On a curve drawn as
+      **(Median, +error, -error)** this one source means the **two**
+      columns after it: the error upwards and the error downwards.
     * `Percentage`: symmetric error computed as a percentage of the Y value (e.g. ±5%).
     * `Fixed value`: constant symmetric error across all points (e.g. ±0.5).
     * `Standard deviation`: column standard deviation used as uniform error bounds.
@@ -19080,6 +19487,12 @@ for a 2D histogram.
   * `Cap thickness`: how thick the end caps themselves are drawn.
   * `Colour`: colour of the error bars.
   * *Tip:* Clicking on any error bar stem or horizontal cap directly opens this dialog.
+  * The bars are read from the **rows of their own curve**.  When a diagram
+    holds more than one sheet - a fitted curve beside its measurements, for
+    example - the table has rows that belong to the other sheet and are
+    empty here; the curve skips them and the bars skip exactly the same
+    ones, so fitting a curve through a measurement leaves every one of its
+    error bars where it was.
 * **Stairs properties** (visible for Stairs):
   * The **place of the step** (a list at the top): midway between two X
     values - every value is valid around its own X - or at the X value

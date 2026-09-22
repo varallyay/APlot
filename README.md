@@ -287,6 +287,13 @@ the program itself, so nothing beyond numpy is needed.
   ticked for plotting are chosen to begin with; click, `Shift`-click or
   `Ctrl/Cmd`-click to choose others.  The **first column holds the X
   values** (a first column of names counts the rows instead).
+  **A column that holds error bars is not chosen.**  The scatter of a
+  measurement is not a measurement of its own, so a curve fitted to it
+  would be a curve fitted to the noise: whichever column a drawn curve
+  reads its bars from (the one after it, or the one named in
+  `Curve properties > Source`) is left unticked, and only the means are
+  fitted and drawn.  It is still in the list, so it can be ticked by hand
+  if you really want a curve through it.
 * **Parameters**: one line for every parameter of the method.  Leaving the
   `Start value` empty lets the program work it out from the data, which is
   what usually happens.  Typing one in says where the fit should set out
@@ -411,10 +418,18 @@ an immediate action with a style menu:
   * **Bar Chart**: Vertical rectangular bars for categorical, discrete, or
     binned data. Bar width, fill opacity (alpha), edge line width, and colors
     can be customized in Curve Properties.
-  * **Error Bar**: Data points with vertical error bars and horizontal end caps.
-    Error bounds can be calculated automatically (as a percentage, a fixed
-    value, or standard deviation) or driven directly from a separate column in
-    the spreadsheet table.
+  * **Error Bar (Median, SD)**: Data points with vertical error bars and
+    horizontal end caps, the **same length up and down**.  The columns are
+    read **in pairs** - `x`, median, SD, median, SD, ... - so two Y columns
+    make one curve.  The length can also be worked out by the program (a
+    percentage, a fixed value, the standard deviation of the column) or
+    taken from any other column; see `Error Bar properties`.
+  * **Error Bar (Median, +error, -error)**: the same points with a bar that
+    may be **longer one way than the other**.  Its columns are read **in
+    threes** - `x`, median, error upwards, error downwards, median, ... -
+    so three Y columns make one curve and the next three the one after it.
+    Everything else (the marker, the caps, the colours) works exactly as in
+    the other error bar style.
   * **Histogram**: The distribution of a column of raw values, counted by
     the diagram itself into a given number of bins (20 by default, set per
     curve in `Curve properties`). Every column is a sample of its own, and
@@ -680,7 +695,8 @@ depends on the kind of diagram:
 | Diagram | The columns |
 | --- | --- |
 | Line + Symbol, Line, Scatter, Bar Chart | `x`, `y1`, `y2`, `y3`, ... - one curve per column |
-| Error Bar | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
+| Error Bar (Median, SD) | `x`, `mean1`, `std1`, `mean2`, `std2`, ... - **in pairs** |
+| Error Bar (Median, +error, -error) | `x`, `mean1`, `up1`, `down1`, `mean2`, ... - **in threes** |
 | Histogram | **every** column on its own: a sample of raw values that the diagram counts itself |
 | Only the first column filled | that column is the **curve** and the X axis is the **row number** |
 | The first column holds **names** (no numbers at all) | every other column is a curve and the X axis is the **row number** |
@@ -688,7 +704,12 @@ depends on the kind of diagram:
 An **error bar** diagram therefore reads the columns two by two: the third
 column is the length of the error bar of the second one, the fifth belongs
 to the fourth, and so on.  Five columns give **two** curves with their own
-error bars, seven columns give three, and so on.  The `std` columns are used
+error bars, seven columns give three, and so on.  The **(Median, +error,
+-error)** style reads them three by three instead: the third column is how
+far the bar reaches **up** from the second one and the fourth how far it
+reaches **down**, then the fifth column is the next curve.  Seven columns
+give **two** curves there.  Both lengths are taken as lengths, so a minus
+sign in front of the downward error changes nothing.  The `std` columns are used
 up as the errors and are not drawn as curves of their own, so every one of
 them has to stay ticked in the strip above the table.  A last `mean` column
 with no `std` beside it still gets a curve (with a 5 % error, which can be
@@ -1106,17 +1127,18 @@ out of the image that the save button of the toolbar writes.
 ### Which object is in front
 
 Everything drawn inside the plot area stands in one **stack**: the curves,
-the drawings, the pictures, the arrows and the text boxes together.  What
-is higher in the stack is painted over what is lower, and every one of them
-can be moved up and down in it - so a picture can be pushed **behind** the
-curves as a background, and one curve can be brought out **in front of**
-another one.
+the drawings, the pictures, the arrows, the text boxes **and the three
+axes** together.  What is higher in the stack is painted over what is
+lower, and every one of them can be moved up and down in it - so a picture
+can be pushed **behind** the curves as a background, one curve can be
+brought out **in front of** another one, and a drawing can be laid over the
+frame or sent back under it.
 
 * A **right click** on any of them (`Ctrl`+click on a Mac, or the right
   button of the mouse) opens a small menu.  Its first line names what was
   found under the pointer - `Curve`, `Drawing`, `Picture`, `Arrow`,
-  `Text box`, or `The paper of the diagram` when the pointer was on the
-  empty paper.
+  `Text box`, `Bottom X axis` and the other axis names, or `The paper of
+  the diagram` when the pointer was on the empty paper.
 * Four commands move it: **Bring to front** and **Send to back** take it
   the whole way in one click, while **Bring forward** and **Send backward**
   lift it past exactly **one** neighbour - clicking the same line again and
@@ -1133,9 +1155,20 @@ another one.
   the diagram and paste.
 * What the pointer finds is what is **in front** at that point, so after a
   curve has been moved over a drawing the same click reaches the curve.
-* A newly drawn object always appears in front of everything, and the whole
-  order is written into the `.aplt` file and into the exported matplotlib
-  program.
+* A newly drawn object always appears in front of everything, and so does
+  a **curve drawn for the first time** - a fitted curve above all, which
+  lands on top of the measurements it was fitted to and is never crossed by
+  their markers or error bars.  The whole order is written into the `.aplt`
+  file and into the exported matplotlib program.
+* **Every object has a place of its own.**  Two objects at the same height
+  are painted in whatever order matplotlib happens to hold them, which is
+  no order at all to a reader and none the user can change; and since the
+  parts of a curve are drawn a little above its own line, a tie can let one
+  curve's error bars cross another curve, which makes a line look dashed
+  where it passes them.  A graph written before this was so opens with its
+  stack spread out again - nothing that can be seen changes - and
+  `Bring to front` on an object that is tied with its neighbours breaks the
+  tie instead of reporting that there is nothing to do.
 * The stack reaches **across both Y scales**.  Matplotlib draws one set of
   axes completely before the other, so a drawing could otherwise never
   stand over a curve of the **right hand** scale, whatever its place in the
@@ -1148,6 +1181,23 @@ another one.
   themselves but move as **one** object, so something pushed behind a
   filled curve disappears under the filling completely, not only under the
   line.
+* **An axis is one object too**, and all of it moves together: its line on
+  the plot area, its **tick marks, its numbers and its label** - and the
+  **grid lines** of that axis, which matplotlib draws with it.  Each of the
+  three axes has a height of its own, and all three stand **in front of
+  the diagram** to begin with, which is where the frame has always been
+  drawn.  Two things follow from that:
+  * the numbers and the tick marks are no longer stuck **behind**
+    everything: a drawing laid over the axis hides them only if it is
+    brought in front of that axis on purpose;
+  * a **grid** now stands in front of the curves with its axis.  One
+    `Send to back` on that axis puts the grid (and its numbers) under the
+    curves again, which is the classic look.
+  Right click the axis **line** to reach its menu, and the height is kept
+  in the `.aplt` file and written into the exported matplotlib program.
+* Something newly drawn is placed in front of the other **objects** but
+  still **behind the axes**, so adding a drawing never hides the frame by
+  itself.
 
 ### Drawing rectangles, triangles, circles, ellipses and lines
 
@@ -1389,7 +1439,17 @@ single step of `Edit > Undo`, sizes included.
 An axis that carries no curve is not only left without a frame line: its
 **numbers, tick marks and label disappear** as well, so a diagram whose
 every curve is on the right hand scale has no empty left axis standing
-next to it.  The Y **grid** follows the Y axis whose numbers are shown, so
+next to it.
+
+**`No X axis` (and `No left / right Y axis`) in the `Direction` box now
+takes the line away too.**  Switching an axis off leaves *nothing* of it:
+no line, no tick marks, no numbers, no label.  `Standard` and `Reverse`
+always draw at least the **line**, even with the
+`Tick range, labels and fonts` section switched off, and the numbers, the
+ticks and the label come with it as their own switches say.  A **closed**
+frame style (`Full frame`, `Frame with ticks`) is a frame around the plot
+area rather than an axis, so it keeps all four of its sides whatever the
+`Direction` box says.  The Y **grid** follows the Y axis whose numbers are shown, so
 it is drawn once, on the scale it belongs to.
 
 ### Turning the drawings and the text boxes
@@ -1760,9 +1820,12 @@ and moves it (see `Moving the whole graph`), so the properties need the
 second click, exactly like a text box or a drawing.
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 9 styles: **Line + Symbol**,
-**Line**, **Scatter**, **Bar Chart**, **Error Bar**, **Histogram**,
-**Stairs**, **2D Histogram** and **Pie Chart**.  The dialog shows exactly
+representation of any individual curve between all 10 styles: **Line +
+Symbol**, **Line**, **Scatter**, **Bar Chart**, **Error Bar (Median, SD)**,
+**Error Bar (Median, +error, -error)**, **Histogram**, **Stairs**,
+**2D Histogram** and **Pie Chart**.  A single curve switched to an error
+bar style by hand reads the column after it (or the two columns after it)
+for its errors.  The dialog shows exactly
 the sections that style can use, and nothing else:
 
 | Style | Sections |
@@ -1771,7 +1834,8 @@ the sections that style can use, and nothing else:
 | Line | Legend, Line, Fill under the curve |
 | Scatter | Legend, Marker, Fill under the curve |
 | Bar Chart | Legend, Bar properties |
-| Error Bar | Legend, Marker, Line, Error bar properties |
+| Error Bar (Median, SD) | Legend, Marker, Line, Error bar properties |
+| Error Bar (Median, +error, -error) | Legend, Marker, Line, Error bar properties |
 | Histogram | Legend, Histogram properties |
 | Stairs | Legend, Stairs properties |
 | 2D Histogram | Legend, 2D histogram properties |
@@ -1837,7 +1901,9 @@ for a 2D histogram.
   * `Source`: determines how error bars are calculated:
     * `Next column (x, mean, std)` **(default)**: the column standing right
       after this one holds the length of the error bars - see
-      `What the columns mean` above.
+      `What the columns mean` above.  On a curve drawn as
+      **(Median, +error, -error)** this one source means the **two**
+      columns after it: the error upwards and the error downwards.
     * `Percentage`: symmetric error computed as a percentage of the Y value (e.g. ±5%).
     * `Fixed value`: constant symmetric error across all points (e.g. ±0.5).
     * `Standard deviation`: column standard deviation used as uniform error bounds.
@@ -1848,6 +1914,12 @@ for a 2D histogram.
   * `Cap thickness`: how thick the end caps themselves are drawn.
   * `Colour`: colour of the error bars.
   * *Tip:* Clicking on any error bar stem or horizontal cap directly opens this dialog.
+  * The bars are read from the **rows of their own curve**.  When a diagram
+    holds more than one sheet - a fitted curve beside its measurements, for
+    example - the table has rows that belong to the other sheet and are
+    empty here; the curve skips them and the bars skip exactly the same
+    ones, so fitting a curve through a measurement leaves every one of its
+    error bars where it was.
 * **Stairs properties** (visible for Stairs):
   * The **place of the step** (a list at the top): midway between two X
     values - every value is valid around its own X - or at the X value
