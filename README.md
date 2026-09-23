@@ -1734,6 +1734,10 @@ Two texts are special, in the same way as in their dialogs:
 * writing **nothing** into a legend box hides that legend, exactly as an
   empty text does in the legend dialog.
 
+Writing in place is a command like any other: `Undo` takes it back.  A
+property window that is open at the same time shows the new text at once
+(see `The property windows`).
+
 Drawings and arrows hold no text, so a second click on them does nothing -
 they are simply selected.
 
@@ -1833,6 +1837,27 @@ are ordinary windows:
 
 If the old behaviour is preferred, `Property windows always on top` in the
 `Windows` tab of the settings keeps them above the diagram again.
+
+**An open window always says what the diagram says.**  The diagram and its
+windows can be used side by side: a title or an axis label written on the
+graph itself, a legend renamed there, a text box or a drawing turned by its
+handle, `Resize graph`, a step of `Undo` or `Redo` - all of it appears at
+once in every window that shows it (`Axes properties` with all its pages,
+`Title and fonts`, `Curve properties`, the title, label, legend, text box,
+drawing and arrow windows).  So `Apply` never puts an old text or an old
+size back next to the one thing that was really changed: with `Axes
+properties` open, write a new title on the graph, then change the number
+of minor ticks and press `Apply` - the new title stays.
+
+A field that has been **changed in the window and not applied yet** is the
+user's own: the diagram does not write over it, and `Apply` (or, in the
+windows that apply at once, the change itself) sends it to the diagram.
+From then on the field follows the diagram again.
+
+The `Font size (all)` and `Font colour (all)` of the legends in `Title and
+fonts` reach every legend box when they are **set** there; applying the
+window for anything else leaves a legend that was given a size or a colour
+of its own in its curve window as it is.
 
 ### Curve properties
 

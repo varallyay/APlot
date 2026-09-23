@@ -1740,6 +1740,117 @@ class ColorSwatch(ttk.Frame):
             self.set_color(hex_value, notify=True)
 
 
+class SwatchField:
+    """A colour swatch that answers like a tk variable: get() and set()."""
+
+    def __init__(self, swatch):
+        self.swatch = swatch
+
+    def get(self):
+        return safe_hex(self.swatch.color, "#000000")
+
+    def set(self, value):
+        self.swatch.set_color(value)
+
+
+def field_number(value, fallback=""):
+    """A number the way the dialogs write it into a box: 11, 1.5, 0.35."""
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return fallback
+
+
+class DiagramMirror:
+    """A dialog (or one page of it) that keeps showing what the diagram says.
+
+    A properties window holds a **copy** of the settings it shows, and its
+    Apply sends that whole copy back.  While it stands open the diagram
+    keeps changing without it: a title written on the graph itself, a
+    legend renamed there, a text box turned by its handle, `Resize graph`,
+    a step of Undo.  A copy that stayed as it was when the window opened
+    would put all of that back to the old values at the next Apply, next to
+    the one thing the user really meant to change.
+
+    So every field is compared with the diagram each time the diagram is
+    drawn, and follows it - with one exception: a field the user has
+    changed in the window and not applied yet is theirs, and is left alone
+    until Apply takes it.
+
+    `_diagram_fields()` gives, for every field, the variable (or a
+    `SwatchField`) and the value the diagram has for it right now, written
+    exactly the way the field writes it.  `None` means "the diagram has no
+    opinion here" (a colour of something transparent, say).
+    """
+
+    def _diagram_fields(self):
+        return {}
+
+    def _mirrored(self, names):
+        """Some fields were refreshed: tidy whatever depends on them."""
+        return None
+
+    def _mirror_book(self):
+        book = self.__dict__.get("_mirror_state")
+        if book is None:
+            book = self.__dict__["_mirror_state"] = ({}, {})
+        return book
+
+    def mirror(self, force=False, only=None):
+        """Let the fields follow the diagram; the names that changed.
+
+        `force` refreshes a field even while the user is editing it - used
+        right after Apply, when the diagram holds what the window said.
+        """
+        try:
+            fields = self._diagram_fields()
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError,
+                tk.TclError):
+            return []
+        seen, shown_then = self._mirror_book()
+        changed = []
+        for name, (field, value) in fields.items():
+            if value is None or (only is not None and name not in only):
+                continue
+            try:
+                shown = field.get()
+            except (tk.TclError, ValueError):
+                continue
+            if shown == value:
+                # the window and the diagram agree: nothing of the user's
+                # is waiting in this field
+                seen[name] = shown_then[name] = value
+                continue
+            if not force and name in seen:
+                if value == seen[name]:
+                    continue        # the diagram did not move: the user did
+                if shown != shown_then.get(name, shown):
+                    seen[name] = value
+                    continue        # typed in and not applied yet: theirs
+            try:
+                field.set(value)
+            except (tk.TclError, ValueError):
+                continue
+            seen[name] = shown_then[name] = value
+            changed.append(name)
+        if changed:
+            self._mirrored(changed)
+        return changed
+
+    def mirror_rebase(self, names):
+        """These fields were rewritten by the window itself (another unit):
+        what they show now counts as what the diagram said."""
+        seen, shown_then = self._mirror_book()
+        fields = self._diagram_fields()
+        for name in names:
+            if name in fields:
+                try:
+                    shown_then[name] = fields[name][0].get()
+                except (tk.TclError, ValueError):
+                    pass
+                seen[name] = fields[name][1]
+
+
 class ShapeToolButton(tk.Canvas):
     """Toolbar button with an icon and a small menu arrow on its right.
 
@@ -2732,13 +2843,19 @@ class ToolDialog(tk.Toplevel):
         return widget
 
 
-class ArrowDialog(ToolDialog):
-    """Head, line and colour of one arrow."""
+class ArrowDialog(DiagramMirror, ToolDialog):
+    """Head, line and colour of one arrow.
 
-    def __init__(self, master, state, on_apply, on_delete=None, on_close=None):
+    `source`, when given, returns the state of the arrow as it is now (or
+    None once it is gone), so the window follows it while open.
+    """
+
+    def __init__(self, master, state, on_apply, on_delete=None, on_close=None,
+                 source=None):
         super().__init__(master, "Arrow properties", on_close=on_close)
         self.on_apply = on_apply
         self.on_delete = on_delete
+        self.source = source
 
         self.head_var = tk.StringVar(
             value=name_of(ARROW_HEADS, state["head"], "Triangle head"))
@@ -2782,6 +2899,20 @@ class ArrowDialog(ToolDialog):
             ttk.Button(bar, text="Delete", command=self._delete).pack(
                 side="left", padx=(6, 0))
         ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+        self.mirror(force=True)
+
+    def _diagram_fields(self):
+        state = self.source() if self.source is not None else None
+        if not state:
+            return {}
+        return {
+            "head": (self.head_var, name_of(ARROW_HEADS, state.get("head"), None)),
+            "size": (self.size_var, field_number(state.get("size"), None)),
+            "style": (self.style_var, name_of(LINE_STYLES, state.get("style"),
+                                              None)),
+            "width": (self.width_var, field_number(state.get("width"), None)),
+            "color": (SwatchField(self.color), safe_hex(state.get("color"), None)),
+        }
 
     def values(self):
         return {
@@ -2793,6 +2924,7 @@ class ArrowDialog(ToolDialog):
         }
 
     def apply(self):
+        self.mirror()           # catch up with the diagram first
         self.on_apply(self.values())
 
     def _delete(self):
@@ -2801,15 +2933,21 @@ class ArrowDialog(ToolDialog):
         self.close()
 
 
-class ShapeDialog(ToolDialog):
-    """Line and fill properties of one drawn object (or of a picture)."""
+class ShapeDialog(DiagramMirror, ToolDialog):
+    """Line and fill properties of one drawn object (or of a picture).
+
+    `source`, when given, returns the state of the object as it is now (or
+    None once it is gone): a shape turned by its handle, `Resize graph` or
+    Undo show up in the window while it stays open.
+    """
 
     def __init__(self, master, state, on_apply, on_delete=None, on_close=None,
-                 on_fit=None):
+                 on_fit=None, source=None):
         picture = state["kind"] == PICTURE_KIND
         title = ("Picture" if picture
                  else name_of(SHAPE_KINDS, state["kind"], "Shape"))
         super().__init__(master, f"{title} properties", on_close=on_close)
+        self.source = source
         self.on_apply = on_apply
         self.on_delete = on_delete
         self.on_fit = on_fit
@@ -2905,6 +3043,32 @@ class ShapeDialog(ToolDialog):
             ttk.Button(bar, text="Delete", command=self._delete).pack(
                 side="left", padx=(6, 0))
         ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+        self.mirror(force=True)
+
+    def _diagram_fields(self):
+        state = self.source() if self.source is not None else None
+        if not state:
+            return {}
+        style = state.get("style", "-")
+        face = state.get("face", "none")
+        fields = {
+            "line_on": (self.line_on_var,
+                        not SeriesStyleDialog.is_off(style)),
+            "style": (self.style_var, None if SeriesStyleDialog.is_off(style)
+                      else name_of(LINE_STYLES, style, None)),
+            "width": (self.width_var, field_number(state.get("width"), None)),
+            "edge": (SwatchField(self.edge_color),
+                     safe_hex(state.get("edge"), None)),
+            "alpha": (self.alpha_var, field_number(state.get("alpha", 0.6),
+                                                   None)),
+            "angle": (self.angle_var, field_number(
+                float(state.get("angle", 0.0) or 0.0) % 360.0, None)),
+        }
+        if self.fill_box is not None:
+            fields["fill_on"] = (self.fill_on_var, face != "none")
+            fields["face"] = (SwatchField(self.face_color),
+                              None if face == "none" else safe_hex(face, None))
+        return fields
 
     def _section(self, title, variable, **pack):
         """A section whose title is its own check button."""
@@ -2932,6 +3096,7 @@ class ShapeDialog(ToolDialog):
         }
 
     def apply(self):
+        self.mirror()           # catch up with the diagram first
         self.on_apply(self.values())
 
     def _delete(self):
@@ -3084,14 +3249,19 @@ class SettingsDialog(ToolDialog):
 # text + font size (title, axis labels, legend entries)
 # --------------------------------------------------------------------------
 
-class TextStyleDialog(ToolDialog):
-    """One text with its font size and colour: `on_apply(text, size, colour)`."""
+class TextStyleDialog(DiagramMirror, ToolDialog):
+    """One text with its font size and colour: `on_apply(text, size, colour)`.
+
+    `source`, when given, tells what the diagram says now - (text, size,
+    colour, distance) - so that the window follows the text while open.
+    """
 
     def __init__(self, master, title, text, size, on_apply,
                  color="#000000", distance=None, distance_label="Distance [px]:",
-                 hint=None, on_close=None):
+                 hint=None, on_close=None, source=None):
         super().__init__(master, title, on_close=on_close)
         self.on_apply = on_apply
+        self.source = source
         self.text_var = tk.StringVar(value=text)
         self.size_var = tk.StringVar(value=str(int(size)))
         self.distance_var = (tk.StringVar(value=f"{float(distance):g}")
@@ -3123,8 +3293,21 @@ class TextStyleDialog(ToolDialog):
         self.bind("<Return>", lambda _e: self.apply())
         entry.focus_set()
         entry.select_range(0, "end")
+        self.mirror(force=True)
+
+    def _diagram_fields(self):
+        if self.source is None:
+            return {}
+        text, size, color, distance = self.source()
+        fields = {"text": (self.text_var, str(text)),
+                  "size": (self.size_var, field_number(size, None)),
+                  "color": (SwatchField(self.color), safe_hex(color, "#000000"))}
+        if self.distance_var is not None and distance is not None:
+            fields["distance"] = (self.distance_var, field_number(distance, None))
+        return fields
 
     def apply(self):
+        self.mirror()           # catch up with the diagram first
         distance = (to_float(self.distance_var.get(), 0.0)
                     if self.distance_var is not None else None)
         self.on_apply(self.text_var.get(), to_int(self.size_var.get(), 10),
@@ -3139,7 +3322,7 @@ class TextStyleDialog(ToolDialog):
 # curve (line + marker) properties
 # --------------------------------------------------------------------------
 
-class SeriesStyleDialog(PairedFields, ToolDialog):
+class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
     """Line, marker, bar, and error properties of one curve; changes are applied live."""
 
     def __init__(self, master, line: Line2D, on_change, on_close=None,
@@ -3231,7 +3414,100 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
                              self.hist2d_box, self.pie_box, self.fill_box))
         self._update_section_visibility()
         self._build_buttons()
+        self.mirror(force=True)
         self._loading = False
+
+    # -- following the diagram ---------------------------------------------
+    def _diagram_fields(self):
+        """What the curve looks like on the diagram right now.
+
+        The window applies every change at once, and it applies all of its
+        fields together: a legend renamed on the graph, a colour chosen
+        from the menu of the curve or `Resize graph` has to be in these
+        fields before the next change made here sends them back.
+        """
+        line = self.line
+        plot = self.master
+        column = self.column
+        label = str(line.get_label())
+        hidden = label.startswith("_")
+        line_style = line.get_linestyle()
+        marker = line.get_marker()
+        face = line.get_markerfacecolor()
+        hollow = isinstance(face, str) and face == "none"
+        line_color = safe_hex(line.get_color())
+        fields = {
+            "label": (self.label_var, None if hidden else label),
+            "legend_on": (self.legend_on_var, not hidden),
+            "line_on": (self.line_on_var, not self.is_off(line_style)),
+            "line_style": (self.lstyle_var, None if self.is_off(line_style)
+                           else name_of(LINE_STYLES, line_style, "Solid")),
+            "line_width": (self.lwidth_var, field_number(line.get_linewidth(), None)),
+            "line_color": (SwatchField(self.line_color), line_color),
+            "marker_on": (self.marker_on_var, not self.is_off(marker)),
+            "marker": (self.mstyle_var, None if self.is_off(marker)
+                       else name_of(MARKERS, marker, self.default_marker())),
+            "marker_size": (self.msize_var,
+                            field_number(line.get_markersize(), None)),
+            "marker_edge_width": (self.mwidth_var,
+                                  field_number(line.get_markeredgewidth(), None)),
+            "hollow": (self.hollow_var, hollow),
+            "face_color": (SwatchField(self.face_color),
+                           None if hollow else safe_hex(face, line_color)),
+            "edge_color": (SwatchField(self.edge_color),
+                           safe_hex(line.get_markeredgecolor(), line_color)),
+        }
+        state = (getattr(plot, "legend_state", None) or {}).get(column)
+        if state:
+            fields["legend_size"] = (self.legend_size_var,
+                                     field_number(state.get("size"), None))
+            fields["legend_color"] = (SwatchField(self.legend_color),
+                                      safe_hex(state.get("color"), "#000000"))
+        styles = getattr(plot, "series_style", None)
+        if styles is not None and column is not None:
+            style = styles.get(column, getattr(plot, "plot_style", None))
+            if style:
+                fields["plot_style"] = (self.plot_style_var,
+                                        name_of(PLOT_STYLES, style, None))
+
+        def numbers(holder, pairs):
+            for key, (name, variable) in pairs.items():
+                if isinstance(holder, dict) and holder.get(key) is not None:
+                    fields[name] = (variable, field_number(holder[key], None))
+
+        def colour(holder, key, name, swatch):
+            if isinstance(holder, dict) and holder.get(key) not in (None, "none"):
+                fields[name] = (SwatchField(swatch), safe_hex(holder[key], None))
+
+        error = (getattr(plot, "error_cfg", None) or {}).get(column)
+        numbers(error, {"capsize": ("err_capsize", self.err_capsize_var),
+                        "capthick": ("err_capthick", self.err_capthick_var),
+                        "elinewidth": ("err_width", self.err_elinewidth_var)})
+        colour(error, "color", "err_color", self.err_color)
+        histogram = self.style_code() == "histogram"
+        bars = (getattr(plot, "histogram_cfg" if histogram else "bar_cfg",
+                        None) or {}).get(column)
+        numbers(bars, {"edgewidth": ("bar_edge_width", self.bar_edge_width_var)})
+        stairs = (getattr(plot, "stairs_cfg", None) or {}).get(column)
+        numbers(stairs, {"width": ("stairs_width", self.stairs_width_var)})
+        pie = (getattr(plot, "pie_cfg", None) or {}).get(column)
+        numbers(pie, {"edgewidth": ("pie_edge_width", self.pie_edge_width_var),
+                      "name_size": ("pie_name_size", self.pie_name_size_var),
+                      "pct_size": ("pie_pct_size", self.pie_number_size_var)})
+        return fields
+
+    def mirror(self, force=False, only=None):
+        # the fields apply themselves when they change: not while they are
+        # only being told what the diagram already says
+        loading, self._loading = self._loading, True
+        try:
+            return DiagramMirror.mirror(self, force, only)
+        finally:
+            self._loading = loading
+
+    def _mirrored(self, names):
+        if "plot_style" in names:
+            self._update_section_visibility()
 
     # -- helpers -----------------------------------------------------------
     @staticmethod
@@ -3878,6 +4154,10 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
     def _apply(self, *_args):
         if self._loading:
             return
+        # whatever changed on the diagram since this window last looked is
+        # taken in first: only the field the user has just changed here is
+        # sent back as the window has it
+        self.mirror()
         line = self.line
 
         line.set_linestyle(code_of(LINE_STYLES, self.lstyle_var.get(), "-")
@@ -4004,7 +4284,7 @@ class SeriesStyleDialog(PairedFields, ToolDialog):
 # axes properties: one window, one tab per axis
 # --------------------------------------------------------------------------
 
-class AxisTab(PairedFields, ttk.Frame):
+class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
     """One page of the axes dialog (X or Y)."""
 
     def __init__(self, master, plot, which):
@@ -4058,6 +4338,72 @@ class AxisTab(PairedFields, ttk.Frame):
                              self.grid_box))
         self._toggle_auto()
         self._show_step_note()
+        self.mirror(force=True)
+
+    # -- following the diagram ---------------------------------------------
+    def _diagram_fields(self):
+        """Everything this page shows, as the axis has it right now."""
+        plot, which = self.plot, self.which
+        cfg = plot.axis_cfg[which]
+        grid = cfg.get("grid") or {}
+        step = cfg.get("step")
+        return {
+            "label": (self.label_var, str(plot.axis_label(which))),
+            "label_size": (self.label_size_var,
+                           field_number(cfg.get("label_size"), None)),
+            "tick_size": (self.tick_size_var,
+                          field_number(cfg.get("tick_size"), None)),
+            "label_color": (SwatchField(self.label_color),
+                            safe_hex(cfg.get("label_color"), None)),
+            "tick_color": (SwatchField(self.tick_color),
+                           safe_hex(cfg.get("tick_color"), None)),
+            "label_pad": (self.label_pad_var,
+                          field_number(cfg.get("label_pad"), None)),
+            "tick_pad": (self.tick_pad_var,
+                         field_number(cfg.get("tick_pad"), None)),
+            "auto": (self.auto_var, bool(cfg.get("auto", True))),
+            "step": (self.step_var, "" if step in (None, 0)
+                     else field_number(step, None)),
+            "minor": (self.minor_var, field_number(cfg.get("minor"), None)),
+            "axis_color": (SwatchField(self.axis_color),
+                           safe_hex(cfg.get("axis_color", "#000000"), None)),
+            "label_on": (self.label_on_var, bool(cfg.get("label_on", True))),
+            "ticks_on": (self.ticks_on_var, bool(cfg.get("ticks_on", True))),
+            "tick_labels_on": (self.tick_labels_on_var,
+                               bool(cfg.get("tick_labels_on", True))),
+            "grid_major": (self.gmajor_var, bool(grid.get("major", False))),
+            "grid_minor": (self.gminor_var, bool(grid.get("minor", False))),
+            "direction": (self.direction_var,
+                          self.direction_name(plot.axis_direction(which))),
+            "scale": (self.scale_var,
+                      name_of(AXIS_SCALES, plot.axis_scale(which), None)),
+            "grid_style": (self.gstyle_var,
+                           name_of(GRID_STYLES, grid.get("style"), None)),
+            "grid_width": (self.gwidth_var,
+                           field_number(grid.get("width"), None)),
+            "grid_color": (SwatchField(self.grid_color),
+                           safe_hex(grid.get("color"), None)),
+        }
+
+    def _mirrored(self, names):
+        if "scale" in names:
+            # the interval box counts decades on a logarithmic axis
+            self._step_mode = "log" if self.scale_code() != "linear" \
+                else "linear"
+            self._kept_steps[self._step_mode] = self.step_var.get()
+            self._show_step_note()
+        elif "step" in names:
+            self._kept_steps[self._step_mode] = self.step_var.get()
+        if "auto" in names:
+            self._toggle_auto()
+
+    def mirror(self, force=False, only=None):
+        """The fields, and the two ends of the range, as the axis has them."""
+        changed = DiagramMirror.mirror(self, force, only)
+        if only is None or "range" in only:
+            if self.sync_range(force=force):
+                changed.append("range")
+        return changed
 
     # -- the direction of the axis and the scale of its numbers -----------
     def direction_names(self):
@@ -4247,6 +4593,7 @@ class AxisTab(PairedFields, ttk.Frame):
             wanted = (f"{float(low):g}", f"{float(high):g}")
         except (TypeError, ValueError):
             return False
+        self._range_shown = wanted
         if (self.min_var.get(), self.max_var.get()) == wanted:
             return False
         self.min_var.set(wanted[0])
@@ -4263,12 +4610,16 @@ class AxisTab(PairedFields, ttk.Frame):
         toolbar.  They are therefore read again every time the diagram is
         drawn.
 
-        While the range is set **by hand** the boxes belong to the user
-        and are left alone; `force` (used right after Apply) reads them
+        While the range is set **by hand** the boxes follow the axis too
+        (a step of Undo may have given it other ends) - but only as long
+        as nothing has been typed into them: numbers typed in belong to the
+        user until Apply.  `force` (used right after Apply) reads them
         again anyway, so that what the axis took is what they show.
         """
         if not (force or self.auto_var.get()):
-            return False
+            typed = (self.min_var.get(), self.max_var.get())
+            if typed != getattr(self, "_range_shown", None):
+                return False
         try:
             low, high = self.plot.current_limits(self.which)
         except (AttributeError, TypeError, ValueError, tk.TclError):
@@ -4306,7 +4657,7 @@ class AxisTab(PairedFields, ttk.Frame):
         }
 
 
-class FrameTab(ttk.Frame):
+class FrameTab(DiagramMirror, ttk.Frame):
     """Frame (spines) and the size/position of the axes on the page."""
 
     def __init__(self, master, plot):
@@ -4337,6 +4688,44 @@ class FrameTab(ttk.Frame):
         self._build_background_box(cfg)
         self._build_size_box()
         self._show_values()
+        self.mirror(force=True)
+
+    # -- following the diagram ---------------------------------------------
+    POSITION_KEYS = ("left", "bottom", "x_length", "y_length")
+
+    def _diagram_fields(self):
+        cfg = self.plot.frame_cfg
+        background = cfg.get("background", "#ffffff")
+        paper = cfg.get("figure_background", "#ffffff")
+        fields = {
+            "style": (self.style_var,
+                      name_of(FRAME_STYLES, cfg.get("style", "none"), None)),
+            "width": (self.width_var, field_number(cfg.get("width"), None)),
+            "major_tick_length": (self.major_len_var,
+                                  field_number(cfg.get("major_tick_length"),
+                                               None)),
+            "minor_tick_length": (self.minor_len_var,
+                                  field_number(cfg.get("minor_tick_length"),
+                                               None)),
+            "transparent": (self.transparent_var, background == "none"),
+            "background": (SwatchField(self.background),
+                           None if background == "none"
+                           else safe_hex(background, None)),
+            "clear_figure": (self.clear_figure_var, paper == "none"),
+            "figure_background": (SwatchField(self.figure_background),
+                                  None if paper == "none"
+                                  else safe_hex(paper, None)),
+        }
+        bounds = dict(zip(self.POSITION_KEYS,
+                          self.plot.ax.get_position().bounds))
+        for key, var in self.value_vars.items():
+            fields[key] = (var, f"{bounds[key] * self._factor(key):.4g}")
+        return fields
+
+    def _mirrored(self, names):
+        if any(key in names for key in self.POSITION_KEYS):
+            self._read_values()
+            self._show_hint()
 
     # -- construction ------------------------------------------------------
     def _build_frame_box(self):
@@ -4408,6 +4797,9 @@ class FrameTab(ttk.Frame):
     def _show_values(self):
         for key, var in self.value_vars.items():
             var.set(f"{self._fractions[key] * self._factor(key):.4g}")
+        self._show_hint()
+
+    def _show_hint(self):
         width_cm = self._fractions["x_length"] * self._factor("x_length", "cm")
         height_cm = self._fractions["y_length"] * self._factor("y_length", "cm")
         self.hint.configure(
@@ -4420,9 +4812,15 @@ class FrameTab(ttk.Frame):
                 self._fractions[key] = value / self._factor(key)
 
     def _change_unit(self, _event=None):
+        # the numbers the user has not touched are the diagram's own, in
+        # another unit: they stay the diagram's (and keep following it)
+        _seen, shown_then = self._mirror_book()
+        untouched = [key for key, var in self.value_vars.items()
+                     if var.get() == shown_then.get(key)]
         self._read_values()                 # still in the previous unit
         self._unit = self.unit_var.get()
         self._show_values()
+        self.mirror_rebase(untouched)
 
     def _reset(self):
         self._fractions = dict(zip(("left", "bottom", "x_length", "y_length"),
@@ -4430,11 +4828,16 @@ class FrameTab(ttk.Frame):
         self._show_values()
 
     def sync_position(self):
-        """Read the place of the plot area again - it was dragged."""
+        """Read the place of the plot area again - it was dragged.
+
+        Dragging the graph is the latest word of the user on where it
+        stands, so it wins even over a number typed in and not applied.
+        """
         left, bottom, width, height = self.plot.ax.get_position().bounds
         self._fractions = {"left": left, "bottom": bottom,
                            "x_length": width, "y_length": height}
         self._show_values()
+        self.mirror(force=True, only=self.POSITION_KEYS)
 
     def sync_all(self):
         """Read the whole page again: the frame, the colours and the size.
@@ -4444,28 +4847,13 @@ class FrameTab(ttk.Frame):
         changes underneath it - `Resize graph`, an axis pulled by its end,
         a step of `Undo`, a file opened - the copy has to follow, or the
         next `Apply` would quietly put the old size and the old colours
-        back alongside the one thing the user really changed.
+        back alongside the one thing the user really changed.  A field
+        the user is changing here is left as it is (see `DiagramMirror`).
         """
-        cfg = self.plot.frame_cfg
         try:
-            self.style_var.set(name_of(FRAME_STYLES, cfg.get("style", "none"),
-                                       names(FRAME_STYLES)[0]))
-            self.width_var.set(f"{float(cfg.get('width', 1.0)):g}")
-            self.major_len_var.set(
-                f"{float(cfg.get('major_tick_length', 3.5)):g}")
-            self.minor_len_var.set(
-                f"{float(cfg.get('minor_tick_length', 2.0)):g}")
-            background = cfg.get("background", "#ffffff")
-            self.transparent_var.set(background == "none")
-            if background != "none":
-                self.background.set_color(background)
-            paper = cfg.get("figure_background", "#ffffff")
-            self.clear_figure_var.set(paper == "none")
-            if paper != "none":
-                self.figure_background.set_color(paper)
+            self.mirror()
         except (tk.TclError, TypeError, ValueError):
             return False
-        self.sync_position()
         return True
 
     # -- result ------------------------------------------------------------
@@ -4528,6 +4916,25 @@ class AxesDialog(ToolDialog):
             except tk.TclError:
                 pass
 
+    def pages(self):
+        """The title page, the three axis pages and the frame page."""
+        return [self.title_tab, *self.tabs.values(), self.frame_tab]
+
+    def mirror(self, force=False):
+        """Every page shows what the diagram says now (see `DiagramMirror`).
+
+        A title or a label written on the graph itself, `Resize graph`, a
+        step of Undo: all of it appears here while the window stays open,
+        so that the next Apply does not put the old texts and sizes back.
+        """
+        changed = []
+        for page in self.pages():
+            try:
+                changed.extend(page.mirror(force=force))
+            except tk.TclError:
+                pass
+        return changed
+
     def select_tab(self, which):
         """which: 'title', 'x', 'y', 'y2' or 'frame'."""
         if which == "frame":
@@ -4539,6 +4946,9 @@ class AxesDialog(ToolDialog):
 
     def apply(self):
         """Everything the four pages say, in one step of Undo."""
+        # anything changed on the diagram since the pages last looked comes
+        # in first; what the user has changed here stays theirs
+        self.mirror()
         with self.plot.changed("the axes and the frame"):
             return self._apply()
 
@@ -4564,8 +4974,9 @@ class AxesDialog(ToolDialog):
         self.plot.draw()
         # an automatic axis has just worked its range out again, and a
         # range given by hand may have been tidied: the boxes show what
-        # the axes took, never what they were asked for
-        self.sync_ranges(force=True)
+        # the axes took, never what they were asked for - and every other
+        # field reads the diagram again as well
+        self.mirror(force=True)
         return True
 
     def _ok(self):
@@ -4573,13 +4984,20 @@ class AxesDialog(ToolDialog):
             self.close()
 
 
-class TextBoxDialog(ToolDialog):
-    """A legend box or a free text box: text, font, frame and background."""
+class TextBoxDialog(DiagramMirror, ToolDialog):
+    """A legend box or a free text box: text, font, frame and background.
+
+    `source`, when given, tells what the diagram says now - (text, state),
+    or None once the box is gone - so the window follows the box while
+    it stands open (a text written on the graph, a box turned by its
+    handle, `Resize graph`, Undo).
+    """
 
     def __init__(self, master, title, text, state, on_apply, on_close=None,
-                 hint=None, on_delete=None, rotation=False):
+                 hint=None, on_delete=None, rotation=False, source=None):
         super().__init__(master, title, on_close=on_close)
         self.on_apply = on_apply
+        self.source = source
         self.on_delete = on_delete
         self.rotation = rotation
         self.angle_var = tk.StringVar(
@@ -4656,6 +5074,31 @@ class TextBoxDialog(ToolDialog):
         self.bind("<Return>", lambda _e: self.apply())
         entry.focus_set()
         entry.select_range(0, "end")
+        self.mirror(force=True)
+
+    def _diagram_fields(self):
+        now = self.source() if self.source is not None else None
+        if now is None:
+            return {}
+        text, state = now
+        edge = state.get("edge", "#000000")
+        face = state.get("face", "#ffffff")
+        fields = {
+            "text": (self.text_var, str(text)),
+            "size": (self.size_var, field_number(state.get("size"), None)),
+            "color": (SwatchField(self.color),
+                      safe_hex(state.get("color"), None)),
+            "frame": (self.frame_var, edge != "none"),
+            "edge": (SwatchField(self.edge_color),
+                     None if edge == "none" else safe_hex(edge, None)),
+            "transparent": (self.transparent_var, face == "none"),
+            "face": (SwatchField(self.face_color),
+                     None if face == "none" else safe_hex(face, None)),
+        }
+        if self.rotation:
+            fields["angle"] = (self.angle_var, field_number(
+                float(state.get("angle", 0.0) or 0.0) % 360.0, None))
+        return fields
 
     def values(self):
         values = {
@@ -4670,6 +5113,7 @@ class TextBoxDialog(ToolDialog):
         return values
 
     def apply(self):
+        self.mirror()           # catch up with the diagram first
         self.on_apply(self.values())
 
     def _delete(self):
@@ -4682,7 +5126,7 @@ class TextBoxDialog(ToolDialog):
         self.close()
 
 
-class TitleTab(ttk.Frame):
+class TitleTab(DiagramMirror, ttk.Frame):
     """The title of the diagram and the fonts that belong to no axis.
 
     It is one page of the axes dialog and the whole of the `Title and
@@ -4728,7 +5172,8 @@ class TitleTab(ttk.Frame):
               ttk.Spinbox(legend_box, from_=4, to=72, increment=1, width=SPIN_WIDTH,
                           textvariable=self.legend_size_var))
         self.legend_color = ColorSwatch(
-            legend_box, safe_hex(plot.fonts["legend_color"], "#000000"))
+            legend_box, safe_hex(plot.fonts["legend_color"], "#000000"),
+            command=lambda _c: self._touch_legend("color"))
         field(legend_box, 2, "Font colour (all):", self.legend_color)
         field(legend_box, 3, "Start position:",
               ttk.Combobox(legend_box, textvariable=self.legend_loc_var,
@@ -4737,6 +5182,45 @@ class TitleTab(ttk.Frame):
                    command=self._reset_positions).grid(row=4, column=1,
                                                        sticky="w", pady=(6, 0))
         self.title_box, self.legend_box = box, legend_box
+        # "(all)" means all the legend boxes - when the user sets it here.
+        # Which of the two was set is noted, so that an Apply made for
+        # anything else does not flatten the sizes given in curve windows.
+        self._legend_touched = set()
+        self._quiet = False
+        self.legend_size_var.trace_add(
+            "write", lambda *_a: self._touch_legend("size"))
+        self.mirror(force=True)
+
+    def _touch_legend(self, what):
+        if not self._quiet:
+            self._legend_touched.add(what)
+
+    def mirror(self, force=False, only=None):
+        quiet, self._quiet = self._quiet, True      # the diagram speaking
+        try:
+            return DiagramMirror.mirror(self, force, only)
+        finally:
+            self._quiet = quiet
+
+    def _diagram_fields(self):
+        plot = self.plot
+        fonts = plot.fonts
+        return {
+            "title": (self.title_var, str(plot.ax.get_title())),
+            "title_size": (self.title_size_var,
+                           field_number(fonts.get("title"), None)),
+            "title_color": (SwatchField(self.title_color),
+                            safe_hex(fonts.get("title_color"), None)),
+            "title_pad": (self.title_pad_var,
+                          field_number(fonts.get("title_pad"), None)),
+            "legend_size": (self.legend_size_var,
+                            field_number(fonts.get("legend"), None)),
+            "legend_color": (SwatchField(self.legend_color),
+                             safe_hex(fonts.get("legend_color"), None)),
+            "legend_loc": (self.legend_loc_var, str(plot.legend_loc)),
+            "legend_visible": (self.legend_visible_var,
+                               bool(plot.legend_visible)),
+        }
 
     def apply(self):
         plot = self.plot
@@ -4745,11 +5229,21 @@ class TitleTab(ttk.Frame):
         plot.fonts["title_color"] = self.title_color.color
         size = to_int(self.legend_size_var.get(), plot.fonts["legend"])
         color = self.legend_color.color
+        # one size and one colour for all the legend boxes - when they are
+        # set here.  Applying this window for anything else leaves a legend
+        # that was given a size of its own in its curve window alone.
+        touched = getattr(self, "_legend_touched", {"size", "color"})
+        new_size = "size" in touched or size != plot.fonts["legend"]
+        new_color = ("color" in touched
+                     or safe_hex(color) != safe_hex(plot.fonts["legend_color"]))
+        touched.clear()
         plot.fonts["legend"] = size
         plot.fonts["legend_color"] = color
-        for state in plot.legend_state.values():   # one size/colour for all
-            state["size"] = size
-            state["color"] = color
+        for state in plot.legend_state.values():
+            if new_size:
+                state["size"] = size
+            if new_color:
+                state["color"] = color
         plot.legend_loc = self.legend_loc_var.get()
         plot.legend_visible = self.legend_visible_var.get()
         plot.fonts["title_pad"] = to_float(self.title_pad_var.get(),
@@ -4790,10 +5284,16 @@ class TitleFontDialog(ToolDialog):
         ttk.Button(bar, text="Close", command=self.close).pack(side="right")
         self.bind("<Return>", lambda _e: self.apply())
 
+    def mirror(self, force=False):
+        """The page follows the diagram while the window stands open."""
+        return self.tab.mirror(force=force)
+
     def apply(self):
+        self.mirror()            # take in what changed on the diagram
         with self.plot.changed("the title and the fonts"):
             self.tab.apply()
             self.plot.draw()
+        self.mirror(force=True)
         return True
 
     def _reset_positions(self):
@@ -13623,16 +14123,41 @@ class PlotWindow(tk.Toplevel):
         """
         if getattr(self, "_measuring", False):
             return False        # a range is being tried out, not set
+        # ...and not only the ranges: every open properties window of this
+        # diagram shows what the diagram says (see `DiagramMirror`)
+        self.sync_dialogs()
         dialog = self._dialogs.get("axes")
         if dialog is None:
             return False
         try:
             if not dialog.winfo_exists():
                 return False
-            dialog.sync_ranges()
         except (AttributeError, tk.TclError):
             return False
         return True
+
+    def sync_dialogs(self):
+        """Every open window of this diagram follows what the diagram says.
+
+        The axes, the title, the curve, the legend and the text box windows
+        all hold a copy of what they show.  Each is told, whenever the
+        diagram is drawn, to look again - leaving alone only what the user
+        has changed in it and not applied yet.
+        """
+        count = 0
+        for dialog in list(self._dialogs.values()):
+            mirror = getattr(dialog, "mirror", None)
+            if mirror is None:
+                continue
+            try:
+                if not dialog.winfo_exists():
+                    continue
+                mirror()
+                count += 1
+            except (AttributeError, KeyError, TypeError, ValueError,
+                    tk.TclError):
+                continue
+        return count
 
     def default_legend_state(self, index):
         """Start position of the index-th legend box, from the chosen corner."""
@@ -14368,13 +14893,17 @@ class PlotWindow(tk.Toplevel):
             return None
 
         def apply(values):
-            state.update(values)
+            current = self.arrow_state.get(key)   # Undo may have replaced it
+            if current is None:
+                return
+            current.update(values)
             self.refresh_arrow(key)
             self.draw()
 
         return self._show_dialog(f"arrow-{key}", lambda: ArrowDialog(
             self, state, apply, on_delete=lambda: self.remove_arrow(key),
-            on_close=lambda _d: self._dialogs.pop(f"arrow-{key}", None)))
+            on_close=lambda _d: self._dialogs.pop(f"arrow-{key}", None),
+            source=lambda: self.arrow_state.get(key)))
 
     # -- selection and control points --------------------------------------
     @staticmethod
@@ -14771,7 +15300,10 @@ class PlotWindow(tk.Toplevel):
         if text is None:
             text = inline["value"]
         if text != inline["value"]:
-            self.set_text_value(inline["kind"], inline["key"], text)
+            # writing on the graph is a command like any other: Undo takes
+            # it back
+            with self.changed("the text"):
+                self.set_text_value(inline["kind"], inline["key"], text)
         self.select_object(inline["kind"], inline["key"])
         self._rename_click = None
         self.draw()
@@ -16054,14 +16586,18 @@ class PlotWindow(tk.Toplevel):
             return None
 
         def apply(values):
-            state.update(values)
+            current = self.shape_state.get(key)   # Undo may have replaced it
+            if current is None:
+                return
+            current.update(values)
             self.refresh_shape(key)
             self.draw()
 
         return self._show_dialog(f"shape-{key}", lambda: ShapeDialog(
             self, state, apply, on_delete=lambda: self.remove_shape(key),
             on_fit=lambda: self.fit_picture_ratio(key),
-            on_close=lambda _d: self._dialogs.pop(f"shape-{key}", None)))
+            on_close=lambda _d: self._dialogs.pop(f"shape-{key}", None),
+            source=lambda: self.shape_state.get(key)))
 
     # -- free text boxes ---------------------------------------------------
     def arm_text_placement(self, armed=None):
@@ -16221,8 +16757,12 @@ class PlotWindow(tk.Toplevel):
             return None
 
         def apply(values):
-            state.update(values)
-            if not str(state["text"]).strip():
+            # the box as it is now: Undo may have put a fresh one in its place
+            current = self.note_state.get(key)
+            if current is None:
+                return
+            current.update(values)
+            if not str(current["text"]).strip():
                 self.remove_note(key)
                 return
             self.refresh_note(key)
@@ -16232,7 +16772,10 @@ class PlotWindow(tk.Toplevel):
             self, "Text box", state["text"], state, apply, rotation=True,
             hint="An empty text deletes this box.",
             on_delete=lambda: self.remove_note(key),
-            on_close=lambda _d: self._dialogs.pop(f"note-{key}", None)))
+            on_close=lambda _d: self._dialogs.pop(f"note-{key}", None),
+            source=lambda: (None if key not in self.note_state else
+                            (self.note_state[key].get("text", ""),
+                             self.note_state[key]))))
 
     # -- movable title and axis labels -------------------------------------
     def text_shown(self, name):
@@ -17725,7 +18268,7 @@ class PlotWindow(tk.Toplevel):
     def open_axes_dialog(self, which="x"):
         existing = self._dialogs.get("axes")
         if existing is not None and existing.winfo_exists():
-            existing.sync_ranges()          # the ranges may have moved on
+            existing.mirror()               # the diagram may have moved on
             existing.select_tab(which)      # jump to the requested tab
             existing.lift()
             existing.focus_force()
@@ -17755,7 +18298,10 @@ class PlotWindow(tk.Toplevel):
             distance=self.fonts["title_pad"],
             distance_label="Distance from the axes [px]:",
             hint="The distance is measured from the top of the plot area.",
-            on_close=lambda _d: self._dialogs.pop("title-text", None)))
+            on_close=lambda _d: self._dialogs.pop("title-text", None),
+            source=lambda: (self.ax.get_title(), self.fonts["title"],
+                            self.fonts["title_color"],
+                            self.fonts["title_pad"])))
 
     def edit_axis_label(self, which):
         def apply(text, size, color, distance):
@@ -17774,7 +18320,11 @@ class PlotWindow(tk.Toplevel):
             distance_label="Distance from the axis [px]:",
             hint="The colour and the distance of the numbers are on the\n"
                  "axis tab of the axes properties dialog.",
-            on_close=lambda _d: self._dialogs.pop(f"label-{which}", None)))
+            on_close=lambda _d: self._dialogs.pop(f"label-{which}", None),
+            source=lambda: (self.axis_label(which),
+                            self.axis_cfg[which]["label_size"],
+                            self.axis_cfg[which]["label_color"],
+                            self.axis_cfg[which]["label_pad"])))
 
     def edit_legend_entry(self, column):
         line = self.series.get(column)
@@ -17783,16 +18333,31 @@ class PlotWindow(tk.Toplevel):
         state = self.legend_state.setdefault(column, self.default_legend_state(0))
 
         def apply(values):
+            # the curve and its box as they are now, not as they were when
+            # the window opened
+            current = self.series.get(column)
+            if current is None:
+                return
             text = values.pop("text", "").strip()
-            line.set_label(text if text else "_nolegend_")
-            state.update(values)
+            current.set_label(text if text else "_nolegend_")
+            self.legend_state.setdefault(
+                column, self.default_legend_state(0)).update(values)
             self.refresh_legend()
             self.draw()
 
         return self._show_dialog(f"legend-{column}", lambda: TextBoxDialog(
             self, f"Legend of '{column}'", line.get_label(), state, apply,
             hint="An empty text hides this legend box.",
-            on_close=lambda _d: self._dialogs.pop(f"legend-{column}", None)))
+            on_close=lambda _d: self._dialogs.pop(f"legend-{column}", None),
+            source=lambda: (None if self.series.get(column) is None else
+                            (self.legend_text(column),
+                             self.legend_state.get(column) or {}))))
+
+    def legend_text(self, column):
+        """The legend text of one curve; empty while its box is hidden."""
+        line = self.series.get(column)
+        label = "" if line is None else str(line.get_label())
+        return "" if label.startswith("_") else label
 
 
 # --------------------------------------------------------------------------
@@ -19536,6 +20101,10 @@ Two texts are special, in the same way as in their dialogs:
 * writing **nothing** into a legend box hides that legend, exactly as an
   empty text does in the legend dialog.
 
+Writing in place is a command like any other: `Undo` takes it back.  A
+property window that is open at the same time shows the new text at once
+(see `The property windows`).
+
 Drawings and arrows hold no text, so a second click on them does nothing -
 they are simply selected.
 
@@ -19635,6 +20204,27 @@ are ordinary windows:
 
 If the old behaviour is preferred, `Property windows always on top` in the
 `Windows` tab of the settings keeps them above the diagram again.
+
+**An open window always says what the diagram says.**  The diagram and its
+windows can be used side by side: a title or an axis label written on the
+graph itself, a legend renamed there, a text box or a drawing turned by its
+handle, `Resize graph`, a step of `Undo` or `Redo` - all of it appears at
+once in every window that shows it (`Axes properties` with all its pages,
+`Title and fonts`, `Curve properties`, the title, label, legend, text box,
+drawing and arrow windows).  So `Apply` never puts an old text or an old
+size back next to the one thing that was really changed: with `Axes
+properties` open, write a new title on the graph, then change the number
+of minor ticks and press `Apply` - the new title stays.
+
+A field that has been **changed in the window and not applied yet** is the
+user's own: the diagram does not write over it, and `Apply` (or, in the
+windows that apply at once, the change itself) sends it to the diagram.
+From then on the field follows the diagram again.
+
+The `Font size (all)` and `Font colour (all)` of the legends in `Title and
+fonts` reach every legend box when they are **set** there; applying the
+window for anything else leaves a legend that was given a size or a colour
+of its own in its curve window as it is.
 
 ### Curve properties
 
