@@ -414,6 +414,9 @@ BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
 BLOCK_LINE = 2              # thickness of the outline around the block
 AUTO_SCROLL_EDGE = 14       # pixels: how close to the border scrolling starts
 AUTO_SCROLL_MS = 55         # how often the table scrolls on during a drag
+# sideways a table scrolls in pixels, not in columns: one step of a drag
+# held past the edge moves this many of them (a row is one step upright)
+AUTO_SCROLL_PIXELS = 24
 CHECK_BAR_HEIGHT = 46       # the strip of "plot this column" check buttons and column letters
 ROW_HEADER_WIDTH = 48       # width of the line numbers column on the left side of the table
 # the two check buttons above every column of the table: they say which axis
@@ -6153,15 +6156,25 @@ class RegressionDialog(ToolDialog):
         for name in names:
             self.column_list.insert("end", name)
         errors = self.error_columns()
+        frame = None if table is None else table.df
+
+        def worth_fitting(name):
+            """A column of error bars, or an empty one, is not fitted."""
+            if str(name) in errors:
+                return False
+            if frame is None or str(name) not in frame.columns:
+                return True
+            return PlotWindow.has_numbers(frame, name)
+
         chosen = []
         for index, name in enumerate(names):
-            if str(name) in errors:
-                continue           # a column of error bars is not a curve
+            if not worth_fitting(name):
+                continue
             if table is not None and table.column_axis(name) in ("L", "R"):
                 chosen.append(index)
         if not chosen:
             chosen = [index for index, name in enumerate(names)
-                      if str(name) not in errors] or list(range(len(names)))
+                      if worth_fitting(name)] or list(range(len(names)))
         for index in chosen:
             self.column_list.selection_set(index)
         self.x_label.configure(
@@ -6888,7 +6901,12 @@ class DataTable(ttk.Frame):
                                  anchor=self.anchor, cursor=(row, col))
 
     def extend_block(self, d_row, d_col):
-        """Shift+arrow: one row or column more (or less) in the block."""
+        """Shift+arrow: one row or column more (or less) in the block.
+
+        The sheet follows the end of the block in both directions, so
+        holding Shift and an arrow walks the selection into the rows and
+        the columns that were not on the screen.
+        """
         rows, columns = self._shape()
         if not rows or not columns:
             return False
@@ -6897,8 +6915,50 @@ class DataTable(ttk.Frame):
         row = max(0, min(rows - 1, row + d_row))
         col = max(0, min(columns - 1, col + d_col))
         self.extend_block_to(row, col)
-        self.tree.see(str(row))
+        self.see_cell(row, col)
         self._refresh_outline()
+        return True
+
+    def see_cell(self, row, col):
+        """Scroll until this cell is really on the screen, both ways."""
+        try:
+            self.tree.see(str(int(row)))
+        except (tk.TclError, ValueError):
+            pass
+        return self.see_column(col)
+
+    def see_column(self, col):
+        """Scroll sideways until this column is fully in view.
+
+        `Treeview.see` knows about rows only, so the sideways part is
+        worked out from the widths of the columns: where the wanted one
+        begins and ends against the strip that is on the screen.
+        """
+        try:
+            names = list(self.tree["columns"])
+            index = int(col)
+        except (tk.TclError, TypeError, ValueError):
+            return False
+        if not (0 <= index < len(names)):
+            return False
+        try:
+            widths = [float(self.tree.column(one, "width")) for one in names]
+            first, last = (float(one) for one in self.tree.xview())
+        except (tk.TclError, TypeError, ValueError):
+            return False
+        total = sum(widths)
+        if total <= 0 or last - first >= 1.0:
+            return False              # everything fits: nothing to scroll
+        start = sum(widths[:index])
+        end = start + widths[index]
+        shown = (last - first) * total
+        if start < first * total - 0.5:
+            self.tree.xview_moveto(max(0.0, start / total))
+        elif end > last * total + 0.5:
+            self.tree.xview_moveto(max(0.0, (end - shown) / total))
+        else:
+            return False
+        self.after(1, self._refresh_outline)
         return True
 
     def move_cursor(self, d_row, d_col):
@@ -6910,7 +6970,7 @@ class DataTable(ttk.Frame):
         row = max(0, min(rows - 1, row + d_row))
         col = max(0, min(columns - 1, col + d_col))
         self.select_cell(row, col)
-        self.tree.see(str(row))
+        self.see_cell(row, col)
         return True
 
     def select_all_cells(self):
@@ -7293,22 +7353,25 @@ class DataTable(ttk.Frame):
         # by itself, so a series can be pulled far past the rows that
         # happen to be on the screen
         self._fill_point = (tree_x, tree_y)
-        if self._fill_edge_step(tree_y):
+        if self._fill_edge_step(tree_y) or self._fill_side_step(tree_x):
             self._start_fill_auto_scroll()
         else:
             self._stop_fill_auto_scroll()
         return self._aim_fill(tree_x, tree_y)
 
-    def _row_near(self, y):
+    def _row_near(self, y, widget=None):
         """The row at that height, or the nearest one above it.
 
         The last row of a sheet rarely ends exactly at the bottom of the
         table, and below it there is no row to identify at all.  Pulling
-        the handle into that empty strip means the last row, not "nowhere".
+        the pointer into that empty strip means the last row, not
+        "nowhere".  `widget` is the table itself or the strip of row
+        numbers beside it - the two are always scrolled together.
         """
+        widget = self.tree if widget is None else widget
         for step in range(0, 240, 4):
             try:
-                row_id = self.tree.identify_row(max(0, y - step))
+                row_id = widget.identify_row(max(0, y - step))
             except tk.TclError:
                 return None
             if row_id and self.tree.exists(row_id):
@@ -7317,6 +7380,18 @@ class DataTable(ttk.Frame):
                 except (TypeError, ValueError):
                     return None
         return None
+
+    def _fill_side_step(self, x):
+        """1 right, -1 left, 0 when the pointer is not at a side edge."""
+        try:
+            width = self.tree.winfo_width()
+        except tk.TclError:
+            return 0
+        if x > width - AUTO_SCROLL_EDGE:
+            return 1
+        if x < AUTO_SCROLL_EDGE:
+            return -1
+        return 0
 
     def _fill_edge_step(self, y):
         """1 down, -1 up, 0 when the pointer is not at an edge of the table."""
@@ -7653,14 +7728,21 @@ class DataTable(ttk.Frame):
             return
         point = getattr(self, "_fill_point", None)
         step = self._fill_edge_step(point[1]) if point else 0
-        if not step:
-            return
+        sideways = self._fill_side_step(point[0]) if point else 0
         first, last = self.tree.yview()
         if step > 0 and last >= 1.0:
-            return              # the last row of the sheet is on the screen
+            step = 0            # the last row of the sheet is on the screen
         if step < 0 and first <= 0.0:
-            return              # the first one is
-        self._yview("scroll", step, "units")
+            step = 0            # the first one is
+        left, right = self.tree.xview()
+        if (sideways > 0 and right >= 1.0) or (sideways < 0 and left <= 0.0):
+            sideways = 0
+        if not (step or sideways):
+            return
+        if step:
+            self._yview("scroll", step, "units")
+        if sideways:
+            self.tree.xview_scroll(sideways * AUTO_SCROLL_PIXELS, "units")
         try:
             self.tree.update_idletasks()
         except tk.TclError:
@@ -7698,18 +7780,60 @@ class DataTable(ttk.Frame):
         return "break"
 
     def _on_row_tree_drag(self, event):
-        if getattr(self, "_row_selecting", False):
-            row_id = self.row_tree.identify_row(event.y)
-            if row_id and self.row_tree.exists(row_id):
-                r = int(row_id)
-                start = getattr(self, "_row_press", r)
-                r0, r1 = min(start, r), max(start, r)
-                self.select_block(r0, 0, r1, len(self.df.columns) - 1,
-                                  anchor=(start, 0), cursor=(r, len(self.df.columns) - 1))
+        """Pulling along the numbers takes every row it passes.
+
+        Held against the bottom (or the top) edge, the sheet scrolls on by
+        itself, so a block can reach far past the rows that happen to be
+        on the screen - exactly as the fill handle does.
+        """
+        if not getattr(self, "_row_selecting", False):
+            return "break"
+        self._row_point = event.y
+        if self._row_edge_step(event.y):
+            self._start_edge_scroll()
+        else:
+            self._stop_edge_scroll()
+        self._aim_row_drag(event.y)
         return "break"
+
+    def _row_edge_step(self, y):
+        """1 down, -1 up, 0 while the pointer is inside the numbers."""
+        try:
+            height = self.row_tree.winfo_height()
+            header = self._header_height()
+        except tk.TclError:
+            return 0
+        if y > height - AUTO_SCROLL_EDGE:
+            return 1
+        if y < header + AUTO_SCROLL_EDGE:
+            return -1
+        return 0
+
+    def _aim_row_drag(self, y):
+        """Stretch the block of rows to the number under the pointer."""
+        if not getattr(self, "_row_selecting", False):
+            return False
+        if not len(self.df.columns):
+            return False
+        try:
+            header = self._header_height()
+            y = min(max(y, header + 2),
+                    max(header + 2, self.row_tree.winfo_height() - 2))
+        except tk.TclError:
+            pass
+        row = self._row_near(y, self.row_tree)
+        if row is None or not (0 <= row < len(self.df)):
+            return False
+        start = getattr(self, "_row_press", row)
+        first, last = min(start, row), max(start, row)
+        self.select_block(first, 0, last, len(self.df.columns) - 1,
+                          anchor=(start, 0),
+                          cursor=(row, len(self.df.columns) - 1))
+        return True
 
     def _on_row_tree_release(self, _event=None):
         self._row_selecting = False
+        self._stop_edge_scroll()
         return "break"
 
     # -- clicking a column letter selects the whole column ------------------
@@ -7783,18 +7907,106 @@ class DataTable(ttk.Frame):
         return "break"
 
     def _on_letter_drag(self, event):
-        """Dragging along the letters selects a range of columns."""
+        """Dragging along the letters selects a range of columns.
+
+        Held against the left or the right edge of the table, it scrolls
+        sideways by itself, so the block can reach the columns that are
+        not on the screen.
+        """
         if not getattr(self, "_letter_selecting", False):
             return "break"
-        index = self._column_at_root(event.x_root)
-        if index is not None:
-            start = getattr(self, "_letter_press", index)
-            self.select_whole_columns(start, index, anchor_col=start)
+        self._letter_point = event.x_root
+        if self._letter_edge_step(event.x_root):
+            self._start_edge_scroll()
+        else:
+            self._stop_edge_scroll()
+        self._aim_letter_drag(event.x_root)
         return "break"
+
+    def _letter_edge_step(self, x_root):
+        """1 to the right, -1 to the left, 0 inside the table."""
+        try:
+            x = int(x_root) - self.tree.winfo_rootx()
+            width = self.tree.winfo_width()
+        except tk.TclError:
+            return 0
+        if x > width - AUTO_SCROLL_EDGE:
+            return 1
+        if x < AUTO_SCROLL_EDGE:
+            return -1
+        return 0
+
+    def _aim_letter_drag(self, x_root):
+        """Stretch the block of columns to the letter under the pointer."""
+        if not getattr(self, "_letter_selecting", False):
+            return False
+        try:                      # past the edge there is no letter to find
+            left = self.tree.winfo_rootx()
+            width = self.tree.winfo_width()
+            x_root = min(max(int(x_root), left + 2), left + max(2, width - 2))
+        except tk.TclError:
+            pass
+        index = self._column_at_root(x_root)
+        if index is None:
+            return False
+        start = getattr(self, "_letter_press", index)
+        self.select_whole_columns(start, index, anchor_col=start)
+        return True
 
     def _on_letter_release(self, _event=None):
         self._letter_selecting = False
+        self._stop_edge_scroll()
         return "break"
+
+    # -- a header drag held past an edge keeps the sheet moving ------------
+    def _start_edge_scroll(self):
+        if getattr(self, "_edge_scroll_timer", None) is None:
+            self._edge_scroll_timer = self.after(AUTO_SCROLL_MS,
+                                                 self._edge_scroll_step)
+
+    def _stop_edge_scroll(self):
+        timer = getattr(self, "_edge_scroll_timer", None)
+        if timer is not None:
+            try:
+                self.after_cancel(timer)
+            except (tk.TclError, ValueError):
+                pass
+            self._edge_scroll_timer = None
+
+    def _edge_scroll_step(self):
+        """One row (or one column) of scrolling, then aim again."""
+        self._edge_scroll_timer = None
+        if getattr(self, "_row_selecting", False):
+            point = getattr(self, "_row_point", None)
+            step = self._row_edge_step(point) if point is not None else 0
+            if not step:
+                return
+            first, last = self.tree.yview()
+            if (step > 0 and last >= 1.0) or (step < 0 and first <= 0.0):
+                return                  # the end of the sheet is on the screen
+            self._yview("scroll", step, "units")
+            try:
+                self.tree.update_idletasks()
+            except tk.TclError:
+                return
+            self._aim_row_drag(point)
+        elif getattr(self, "_letter_selecting", False):
+            point = getattr(self, "_letter_point", None)
+            step = self._letter_edge_step(point) if point is not None else 0
+            if not step:
+                return
+            first, last = self.tree.xview()
+            if (step > 0 and last >= 1.0) or (step < 0 and first <= 0.0):
+                return
+            self.tree.xview_scroll(step * AUTO_SCROLL_PIXELS, "units")
+            try:
+                self.tree.update_idletasks()
+            except tk.TclError:
+                return
+            self._aim_letter_drag(point)
+        else:
+            return
+        self._start_edge_scroll()
 
     # -- scrolling keeps the outline in place ------------------------------
     def _yview(self, *args):
@@ -8332,7 +8544,7 @@ class DataTable(ttk.Frame):
         elif step_y < 0 and first > 0.0:
             self.tree.yview_scroll(-1, "units")
         if step_x:
-            self.tree.xview_scroll(step_x, "units")
+            self.tree.xview_scroll(step_x * AUTO_SCROLL_PIXELS, "units")
         self.tree.update_idletasks()
         # the cell now under the pointer, pulled back into the visible area
         header = self._header_height()
@@ -11348,10 +11560,13 @@ class PlotWindow(tk.Toplevel):
         """
         changed = False
         for name in names:
+            # the style is remembered even for a column that carries no
+            # curve yet: a fitted column that only becomes one at the next
+            # `Update` is still a fitted curve, and is drawn as a line
+            self.series_style[str(name)] = "line"
             line = self.series.get(name)
             if line is None:
                 continue
-            self.series_style[name] = "line"
             line.set_linestyle("-")
             line.set_marker("None")
             self.refresh_series_visuals(name)
@@ -12049,16 +12264,30 @@ class PlotWindow(tk.Toplevel):
         rest = columns[1:]
         if self.plot_style not in ERROR_STYLES:
             return rest, {}, {}
-        # one error column per curve, or two of them: upwards and downwards
+        # one error column per curve, or two of them: upwards and downwards.
+        #
+        # An **empty** column never begins a group.  A sheet nearly always
+        # carries a few blank columns at its end, and once a fitted curve
+        # has been glued to that sheet they stand between the measurements
+        # and the fit: counting them as curves would shift every group from
+        # there on and swallow the fitted column as somebody's error bars -
+        # which is how a fitted curve comes to be missing from a diagram.
+        # A column of error bars is taken as it stands, full or empty: it
+        # belongs to the curve before it wherever it is.
         step = 3 if self.plot_style == "errorbar_pm" else 2
         curves, partner, lower = [], {}, {}
-        for index in range(0, len(rest), step):
+        index = 0
+        while index < len(rest):
             mean = rest[index]
+            if not self.has_numbers(self.df, mean):
+                index += 1          # nothing is drawn there: not a curve
+                continue
             curves.append(mean)
             if index + 1 < len(rest):
                 partner[mean] = rest[index + 1]
             if step == 3 and index + 2 < len(rest):
                 lower[mean] = rest[index + 2]
+            index += step
         return curves, partner, lower
 
     def _plot_data(self, _plot_cfg=None):
@@ -17860,13 +18089,13 @@ the program itself, so nothing beyond numpy is needed.
   ticked for plotting are chosen to begin with; click, `Shift`-click or
   `Ctrl/Cmd`-click to choose others.  The **first column holds the X
   values** (a first column of names counts the rows instead).
-  **A column that holds error bars is not chosen.**  The scatter of a
-  measurement is not a measurement of its own, so a curve fitted to it
-  would be a curve fitted to the noise: whichever column a drawn curve
-  reads its bars from (the one after it, or the one named in
-  `Curve properties > Source`) is left unticked, and only the means are
-  fitted and drawn.  It is still in the list, so it can be ticked by hand
-  if you really want a curve through it.
+  **A column that holds error bars is not chosen**, and neither is an
+  **empty** one.  The scatter of a measurement is not a measurement of its
+  own, so a curve fitted to it would be a curve fitted to the noise:
+  whichever column a drawn curve reads its bars from (the one after it, or
+  the one named in `Curve properties > Source`) is left unticked, and only
+  the means are fitted and drawn.  Both are still in the list, so either
+  can be ticked by hand.
 * **Parameters**: one line for every parameter of the method.  Leaving the
   `Start value` empty lets the program work it out from the data, which is
   what usually happens.  Typing one in says where the fit should set out
@@ -18137,6 +18366,13 @@ way, so a whole line of the table is always one click away:
 
 * **Dragging** along the letters (or along the numbers) takes a **range** of
   columns (or rows), and it may be dragged in either direction.
+* **Held against an edge of the sheet, the table scrolls on by itself** -
+  downwards and upwards along the numbers, sideways along the letters -
+  and the block grows with it, so a range can reach far past the rows and
+  the columns that happen to be on the screen without letting go of the
+  button.  Bringing the pointer back inside stops it at once, and the
+  scrolling ends at the last (or the first) row or column of the sheet.
+  The black fill handle behaves the same way, in both directions.
 * **`Shift`+clicking** another letter stretches the block from the one that
   was clicked first to that one.
 * The letter of every column the block touches is **tinted**, just as the
@@ -18146,6 +18382,11 @@ way, so a whole line of the table is always one click away:
   `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D`
   duplicates it under itself, and the arrow keys walk on from the cell the
   click left the cursor in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
+* **`Shift`+an arrow key** stretches the block one cell at a time, and the
+  sheet **follows the end of it in both directions**: down into the rows
+  and sideways into the columns that were not on the screen, and back
+  again.  A plain arrow key does the same for the cell the cursor moves
+  to.
 * **Right clicking** a letter opens the menu of that column -
   `Calculate Column...`, `Sort`, `Insert Column Before / After...`,
   `Rename...`, `Delete Column` - the same menu as a right click on the
@@ -18282,7 +18523,17 @@ error bars, seven columns give three, and so on.  The **(Median, +error,
 far the bar reaches **up** from the second one and the fourth how far it
 reaches **down**, then the fifth column is the next curve.  Seven columns
 give **two** curves there.  Both lengths are taken as lengths, so a minus
-sign in front of the downward error changes nothing.  The `std` columns are used
+sign in front of the downward error changes nothing.
+
+**An empty column never begins a pair (or a group of three).**  A sheet
+nearly always carries a few blank columns at its end, and once a fitted
+curve has been glued to that sheet they stand between the measurements and
+the fit; counting them as curves would shift every group from there on and
+swallow the fitted column as somebody's error bars.  So a group starts at
+the first column that really holds numbers, and the one (or two) columns
+after it are its errors, full or empty.  Type a value into a blank column
+and it becomes a curve at the next `Update`, exactly as in every other
+kind of diagram.  The `std` columns are used
 up as the errors and are not drawn as curves of their own, so every one of
 them has to stay ticked in the strip above the table.  A last `mean` column
 with no `std` beside it still gets a curve (with a 5 % error, which can be
@@ -19939,6 +20190,12 @@ changes away, `Cancel` leaves everything as it is.  With several diagrams
 open, closing one of them does not ask - only the **last** one carries the
 whole graph.
 
+**Every way out asks the same question**: the close button of the window,
+`Quit` in the menu, and **`Cmd/Ctrl+Q`** - from the spreadsheet window and
+from a diagram window alike.  On a Mac, `Cmd+Q` and `Quit APlot` in the
+apple menu are one and the same Apple event, and the program takes it over
+so that it can ask; `Cancel` there simply leaves the program running.
+
 **Opening a file never asks.**  `Open graph`, `Import data` and the
 random data of the `Data` menu simply replace what is on the screen: the
 question about unsaved work belongs to **leaving** the program (and to
@@ -20891,12 +21148,22 @@ class App:
                 self.root.createcommand("tk::mac::ShowPreferences", self.open_settings)
             except tk.TclError:
                 pass
+            # Cmd+Q and `Quit APlot` of the apple menu are one and the same
+            # Apple event.  Without a command of our own Tk simply ends the
+            # program, and an edited graph is gone without a word; with one,
+            # the event arrives here and asks first.
+            try:
+                self.root.createcommand("tk::mac::Quit", self.quit_app)
+            except tk.TclError:
+                pass
         else:
             app_menu = tk.Menu(menubar, tearoff=0)
             app_menu.add_command(label="Settings...", command=self.open_settings)
             app_menu.add_command(label=f"About {APP_NAME}", command=self.show_about)
             app_menu.add_separator()
-            app_menu.add_command(label="Quit", command=self.root.quit)
+            app_menu.add_command(label="Quit",
+                                 accelerator=f"{ACCEL_NAME}+Q",
+                                 command=self.quit_app)
             menubar.add_cascade(label=APP_NAME, menu=app_menu)
 
         alt = "Opt" if sys.platform == "darwin" else "Alt"
@@ -21446,6 +21713,8 @@ class App:
             "i": wrap(self.load_csv),
             "z": wrap(self.undo_step),
             "d": wrap(self.edit_command, "duplicate", plot),
+            # leaving the program from any window, the diagrams included
+            "q": wrap(self.quit_app),
         }
         # ...and with Shift held, the key carries the second command
         shifted = {

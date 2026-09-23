@@ -287,13 +287,13 @@ the program itself, so nothing beyond numpy is needed.
   ticked for plotting are chosen to begin with; click, `Shift`-click or
   `Ctrl/Cmd`-click to choose others.  The **first column holds the X
   values** (a first column of names counts the rows instead).
-  **A column that holds error bars is not chosen.**  The scatter of a
-  measurement is not a measurement of its own, so a curve fitted to it
-  would be a curve fitted to the noise: whichever column a drawn curve
-  reads its bars from (the one after it, or the one named in
-  `Curve properties > Source`) is left unticked, and only the means are
-  fitted and drawn.  It is still in the list, so it can be ticked by hand
-  if you really want a curve through it.
+  **A column that holds error bars is not chosen**, and neither is an
+  **empty** one.  The scatter of a measurement is not a measurement of its
+  own, so a curve fitted to it would be a curve fitted to the noise:
+  whichever column a drawn curve reads its bars from (the one after it, or
+  the one named in `Curve properties > Source`) is left unticked, and only
+  the means are fitted and drawn.  Both are still in the list, so either
+  can be ticked by hand.
 * **Parameters**: one line for every parameter of the method.  Leaving the
   `Start value` empty lets the program work it out from the data, which is
   what usually happens.  Typing one in says where the fit should set out
@@ -564,6 +564,13 @@ way, so a whole line of the table is always one click away:
 
 * **Dragging** along the letters (or along the numbers) takes a **range** of
   columns (or rows), and it may be dragged in either direction.
+* **Held against an edge of the sheet, the table scrolls on by itself** -
+  downwards and upwards along the numbers, sideways along the letters -
+  and the block grows with it, so a range can reach far past the rows and
+  the columns that happen to be on the screen without letting go of the
+  button.  Bringing the pointer back inside stops it at once, and the
+  scrolling ends at the last (or the first) row or column of the sheet.
+  The black fill handle behaves the same way, in both directions.
 * **`Shift`+clicking** another letter stretches the block from the one that
   was clicked first to that one.
 * The letter of every column the block touches is **tinted**, just as the
@@ -573,6 +580,11 @@ way, so a whole line of the table is always one click away:
   `Ctrl/Cmd+C` copies the column, `Delete` empties it, `Ctrl/Cmd+D`
   duplicates it under itself, and the arrow keys walk on from the cell the
   click left the cursor in.  `Ctrl/Cmd+Space` does the same thing from the keyboard.
+* **`Shift`+an arrow key** stretches the block one cell at a time, and the
+  sheet **follows the end of it in both directions**: down into the rows
+  and sideways into the columns that were not on the screen, and back
+  again.  A plain arrow key does the same for the cell the cursor moves
+  to.
 * **Right clicking** a letter opens the menu of that column -
   `Calculate Column...`, `Sort`, `Insert Column Before / After...`,
   `Rename...`, `Delete Column` - the same menu as a right click on the
@@ -709,7 +721,17 @@ error bars, seven columns give three, and so on.  The **(Median, +error,
 far the bar reaches **up** from the second one and the fourth how far it
 reaches **down**, then the fifth column is the next curve.  Seven columns
 give **two** curves there.  Both lengths are taken as lengths, so a minus
-sign in front of the downward error changes nothing.  The `std` columns are used
+sign in front of the downward error changes nothing.
+
+**An empty column never begins a pair (or a group of three).**  A sheet
+nearly always carries a few blank columns at its end, and once a fitted
+curve has been glued to that sheet they stand between the measurements and
+the fit; counting them as curves would shift every group from there on and
+swallow the fitted column as somebody's error bars.  So a group starts at
+the first column that really holds numbers, and the one (or two) columns
+after it are its errors, full or empty.  Type a value into a blank column
+and it becomes a curve at the next `Update`, exactly as in every other
+kind of diagram.  The `std` columns are used
 up as the errors and are not drawn as curves of their own, so every one of
 them has to stay ticked in the strip above the table.  A last `mean` column
 with no `std` beside it still gets a curve (with a 5 % error, which can be
@@ -2365,6 +2387,12 @@ first:
 changes away, `Cancel` leaves everything as it is.  With several diagrams
 open, closing one of them does not ask - only the **last** one carries the
 whole graph.
+
+**Every way out asks the same question**: the close button of the window,
+`Quit` in the menu, and **`Cmd/Ctrl+Q`** - from the spreadsheet window and
+from a diagram window alike.  On a Mac, `Cmd+Q` and `Quit APlot` in the
+apple menu are one and the same Apple event, and the program takes it over
+so that it can ask; `Cancel` there simply leaves the program running.
 
 **Opening a file never asks.**  `Open graph`, `Import data` and the
 random data of the `Data` menu simply replace what is on the screen: the
