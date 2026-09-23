@@ -2460,8 +2460,39 @@ nothing was changed since the last save.
   Run it with `python3 diagram.py`, change a number, and it is a diagram of
   your own; the last line is a commented-out `savefig` for a batch run.
 
-An `.aplt` file is a readable JSON document.  Besides the table it stores,
-for each open diagram:
+An `.aplt` file is a **ZIP container**, the way the files of an office
+suite are.  Renamed to `.zip` it opens in any archive program, and inside
+there are three entries:
+
+| Entry | What it is |
+| --- | --- |
+| `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
+| `document.json` | The data and every diagram: a readable JSON document (described below). |
+| `Thumbnails/thumbnail.png` | A picture of the graph, about 512 pixels along its longer side, for the file managers (and for anyone who opens the container). |
+
+**The picture** shows the diagram in front - the one `Export` would write -
+cut out of the page with a little air around it, exactly as `Copy figure`
+does.  Its paper is the colour chosen `Around the axes` in `Frame and
+origin`, or **white** when that is transparent: a file manager draws the
+picture on its own background, light or dark, so it is never transparent.
+The selection marks are never on it.  A graph saved with no diagram open
+has no picture; a picture that cannot be drawn for any reason leaves the
+data and the diagrams saved all the same.
+
+The picture is what a file manager needs to show the graph instead of a
+blank page.  The file managers do not look into an unknown container by
+themselves: a small viewer extension on macOS, a thumbnailer entry on
+Linux or a thumbnail handler on Windows has to be installed, and each of
+them only has to copy this one picture out.
+
+The file is written next to its final place and only then put there, so a
+save that fails half way never leaves a broken graph behind.
+
+**Older files** - every `.aplt` written before the container came in is a
+plain JSON file - open exactly as before.  Saving such a graph again
+writes the new kind.  A file that is neither is refused with a message.
+
+Besides the table, `document.json` stores for each open diagram:
 
 * the curves with their colour, line style and width, marker type, size,
   fill and edge colour, edge width, visibility, legend text, the position,

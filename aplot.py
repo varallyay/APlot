@@ -40,7 +40,8 @@ Files
 * csv / txt / dat / tsv text data files with any separator (tabulator,
   semicolon, comma, spaces) and both decimal signs - recognised
   automatically
-* .aplt (JSON) for the data together with every property of every open
+* .aplt (a ZIP container: the JSON document plus a PNG picture of the
+  graph) for the data together with every property of every open
   diagram - File > Save graph / Open graph
 * Help > Documentation shows README.md (the same text is in this file)
 
@@ -115,6 +116,7 @@ import sys
 import tempfile
 import time
 import tkinter as tk
+import zipfile
 from pathlib import Path
 from tkinter import ttk, filedialog, colorchooser, messagebox, simpledialog
 from tkinter import font as tkfont
@@ -150,6 +152,12 @@ APP_NAME = "APlot"
 APP_ID = "hu.feti.aplot"        # what macOS calls the program among its own
 BUNDLE_MARK = "APLOT_APP_BUNDLE"   # set by the launcher of APlot.app
 PROJECT_SUFFIX = ".aplt"
+# an .aplt file is a ZIP container, like the files of an office suite:
+PROJECT_MIMETYPE = "application/x-aplot"     # first, stored: "what am I"
+PROJECT_DOCUMENT = "document.json"           # the data and every diagram
+PROJECT_THUMBNAIL = "Thumbnails/thumbnail.png"   # a picture of the graph
+THUMBNAIL_SIZE = 512            # the longer side of that picture, in pixels
+THUMBNAIL_PAD = 0.08            # the air around the graph on it, in inches
 CONFIG_FILE = Path.home() / ".aplot" / "config.json"
 UNDO_STEPS = 60                 # how many changes can be taken back
 
@@ -635,6 +643,90 @@ def json_default(value):
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return ""
     return str(value)
+
+
+def write_project_file(path, document, thumbnail=None):
+    """Write one `.aplt` file: a ZIP container.
+
+    Inside, in this order:
+
+    * `mimetype` - the words `application/x-aplot`, stored uncompressed
+      as the very first entry, so that a program can tell what the file is
+      from its first bytes (the way OpenDocument files do it),
+    * `document.json` - the data and every diagram, exactly the JSON
+      document the file used to be on its own,
+    * `Thumbnails/thumbnail.png` - a small picture of the graph, for the
+      file managers and for anyone who opens the container.
+
+    The file is written beside its final place and only then put there,
+    so a save that fails half way never leaves a broken graph behind.
+    """
+    path = os.fspath(path)
+    text = json.dumps(document, indent=2, default=json_default)
+    folder = os.path.dirname(os.path.abspath(path))
+    handle, temporary = tempfile.mkstemp(prefix=".aplot-", suffix=".tmp",
+                                         dir=folder)
+    os.close(handle)
+    try:
+        with zipfile.ZipFile(temporary, "w") as archive:
+            archive.writestr(zipfile.ZipInfo("mimetype"), PROJECT_MIMETYPE,
+                             compress_type=zipfile.ZIP_STORED)
+            archive.writestr(PROJECT_DOCUMENT, text.encode("utf-8"),
+                             compress_type=zipfile.ZIP_DEFLATED)
+            if thumbnail:
+                # a PNG is compressed already
+                archive.writestr(PROJECT_THUMBNAIL, bytes(thumbnail),
+                                 compress_type=zipfile.ZIP_STORED)
+        try:          # a new file gets the usual permissions, not 0600
+            mode = (os.stat(path).st_mode & 0o777 if os.path.exists(path)
+                    else 0o666 & ~current_umask())
+            os.chmod(temporary, mode)
+        except OSError:
+            pass
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def current_umask():
+    """The permission mask of this process (it can only be read by setting it)."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
+
+
+def read_project_document(path):
+    """The JSON document of an `.aplt` file.
+
+    Both kinds are read: the ZIP container written since the thumbnail
+    came in, and the plain JSON file every earlier version wrote.  A file
+    that is neither raises `ValueError`.
+    """
+    path = os.fspath(path)
+    if zipfile.is_zipfile(path):
+        try:
+            with zipfile.ZipFile(path) as archive:
+                raw = archive.read(PROJECT_DOCUMENT)
+        except (KeyError, zipfile.BadZipFile) as error:
+            raise ValueError(f"no {PROJECT_DOCUMENT} in the container "
+                             f"({error})") from error
+        return json.loads(raw.decode("utf-8"))
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def read_project_thumbnail(path):
+    """The PNG picture stored in an `.aplt` file, or None (an older file)."""
+    try:
+        with zipfile.ZipFile(os.fspath(path)) as archive:
+            return archive.read(PROJECT_THUMBNAIL)
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
 
 
 def coerce(text):
@@ -16255,6 +16347,44 @@ class PlotWindow(tk.Toplevel):
             self.canvas.draw_idle()
         return path
 
+    def thumbnail_background(self):
+        """The paper colour of the thumbnail: the colour chosen around the
+        axes, or white when that is transparent - a file manager draws the
+        picture on its own background, light or dark."""
+        paper = self.frame_cfg.get("figure_background", "#ffffff")
+        if paper == "none":
+            return "#ffffff"
+        return safe_hex(paper, "#ffffff")
+
+    def thumbnail_png(self, size=THUMBNAIL_SIZE):
+        """A small picture of the graph, as PNG bytes.
+
+        The graph is cut out of the page the way `Copy figure` does it, and
+        drawn so that its longer side is `size` pixels.  It is never
+        transparent: the paper is the colour around the axes, or white.
+        The selection marks are not on it.
+        """
+        selection = self.selection
+        self.select_object(None, None)
+        try:
+            self.canvas.draw()
+            renderer = self.canvas.get_renderer()
+            box = self.fig.get_tightbbox(renderer)      # in inches
+            longest = max(float(box.width), float(box.height)) \
+                + 2.0 * THUMBNAIL_PAD
+            dpi = max(8.0, float(size) / max(longest, 1e-3))
+            holder = io.BytesIO()
+            self.fig.savefig(holder, format="png", dpi=dpi,
+                             bbox_inches="tight", pad_inches=THUMBNAIL_PAD,
+                             transparent=False,
+                             facecolor=self.thumbnail_background(),
+                             edgecolor="none")
+        finally:
+            if selection is not None:
+                self.select_object(*selection)
+            self.canvas.draw_idle()
+        return holder.getvalue()
+
     def copy_figure_to_clipboard(self, *_args):
         """Cmd/Ctrl+C with nothing selected: the whole diagram as a picture."""
         try:
@@ -20827,8 +20957,39 @@ nothing was changed since the last save.
   Run it with `python3 diagram.py`, change a number, and it is a diagram of
   your own; the last line is a commented-out `savefig` for a batch run.
 
-An `.aplt` file is a readable JSON document.  Besides the table it stores,
-for each open diagram:
+An `.aplt` file is a **ZIP container**, the way the files of an office
+suite are.  Renamed to `.zip` it opens in any archive program, and inside
+there are three entries:
+
+| Entry | What it is |
+| --- | --- |
+| `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
+| `document.json` | The data and every diagram: a readable JSON document (described below). |
+| `Thumbnails/thumbnail.png` | A picture of the graph, about 512 pixels along its longer side, for the file managers (and for anyone who opens the container). |
+
+**The picture** shows the diagram in front - the one `Export` would write -
+cut out of the page with a little air around it, exactly as `Copy figure`
+does.  Its paper is the colour chosen `Around the axes` in `Frame and
+origin`, or **white** when that is transparent: a file manager draws the
+picture on its own background, light or dark, so it is never transparent.
+The selection marks are never on it.  A graph saved with no diagram open
+has no picture; a picture that cannot be drawn for any reason leaves the
+data and the diagrams saved all the same.
+
+The picture is what a file manager needs to show the graph instead of a
+blank page.  The file managers do not look into an unknown container by
+themselves: a small viewer extension on macOS, a thumbnailer entry on
+Linux or a thumbnail handler on Windows has to be installed, and each of
+them only has to copy this one picture out.
+
+The file is written next to its final place and only then put there, so a
+save that fails half way never leaves a broken graph behind.
+
+**Older files** - every `.aplt` written before the container came in is a
+plain JSON file - open exactly as before.  Saving such a graph again
+writes the new kind.  A file that is neither is refused with a message.
+
+Besides the table, `document.json` stores for each open diagram:
 
 * the curves with their colour, line style and width, marker type, size,
   fill and edge colour, edge width, visibility, legend text, the position,
@@ -22575,6 +22736,21 @@ class App:
                       for window in self.open_windows()],
         }
 
+    def project_thumbnail(self):
+        """The PNG picture of the graph that goes into the `.aplt` file.
+
+        It shows the diagram in front (the one Export would write); with
+        no diagram open the file simply has no picture.  A picture that
+        cannot be drawn never stops the graph from being saved.
+        """
+        window = self.active_plot()
+        if window is None:
+            return None
+        try:
+            return window.thumbnail_png()
+        except Exception:          # the data matter more than the picture
+            return None
+
     def save_project(self, path=None, quiet=False):
         """Write the data and every diagram into one `.aplt` file.
 
@@ -22591,10 +22767,9 @@ class App:
         if not path:
             return None
         try:
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump(self.project_document(), handle, indent=2,
-                          default=json_default)
-        except OSError as error:
+            write_project_file(path, self.project_document(),
+                               self.project_thumbnail())
+        except (OSError, TypeError, ValueError) as error:
             messagebox.showerror("Error", f"Could not save the file: {error}")
             return None
         self._remember_saved(path)
@@ -22613,8 +22788,7 @@ class App:
         if not path:
             return False
         try:
-            with open(path, "r", encoding="utf-8") as handle:
-                document = json.load(handle)
+            document = read_project_document(path)   # new ZIP or old JSON
         except (OSError, ValueError) as error:
             messagebox.showerror("Error", f"Could not read the file: {error}")
             return False
