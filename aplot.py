@@ -2670,6 +2670,417 @@ def drawn_tool_icon(kind, action, size=ICON_SIZE, where=None):
     return _icon_photo(painter, size)
 
 
+# --------------------------------------------------------------------------
+# the row of sheet tabs under the spreadsheet
+# --------------------------------------------------------------------------
+
+TAB_BAR_HEIGHT = 26          # the height of the row of tabs, in pixels
+TAB_PAD = 12                 # the room left and right of a tab's name
+TAB_SCROLL_STEP = 80         # how far one click on an arrow scrolls, pixels
+TAB_FACE = "#e6e9ee"         # a tab that is not in front
+TAB_FACE_ACTIVE = "#ffffff"  # ... and the one that is
+TAB_HOVER = "#eef1f5"        # a tab under the pointer
+TAB_EDGE = "#b6bec9"         # the thin line around them
+TAB_TEXT = "#1f2328"
+
+
+class SheetNotebook(ttk.Notebook):
+    """A notebook that says when its tabs change.
+
+    It holds the sheets and knows which one is in front, as a notebook
+    does; its own row of tabs is not drawn (see `SheetTabBar`), so every
+    change of a tab - a new one, a new name, a colour, another one in front
+    - is announced to the row that is drawn instead.
+    """
+
+    def __init__(self, master, on_tabs=None, **options):
+        super().__init__(master, **options)
+        self._on_tabs = on_tabs
+
+    def _changed(self):
+        if self._on_tabs is not None:
+            try:
+                self._on_tabs()
+            except tk.TclError:
+                pass
+
+    def add(self, child, **options):
+        done = super().add(child, **options)
+        self._changed()
+        return done
+
+    def insert(self, pos, child, **options):
+        done = super().insert(pos, child, **options)
+        self._changed()
+        return done
+
+    def forget(self, tab_id):
+        done = super().forget(tab_id)
+        self._changed()
+        return done
+
+    def tab(self, tab_id, option=None, **options):
+        done = super().tab(tab_id, option, **options)
+        if options:
+            self._changed()
+        return done
+
+    def select(self, tab_id=None):
+        done = super().select(tab_id)
+        if tab_id is not None:
+            self._changed()
+        return done
+
+
+class TabEvent:
+    """A pointer event of the tab row, told in the row's own pixels."""
+
+    def __init__(self, x, y, x_root=0, y_root=0):
+        self.x, self.y = int(x), int(y)
+        self.x_root, self.y_root = int(x_root), int(y_root)
+
+
+class SheetTabBar(ttk.Frame):
+    """The tabs of the sheets: one row that scrolls when it is too long.
+
+    A notebook of Tk wraps nothing and scrolls nothing - once its tabs are
+    wider than the window the last ones, and the `+` after them, simply
+    slide out of sight.  This row is drawn instead.  When the tabs fit, the
+    `+` stands right after the last one; when they do not, the row scrolls
+    and two arrows appear at its right end, with the `+` beside them, so it
+    never leaves the window.  The wheel (or a sideways swipe) over the row
+    scrolls it as well, and the tab that comes to the front is always
+    brought into view.
+
+    Everything else - which sheet a tab stands for, its name and colour,
+    what a click does - belongs to the program (`handlers`); the row only
+    draws and tells where the pointer is.
+    """
+
+    def __init__(self, master, notebook, names, colors, plus_frame=None,
+                 handlers=None):
+        super().__init__(master)
+        self.notebook = notebook
+        self._names = names          # () -> the names of the sheets
+        self._colors = colors        # (index) -> a colour or None
+        self.plus_frame = plus_frame
+        self.handlers = dict(handlers or {})
+        self._spans = []             # (left, right) of every tab, canvas x
+        self._hover = None
+        self._pending = None
+        self._shown = None           # the tab that was in front last time
+        background = self._background(master)
+        self.canvas = tk.Canvas(self, height=TAB_BAR_HEIGHT, width=40,
+                                highlightthickness=0, borderwidth=0,
+                                background=background, xscrollincrement=1)
+        self.canvas.grid(row=0, column=0, sticky="w")
+        font = tkfont.nametofont("TkDefaultFont")
+        self.font = font
+        self.bold = font.copy()
+        self.bold.configure(weight="bold")
+        self.arrow_font = font.copy()     # the two arrows: large and clear
+        self.arrow_font.configure(size=max(8, int(abs(font.cget("size")) * 0.85)))
+        self.arrows = ttk.Frame(self)
+        self.left_button = tk.Button(
+            self.arrows, text="\u25c0", width=2, relief="flat",
+            borderwidth=0, highlightthickness=0, repeatdelay=350,
+            repeatinterval=60, command=lambda: self.scroll_by(-TAB_SCROLL_STEP))
+        self.right_button = tk.Button(
+            self.arrows, text="\u25b6", width=2, relief="flat",
+            borderwidth=0, highlightthickness=0, repeatdelay=350,
+            repeatinterval=60, command=lambda: self.scroll_by(TAB_SCROLL_STEP))
+        self.left_button.pack(side="left")
+        self.right_button.pack(side="left")
+        self.plus_button = ttk.Button(self, text="+", width=2,
+                                      style="Toolbutton",
+                                      command=self._plus_clicked)
+        self.plus_button.grid(row=0, column=2, sticky="w", padx=(4, 0))
+        self.columnconfigure(3, weight=1)
+        for button in (self.left_button, self.right_button):
+            button.configure(font=self.arrow_font, foreground=ICON_EDGE,
+                             disabledforeground=ICON_MUTED)
+
+        canvas = self.canvas
+        canvas.bind("<ButtonPress-1>", self._pressed)
+        canvas.bind("<ButtonRelease-1>", self._released)
+        canvas.bind("<Double-Button-1>", self._double)
+        for sequence in ("<Button-2>", "<Button-3>"):
+            canvas.bind(sequence, self._menu)
+        if sys.platform == "darwin":        # Control and the one button
+            canvas.bind("<Control-Button-1>", self._menu)
+        canvas.bind("<Motion>", self._moved)
+        canvas.bind("<Leave>", lambda _e: self._hover_on(None))
+        for widget in (canvas, self, self.plus_button, self.left_button,
+                       self.right_button):
+            for sequence in ("<MouseWheel>", "<Shift-MouseWheel>"):
+                widget.bind(sequence, self._wheel, add="+")
+            widget.bind("<Button-4>", lambda _e: self.scroll_by(-40), add="+")
+            widget.bind("<Button-5>", lambda _e: self.scroll_by(40), add="+")
+        self.bind("<Configure>", lambda _e: self._fit())
+        self.refresh()
+
+    @staticmethod
+    def _background(master):
+        try:
+            return str(master.winfo_toplevel().cget("background"))
+        except (tk.TclError, AttributeError):
+            return "#ececec"
+
+    # -- drawing -----------------------------------------------------------
+    def refresh(self, later=True):
+        """Draw the row again (soon, once, however often it is asked)."""
+        if not later:
+            if self._pending is not None:
+                try:
+                    self.after_cancel(self._pending)
+                except tk.TclError:
+                    pass
+                self._pending = None
+            return self._draw()
+        if self._pending is None:
+            try:
+                self._pending = self.after_idle(self._redraw_now)
+            except tk.TclError:
+                self._pending = None
+        return None
+
+    def _redraw_now(self):
+        self._pending = None
+        try:
+            self._draw()
+        except tk.TclError:
+            pass
+
+    def flush(self):
+        """Draw now if a drawing is waiting - before anything is measured."""
+        if self._pending is not None:
+            self.refresh(later=False)
+
+    def selected(self):
+        try:
+            return int(self.notebook.index("current"))
+        except (tk.TclError, ValueError):
+            return 0
+
+    def _draw(self):
+        canvas = self.canvas
+        canvas.delete("all")
+        names = list(self._names())
+        current = self.selected()
+        height = TAB_BAR_HEIGHT
+        spans, x = [], 0
+        for index, name in enumerate(names):
+            font = self.bold if index == current else self.font
+            color = self._colors(index)
+            width = font.measure(str(name)) + 2 * TAB_PAD
+            if color:
+                width += 18
+            spans.append((x, x + width))
+            x += width - 1              # the edges of two tabs are one line
+        total = max(1, x + 1)
+        self._spans = spans
+        canvas.create_line(0, 0, total + 2000, 0, fill=TAB_EDGE, tags="edge")
+        for index, (name, (left, right)) in enumerate(zip(names, spans)):
+            front = index == current
+            face = (TAB_FACE_ACTIVE if front else
+                    TAB_HOVER if index == self._hover else TAB_FACE)
+            top = -1 if front else 0    # the tab in front joins the sheet
+            canvas.create_rectangle(left, top, right, height - 3, fill=face,
+                                    outline=TAB_EDGE, tags=(f"tab{index}",))
+            text_x = left + TAB_PAD
+            color = self._colors(index)
+            if color:
+                canvas.create_rectangle(text_x, (height - 3) / 2 - 6,
+                                        text_x + 12, (height - 3) / 2 + 6,
+                                        fill=color, outline=TAB_EDGE,
+                                        tags=(f"tab{index}",))
+                text_x += 18
+            canvas.create_text(text_x, (height - 3) / 2, anchor="w",
+                               text=str(name), fill=TAB_TEXT,
+                               font=self.bold if front else self.font,
+                               tags=(f"tab{index}",))
+            if front:                   # no line between it and the sheet
+                canvas.create_line(left + 1, 0, right, 0, fill=face)
+        canvas.configure(scrollregion=(0, 0, total, height))
+        self._total = total
+        self._fit()
+        if current != self._shown:
+            self._shown = current
+            self.see(current)
+        return spans
+
+    def _fit(self):
+        """The canvas as wide as the tabs, or as the room there is.
+
+        When everything fits the `+` stands right after the last tab; when
+        it does not, the arrows come in and the tabs scroll.
+        """
+        try:
+            room = int(self.winfo_width())
+        except tk.TclError:
+            return False
+        if room <= 1:
+            room = int(self.winfo_reqwidth()) or 400
+        total = getattr(self, "_total", 1)
+        plus = max(24, int(self.plus_button.winfo_reqwidth())) + 4
+        arrows = max(40, int(self.arrows.winfo_reqwidth()))
+        overflow = total > room - plus
+        if overflow:
+            width = max(40, room - plus - arrows - 2)
+            if not self.arrows.winfo_ismapped():
+                self.arrows.grid(row=0, column=1, sticky="w", padx=(2, 0))
+        else:
+            width = total
+            if self.arrows.winfo_manager():
+                self.arrows.grid_remove()
+        if int(self.canvas.cget("width")) != width:
+            self.canvas.configure(width=width)
+        self.overflow = overflow
+        self._clamp()
+        self._arrow_states()
+        return overflow
+
+    # -- scrolling ---------------------------------------------------------
+    def view_width(self):
+        return max(1, int(self.canvas.cget("width")))
+
+    def offset(self):
+        """How far the row is scrolled, in pixels."""
+        return int(round(self.canvas.canvasx(0)))
+
+    def scroll_to(self, left):
+        total = getattr(self, "_total", 1)
+        left = max(0, min(int(left), max(0, total - self.view_width())))
+        self.canvas.xview_moveto(left / float(max(1, total)))
+        self._arrow_states()
+        return left
+
+    def scroll_by(self, pixels):
+        return self.scroll_to(self.offset() + int(pixels))
+
+    def _clamp(self):
+        self.scroll_to(self.offset())
+
+    def see(self, index):
+        """Scroll so that the whole tab `index` is in view."""
+        if not (0 <= index < len(self._spans)):
+            return False
+        left, right = self._spans[index]
+        start, width = self.offset(), self.view_width()
+        if left < start:
+            self.scroll_to(left)
+        elif right > start + width:
+            self.scroll_to(right - width + 1)
+        return True
+
+    def _arrow_states(self):
+        start = self.offset()
+        end = start + self.view_width()
+        total = getattr(self, "_total", 1)
+        try:
+            self.left_button.configure(state="normal" if start > 0 else "disabled")
+            self.right_button.configure(
+                state="normal" if end < total else "disabled")
+        except tk.TclError:
+            pass
+
+    def _wheel(self, event):
+        delta = int(getattr(event, "delta", 0) or 0)
+        if not delta:
+            return "break"
+        # Windows counts a notch as 120, macOS in small steps
+        pixels = delta / 3.0 if abs(delta) >= 120 else delta * 8
+        self.scroll_by(-pixels)
+        return "break"
+
+    # -- where the pointer is ----------------------------------------------
+    def plus_index(self):
+        if self.plus_frame is None:
+            return None
+        try:
+            return int(self.notebook.index(self.plus_frame))
+        except (tk.TclError, ValueError):
+            return None
+
+    def tab_at(self, x, y):
+        """The number of the tab at a point of the row, or None.
+
+        The `+` counts as the tab it stands for in the notebook.
+        """
+        self.flush()
+        if not (-2 <= y <= TAB_BAR_HEIGHT + 2):
+            return None
+        plus = self.plus_button
+        if plus.winfo_ismapped():
+            px, pw = plus.winfo_x(), plus.winfo_width()
+            if px <= x < px + max(pw, 1):
+                return self.plus_index()
+        cx0, cw = self.canvas.winfo_x(), self.view_width()
+        if not (cx0 <= x < cx0 + cw):
+            return None
+        inside = x - cx0 + self.offset()
+        for index, (left, right) in enumerate(self._spans):
+            if left <= inside < right:
+                return index
+        return None
+
+    def tab_box(self, index):
+        """(x, y, width, height) of one tab in the row, scrolled into view."""
+        self.flush()
+        self.update_idletasks()
+        if index is not None and index == self.plus_index():
+            plus = self.plus_button
+            return (plus.winfo_x(), plus.winfo_y(),
+                    max(16, plus.winfo_width()), max(16, plus.winfo_height()))
+        if not (0 <= int(index) < len(self._spans)):
+            return None
+        self.see(int(index))
+        left, right = self._spans[int(index)]
+        x = self.canvas.winfo_x() + left - self.offset()
+        return (x, self.canvas.winfo_y(), right - left, TAB_BAR_HEIGHT - 3)
+
+    def _event(self, event):
+        return TabEvent(event.x + self.canvas.winfo_x(),
+                        event.y + self.canvas.winfo_y(),
+                        getattr(event, "x_root", 0), getattr(event, "y_root", 0))
+
+    def _call(self, name, event):
+        handler = self.handlers.get(name)
+        return handler(event) if handler else None
+
+    def _pressed(self, event):
+        here = self._event(event)
+        index = self.tab_at(here.x, here.y)
+        if index is not None and index != self.selected():
+            self.notebook.select(index)
+        return self._call("press", here)
+
+    def _released(self, event):
+        return self._call("click", self._event(event))
+
+    def _double(self, event):
+        return self._call("double", self._event(event))
+
+    def _menu(self, event):
+        self._call("menu", self._event(event))
+        return "break"
+
+    def _plus_clicked(self):
+        return self._call("plus", None)
+
+    def _moved(self, event):
+        here = self._event(event)
+        index = self.tab_at(here.x, here.y)
+        if index == self.plus_index():
+            index = None
+        self._hover_on(index)
+
+    def _hover_on(self, index):
+        if index != self._hover:
+            self._hover = index
+            self.refresh()
+
+
 class TableToolButton(ttk.Button):
     """Toolbar button of the spreadsheet."""
     def __init__(self, master, kind="row", action="add", where=None,
@@ -5657,6 +6068,14 @@ def adjust_formula_references(formula: str, delta_row: int, delta_col: int = 0) 
     return CELL_IN_FORMULA.sub(repl, formula)
 
 
+RANDOM_IN_FORMULA = re.compile(r"\brandn?\s*\(", re.IGNORECASE)
+
+
+def new_random_seed():
+    """A fresh seed for the random numbers of one sheet."""
+    return int(np.random.SeedSequence().entropy % (1 << 63))
+
+
 class FormulaEvaluator:
     """Safe AST-based Excel formula evaluator with full mathematical and range support."""
 
@@ -5689,10 +6108,50 @@ class FormulaEvaluator:
     # with five columns "e" is column E of the current row
     LETTER_CONSTANTS = ('e',)
 
-    def __init__(self, df: pd.DataFrame, cell_formulas: dict):
+    # the two random functions: RAND() / RAND(low, high) is uniform,
+    # RANDN() / RANDN(mean, sd) is normal.  They are handled apart from the
+    # other functions because their number depends on the cell they stand in.
+    RANDOM_FUNCS = ('rand', 'randn')
+
+    def __init__(self, df: pd.DataFrame, cell_formulas: dict, seed=0):
         self.df = df
         self.cell_formulas = cell_formulas
         self._eval_stack = set()
+        # every sheet has a seed of its own: RAND() in a cell is drawn from
+        # the seed, the row, the column and which RAND() of the formula it
+        # is.  So a number stays what it is when the sheet is worked out
+        # again (after any edit, Undo, opening the file), a formula filled
+        # down gives a different number in every row, and `New random
+        # numbers` (F9) draws them all anew by changing the seed.
+        self.seed = abs(int(seed or 0)) % (1 << 63)
+        self._random_calls = []        # how many were drawn, per formula
+
+    def random_value(self, name, args, row, col):
+        """One number of RAND or RANDN, in the cell (row, col)."""
+        if self._random_calls:
+            count = self._random_calls[-1]
+            self._random_calls[-1] = count + 1
+        else:
+            count = 0
+        for value in args:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("#VALUE!")
+        generator = np.random.default_rng(
+            [self.seed, max(0, int(row)), max(0, int(col)), count,
+             1 if name == 'randn' else 0])
+        if name == 'rand':
+            if len(args) not in (0, 2):
+                raise ValueError("#VALUE!")
+            low, high = (0.0, 1.0) if not args else (float(args[0]),
+                                                     float(args[1]))
+            return low + (high - low) * float(generator.random())
+        if len(args) not in (0, 2):
+            raise ValueError("#VALUE!")
+        mean, spread = (0.0, 1.0) if not args else (float(args[0]),
+                                                    float(args[1]))
+        if spread < 0:
+            raise ValueError("#NUM!")
+        return mean + spread * float(generator.standard_normal())
 
     def get_cell_value(self, row: int, col: int):
         if (row, col) in self._eval_stack:
@@ -5783,6 +6242,7 @@ class FormulaEvaluator:
         was_in_stack = (current_row, current_col) in self._eval_stack
         if not was_in_stack:
             self._eval_stack.add((current_row, current_col))
+        self._random_calls.append(0)    # the RAND()s of this formula count anew
         try:
             res = self._eval_ast(tree.body, current_row, current_col)
             if isinstance(res, str) and res.startswith("#"):
@@ -5805,6 +6265,7 @@ class FormulaEvaluator:
         except Exception:
             return "#VALUE!"
         finally:
+            self._random_calls.pop()
             if not was_in_stack:
                 self._eval_stack.discard((current_row, current_col))
 
@@ -5915,6 +6376,14 @@ class FormulaEvaluator:
                     r1 = self._eval_ast(node.args[0], current_row, current_col)
                     r2 = self._eval_ast(node.args[1], current_row, current_col)
                     return self.get_range_values(r1, r2)
+                elif fname in self.RANDOM_FUNCS:
+                    args = [self._eval_ast(a, current_row, current_col)
+                            for a in node.args]
+                    for a in args:
+                        if isinstance(a, str) and a.startswith("#"):
+                            return a
+                    return self.random_value(fname, args, current_row,
+                                             current_col)
                 elif fname in self.SAFE_FUNCS:
                     func = self.SAFE_FUNCS[fname]
                 else:
@@ -5967,6 +6436,12 @@ def eval_column_math(df: pd.DataFrame, expr_str: str):
         'diff': lambda x: np.gradient(x) if len(x) > 1 else np.zeros_like(x),
         'smooth': lambda x, w=5: pd.Series(x).rolling(max(1, int(w)), center=True, min_periods=1).mean().to_numpy(),
         'linspace': lambda a, b: np.linspace(a, b, len(df)),
+        # one random number for every row: uniform (0..1, or low..high)
+        # and normal (mean 0 and sd 1, or the two given)
+        'rand': lambda low=0.0, high=1.0: np.random.default_rng().uniform(
+            low, high, len(df)),
+        'randn': lambda mean=0.0, sd=1.0: np.random.default_rng().normal(
+            mean, sd, len(df)),
     }
 
     # Bind column names and letters as numpy arrays
@@ -7226,6 +7701,7 @@ class DataTable(ttk.Frame):
         self._editor = None
         self._heading_editor = None
         self.cell_formulas: dict = {}   # (row, col) -> formula string (e.g. "=A1+B1")
+        self.random_seed = new_random_seed()   # what RAND() of this sheet draws from
         self.plot_with_previous_var = tk.BooleanVar(value=False)
         # the highlighted block of cells: (row0, col0, row1, col1)
         self.block = None
@@ -9867,14 +10343,31 @@ class DataTable(ttk.Frame):
         self._update_status_bar()
 
     def eval_formula(self, formula_str, row, col):
-        evaluator = FormulaEvaluator(self.df, self.cell_formulas)
+        evaluator = FormulaEvaluator(self.df, self.cell_formulas,
+                                     seed=self.random_seed)
         return evaluator.evaluate(formula_str, row, col)
+
+    def new_random_numbers(self):
+        """F9: every RAND() and RANDN() of this sheet draws a new number.
+
+        Only the seed of the sheet changes, so the formulas themselves stay
+        as they are; the change is one step that Undo takes back.
+        """
+        self.random_seed = new_random_seed()
+        uses = any(RANDOM_IN_FORMULA.search(str(formula))
+                   for formula in self.cell_formulas.values())
+        if uses:
+            self.recalculate_all()
+            if self.on_change:
+                self.on_change()
+        return uses
 
     def recalculate_all(self):
         """Recalculate all formula cells across the table."""
         if not self.cell_formulas:
             return
-        evaluator = FormulaEvaluator(self.df, self.cell_formulas)
+        evaluator = FormulaEvaluator(self.df, self.cell_formulas,
+                                     seed=self.random_seed)
         for (r, c), formula in list(self.cell_formulas.items()):
             if r < len(self.df) and c < len(self.df.columns):
                 val = evaluator.evaluate(formula, r, c)
@@ -18899,10 +19392,24 @@ works on.
   window.  The name of a sheet matters: it is what a curve of that sheet is
   called in a diagram that draws several sheets at once, and the diagrams
   follow the new name at once.
-* **Colouring and deleting**: right click (or Ctrl-click) a tab.
-  `Tab colour` paints a small square on it, which is useful for telling a
-  fit, a measurement and a calculation apart at a glance.  The last sheet
-  is never deleted.
+* **Colouring, duplicating and deleting**: right click (or Ctrl-click) a
+  tab.  `Tab colour` paints a small square on it, which is useful for
+  telling a fit, a measurement and a calculation apart at a glance.
+  **`Duplicate tab`** puts a second sheet with the same contents right
+  after it and brings it to the front: the numbers, the formulas (random
+  ones draw the very same numbers), the column names, which columns are
+  plotted against which axis and the colour of the tab.  It is called
+  after the original - `Signals copy`, `Signals copy 2` - and it is a
+  sheet of its own from then on; its `Plot with previous tab` is left off.
+  The last sheet is never deleted.
+* **Many sheets, long names**: when the tabs no longer fit into the width
+  of the window the row **scrolls**.  Two small arrows appear at its right
+  end, with the `+` beside them, so the `+` never slides out of the
+  window; the arrows scroll the row (hold one down to keep going), and so
+  do the wheel of the mouse or a sideways swipe on a trackpad over the
+  row.  The tab that comes to the front is always brought into view.  While
+  everything fits the arrows are not there and the `+` stands right after
+  the last tab.
 * **Every sheet is written into the `.aplt` file** with its name, **its
   colour**, its data, its formulas, which of its columns are ticked, and
   whether it is drawn with the one before it.  A file written by an older
@@ -19330,6 +19837,21 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
   column `E`) keeps its own meaning: the column always wins over the constant.
 * **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2)`,
   `OR(c1, c2)`, `NOT(c)`.
+* **Random numbers**: `RAND()` draws a number with a **uniform**
+  distribution between 0 and 1, `RAND(low, high)` one between `low` and
+  `high`.  `RANDN()` draws one with a **normal** (Gaussian) distribution of
+  mean 0 and standard deviation 1, `RANDN(mean, sd)` one of the mean and
+  standard deviation given.  Filled down a column (the fill handle, or
+  `Fill Down`), every row gets a number of its own, and they can be part
+  of a larger formula: `=A1 + RANDN(0, 0.05)` adds noise to a column.
+
+  Unlike Excel, the numbers **stay what they are** while the sheet is
+  worked on - an edit elsewhere, Undo, saving and opening the file do not
+  change them, so a diagram of them does not change under the user's
+  hands either.  **`Edit > New random numbers`** (`F9`, as in Excel) draws
+  all of them anew for the sheet in front; it is one step that `Undo`
+  takes back.  Column Math knows `rand()`, `rand(low, high)`, `randn()`
+  and `randn(mean, sd)` as well, with one number for every row.
 
 #### Error reporting and safety
 
@@ -19596,6 +20118,13 @@ nothing.
   writing - nothing has to be clicked first.  The sheet that is brought to
   the front, and the one left in front by an opened graph, take the
   keyboard the same way.
+* **Coming back to the window** - a click on its title bar, on its icon in
+  the Dock, `Cmd+Tab` - gives the keyboard back to the sheet as well, so
+  the arrows and the typing work at once, without clicking a cell first.
+  The same happens after a toolbar button was clicked.  A cell that is
+  being written, the formula bar and the name of a tab keep the keyboard,
+  and a key that would otherwise have gone nowhere is handed to the sheet,
+  so even the very first arrow or digit is not lost.
 * **Just start typing**: the first character opens the cell under the
   cursor and is the first character in it, as in a spreadsheet.  `Enter`
   or `F2` opens it with the value that is there instead.
@@ -21429,10 +21958,23 @@ class App:
 
         self._build_toolbar()
         
+        # the notebook holds the sheets; its own tabs are not drawn - the
+        # row under it (`SheetTabBar`) is, because that one can scroll
         style = ttk.Style()
-        style.configure('Bottom.TNotebook', tabposition='sw')
-        self.notebook = ttk.Notebook(self.root, style='Bottom.TNotebook')
-        self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        style.configure('Sheets.TNotebook', tabposition='sw', tabmargins=0)
+        style.layout('Sheets.TNotebook.Tab', [])
+        self.tab_bar = None
+        self.notebook = SheetNotebook(self.root, style='Sheets.TNotebook',
+                                      on_tabs=self._tabs_changed)
+        self.tab_bar = SheetTabBar(
+            self.root, self.notebook, names=self.tab_names,
+            colors=self.tab_color,
+            handlers={"click": self._on_tab_click,
+                      "double": self._on_tab_double_click,
+                      "menu": self._show_tab_context_menu,
+                      "plus": lambda _e=None: self.add_sheet()})
+        self.tab_bar.pack(side="bottom", fill="x", padx=10, pady=(0, 8))
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 0))
         
         self.tables = []
         self.tab_images = {}
@@ -21440,14 +21982,12 @@ class App:
         self._tab_editor = None         # the little box that writes a name
         self._tab_click = None          # the tab of the click before this one
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
-        self.notebook.bind("<Button-2>", self._show_tab_context_menu)
-        self.notebook.bind("<Button-3>", self._show_tab_context_menu)
-        self.notebook.bind("<ButtonRelease-1>", self._on_tab_click, add="+")
-        self.notebook.bind("<Double-Button-1>", self._on_tab_double_click,
-                           add="+")
-        
+
+        # the "+" of the row of tabs stands for this empty page: choosing it
+        # makes a new sheet (see `_on_tab_changed`)
         self.plus_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.plus_frame, text=" + ")
+        self.tab_bar.plus_frame = self.plus_frame
         
         self.add_tab("Data 1", blank=True)
         self.notebook.select(0)
@@ -21455,6 +21995,14 @@ class App:
         self._build_menu()
         use_font_family(self.settings.get("fonts", "family"))
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
+        # coming back to the window: the sheet takes the keyboard again
+        for sequence in ("<FocusIn>", "<Activate>"):
+            try:
+                self.root.bind(sequence, self._window_came_back, add="+")
+            except tk.TclError:
+                pass
+        # ...and a key that lands nowhere is handed to the sheet
+        self.root.bind("<Key>", self._stray_key, add="+")
         self._saved_signature = self.project_signature()
         self.root.after_idle(self._focus)
         # macOS calls a plain script after its interpreter: asked once,
@@ -21649,23 +22197,58 @@ class App:
         self._follow_active_tab()
         return True
 
+    def _tabs_changed(self):
+        """A tab came, went, was renamed or coloured: draw the row again."""
+        bar = getattr(self, "tab_bar", None)
+        if bar is not None:
+            bar.refresh()
+
+    def add_sheet(self):
+        """The `+` of the row of tabs: a new, empty sheet at the end."""
+        self.notebook.select(self.plus_frame)   # see `_on_tab_changed`
+        return self.table
+
     def _show_tab_context_menu(self, event):
-        try:
-            tab_id = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)
-            if not tab_id and tab_id != 0:
-                return
-            idx = int(tab_id)
-        except (tk.TclError, ValueError, TypeError):
+        idx = self._tab_at(event.x, event.y)
+        if idx is None:
             return
-            
         if hasattr(self, "plus_frame") and idx == self.notebook.index(self.plus_frame):
             return # Don't show menu for the "+" tab
             
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Rename tab", command=lambda: self.rename_tab(idx))
         menu.add_command(label="Tab colour", command=lambda: self.color_tab(idx))
+        menu.add_command(label="Duplicate tab",
+                         command=lambda: self.duplicate_tab(idx))
         menu.add_command(label="Delete tab", command=lambda: self.delete_tab(idx))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def duplicate_tab(self, idx):
+        """A second sheet with the same contents, right after this one.
+
+        Everything the sheet holds is copied: the numbers, the formulas
+        (the random ones draw the very same numbers), the column names,
+        which columns are plotted against which axis, and the colour of the
+        tab.  The copy is not tied to the diagram of the original - its
+        `Plot with previous tab` is left off - and it comes to the front.
+        """
+        idx = int(idx)
+        if not (0 <= idx < len(self.tables)):
+            return None
+        self.tables[idx]._commit_edit()
+        snapshot = self.tab_document(idx)
+        name = self.free_tab_name(f"{snapshot['name']} copy")
+        self.undo.hold()           # building the copy is not an edit of it
+        try:
+            table = self.add_tab(name, at=idx + 1)
+            snapshot.update(index=idx + 1, name=name,
+                            plot_with_previous=False)
+            self.apply_tab_document(snapshot)
+        finally:
+            self.undo.release()
+        table._undo_document = self.tab_document(idx + 1)
+        self.root.after_idle(self.focus_sheet)
+        return table
 
     def rename_tab(self, idx):
         """Ask for a new name (the right click menu of a tab)."""
@@ -21704,59 +22287,22 @@ class App:
 
     # -- writing the name of a tab straight on the tab ---------------------
     def _tab_at(self, x, y):
-        """The number of the tab under a point of the notebook, or None."""
+        """The number of the tab under a point of the row of tabs, or None."""
         try:
-            found = self.notebook.tk.call(self.notebook._w, "identify", "tab",
-                                          int(x), int(y))
-        except (tk.TclError, ValueError, TypeError):
-            return None
-        if found == "" or found is None:
-            return None
-        try:
-            return int(found)
-        except (TypeError, ValueError):
+            return self.tab_bar.tab_at(int(x), int(y))
+        except (tk.TclError, ValueError, TypeError, AttributeError):
             return None
 
     def tab_box(self, idx):
-        """(x, y, width, height) of one tab inside the notebook, or None.
+        """(x, y, width, height) of one tab in the row of tabs, or None.
 
-        Tk does not hand out the place of a tab, so it is found by asking
-        the notebook which tab is at a point: the row of the tabs first,
-        then the two edges of this one.
+        The row is scrolled first, if it has to be, so that the whole tab
+        is in view.
         """
-        notebook = self.notebook
-        width, height = notebook.winfo_width(), notebook.winfo_height()
-        if width < 4 or height < 4:
+        try:
+            return self.tab_bar.tab_box(int(idx))
+        except (tk.TclError, ValueError, TypeError, AttributeError):
             return None
-        row = None
-        for y in range(height - 3, max(-1, height - 48), -2):
-            if self._tab_at(6, y) is not None:
-                row = y
-                break
-        if row is None:                 # the tabs may sit on the top edge
-            for y in range(2, min(height, 48), 2):
-                if self._tab_at(6, y) is not None:
-                    row = y
-                    break
-        if row is None:
-            return None
-        left = right = None
-        for x in range(0, width, 2):
-            if self._tab_at(x, row) == int(idx):
-                left = x if left is None else left
-                right = x
-        if left is None:
-            return None
-        top, bottom = row, row
-        for y in range(row, -1, -1):
-            if self._tab_at(left + 2, y) != int(idx):
-                break
-            top = y
-        for y in range(row, height):
-            if self._tab_at(left + 2, y) != int(idx):
-                break
-            bottom = y
-        return (left, top, max(24, right - left + 2), max(16, bottom - top + 1))
 
     def begin_tab_rename(self, idx=None):
         """Write the name of a sheet on the tab itself.
@@ -21772,12 +22318,12 @@ class App:
         if box is None:
             return self.rename_tab(idx)      # a window too small to write on
         x, y, width, height = box
-        editor = tk.Entry(self.notebook, justify="center", relief="solid",
+        editor = tk.Entry(self.tab_bar, justify="center", relief="solid",
                           borderwidth=1, highlightthickness=0,
                           insertbackground=CARET_COLOR, insertwidth=2)
         editor.insert(0, self.notebook.tab(idx, "text"))
         editor.select_range(0, "end")
-        editor.place(in_=self.notebook, x=x, y=y,
+        editor.place(in_=self.tab_bar, x=x, y=y,
                      width=max(width, 60), height=height)
         editor.bind("<Return>", lambda _e: self.commit_tab_rename())
         editor.bind("<KP_Enter>", lambda _e: self.commit_tab_rename())
@@ -21915,7 +22461,102 @@ class App:
         self.root.focus_force()
         self.focus_sheet()
 
-    def focus_sheet(self, _event=None):
+    # widgets of the main window that take no typing: the keyboard is no
+    # use to them, so it is handed on to the sheet in front
+    IDLE_CLASSES = ("Tk", "TNotebook", "TFrame", "Frame", "Canvas", "TLabel",
+                    "Label", "TLabelframe", "Labelframe", "TSeparator",
+                    "TScrollbar", "Scrollbar", "TPanedwindow", "Panedwindow")
+    # ...and the buttons, which keep the keys that press them (Space) but
+    # must not keep the keyboard once they have been clicked
+    BUTTON_CLASSES = ("TButton", "Button", "TCheckbutton", "Checkbutton",
+                      "TRadiobutton", "Radiobutton", "TMenubutton",
+                      "Menubutton")
+    # the keys a sheet moves with or acts on
+    SHEET_KEYS = ("Up", "Down", "Left", "Right", "Return", "KP_Enter", "F2",
+                  "Delete", "BackSpace", "Home", "End", "Prior", "Next")
+
+    def _widget_class(self, widget):
+        try:
+            return str(widget.winfo_class())
+        except (tk.TclError, AttributeError):
+            return ""
+
+    def keyboard_nowhere(self, widget, buttons=True):
+        """True when `widget` (holding the keyboard) cannot use it.
+
+        The window itself, the notebook, a frame, the row of tabs - and,
+        with `buttons`, a button that was just clicked.  A text field (the
+        formula bar, a cell, the name of a tab), the sheet itself and any
+        widget of another window are not.
+        """
+        if widget is None:
+            return True
+        try:
+            if widget.winfo_toplevel() is not self.root:
+                return False
+        except (tk.TclError, AttributeError, KeyError):
+            return False
+        kind = self._widget_class(widget)
+        if kind in self.IDLE_CLASSES:
+            return True
+        return buttons and kind in self.BUTTON_CLASSES
+
+    def _window_came_back(self, _event=None):
+        """The main window is the active one again.
+
+        When the user comes back to it (a click on its title bar, the
+        Dock, Cmd+Tab) the system may hand the keyboard to the window
+        itself instead of to the cell that had it; the arrows and the
+        typing then went nowhere until a cell was clicked.  Whatever holds
+        the keyboard is looked at once things have settled, and if it has
+        no use for it the sheet in front takes it.
+        """
+        try:
+            self.root.after_idle(self._settle_keyboard)
+        except tk.TclError:
+            pass
+        return None
+
+    def _settle_keyboard(self):
+        try:
+            current = self.root.focus_get()
+        except (tk.TclError, KeyError):
+            current = None
+        if current is not None and not self.keyboard_nowhere(current):
+            return False
+        return self.focus_sheet(force=True)
+
+    def _stray_key(self, event):
+        """A key pressed while the keyboard was on something that cannot use
+        it (see `keyboard_nowhere`): the sheet in front gets it.
+
+        The sheet takes the keyboard for good, and this very key is handed
+        to it as well, so the first arrow or the first digit is not lost.
+        """
+        widget = getattr(event, "widget", None)
+        if not self.keyboard_nowhere(widget, buttons=False):
+            return None
+        try:
+            if int(event.state or 0) & TYPING_COMMAND_KEYS:
+                return None           # a command: the menus deal with it
+        except (TypeError, ValueError):
+            pass
+        table = self.table
+        if table is None or not self.focus_sheet(force=True):
+            return None
+        keysym = str(getattr(event, "keysym", "") or "")
+        if keysym in self.SHEET_KEYS:
+            try:
+                table.tree.event_generate("<KeyPress>", keysym=keysym,
+                                          state=int(event.state or 0))
+            except (tk.TclError, TypeError, ValueError):
+                return None
+            return "break"
+        if table._on_grid_typing(event) == "break":
+            return "break"
+        return None
+
+    def focus_sheet(self, _event=None, force=False):
         """The sheet in front takes the keyboard, ready to be typed into.
 
         Without this the window itself held the keyboard when the program
@@ -21931,7 +22572,7 @@ class App:
             current = None
         if current is not None and self.keyboard_busy(current):
             return False            # a cell that is open keeps the keyboard
-        if current is not None:      # a dialog or a diagram is being used
+        if current is not None and not force:   # a dialog or a diagram
             try:
                 if current.winfo_toplevel() is not self.root:
                     return False
@@ -22204,6 +22845,9 @@ class App:
         edit_menu.add_command(label="Duplicate", accelerator=f"{ACCEL_NAME}+D",
                               command=lambda: self.edit_command("duplicate",
                                                                 plot))
+        edit_menu.add_separator()
+        edit_menu.add_command(label="New random numbers", accelerator="F9",
+                              command=self.new_random_numbers)
         menubar.add_cascade(label="Edit", menu=edit_menu)
         self._edit_menus = [one for one in getattr(self, "_edit_menus", [])
                             if one.winfo_exists()]
@@ -22738,6 +23382,10 @@ class App:
             "s": wrap(self.save_csv),
             "e": wrap(self.export_script, plot),
         }
+        try:                  # F9, as in Excel: the random numbers anew
+            window.bind("<F9>", wrap(self.new_random_numbers))
+        except tk.TclError:
+            pass
         for modifier in ("Control", "Command"):
             for letter, handler in commands.items():
                 try:
@@ -22778,6 +23426,7 @@ class App:
             "axes": {str(name): table.column_axis(name)
                      for name in frame.columns},
             "formulas": dict(getattr(table, "cell_formulas", {})),
+            "random_seed": int(getattr(table, "random_seed", 0) or 0),
             "plot_with_previous": bool(
                 getattr(table, "plot_with_previous_var", None)
                 and table.plot_with_previous_var.get()),
@@ -22797,6 +23446,8 @@ class App:
         frame = frame.where(frame.notna(), "")
         table.set_dataframe(frame)
         table.cell_formulas = dict(snapshot.get("formulas") or {})
+        if snapshot.get("random_seed") is not None:
+            table.random_seed = int(snapshot["random_seed"])
         for name, code in (snapshot.get("axes") or {}).items():
             table.set_column_axis(name, code)
         if snapshot.get("plot_with_previous") is not None:
@@ -22896,6 +23547,22 @@ class App:
                 "paste": table.paste_block,
                 "duplicate": table.duplicate_block}[str(what)]()
 
+    def new_random_numbers(self, _event=None):
+        """Edit > New random numbers (F9): RAND() and RANDN() draw again.
+
+        It works on the sheet in front, like pressing F9 in Excel; the
+        formulas stay, only their numbers change, and Undo takes it back.
+        """
+        table = self.table
+        if table is None:
+            return False
+        table._commit_edit()
+        if not table.new_random_numbers():
+            self.say("This sheet has no RAND() or RANDN() formula")
+            return False
+        self.say("New random numbers were drawn")
+        return True
+
     def undo_step(self, _event=None):
         """Edit > Undo."""
         if not self.undo.can_undo():
@@ -22983,7 +23650,10 @@ class App:
                 # a sheet with no diagram of its own would lose them
                 "axes": {str(name): tab.column_axis(name)
                          for name in df.columns},
-                "formulas": formulas
+                "formulas": formulas,
+                # what RAND() and RANDN() draw from: the numbers of the
+                # sheet come back the same when the file is opened again
+                "random_seed": int(getattr(tab, "random_seed", 0) or 0),
             })
             
         first_tab = tabs_data[0] if tabs_data else {"columns": [], "rows": [], "formulas": {}}
@@ -23104,6 +23774,11 @@ class App:
                 except (ValueError, IndexError):
                     pass
             table.cell_formulas = loaded_formulas
+            if tab_data.get("random_seed") is not None:
+                try:
+                    table.random_seed = int(tab_data["random_seed"])
+                except (TypeError, ValueError):
+                    pass
             
         self.notebook.select(0)
 

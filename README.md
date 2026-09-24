@@ -230,10 +230,24 @@ works on.
   window.  The name of a sheet matters: it is what a curve of that sheet is
   called in a diagram that draws several sheets at once, and the diagrams
   follow the new name at once.
-* **Colouring and deleting**: right click (or Ctrl-click) a tab.
-  `Tab colour` paints a small square on it, which is useful for telling a
-  fit, a measurement and a calculation apart at a glance.  The last sheet
-  is never deleted.
+* **Colouring, duplicating and deleting**: right click (or Ctrl-click) a
+  tab.  `Tab colour` paints a small square on it, which is useful for
+  telling a fit, a measurement and a calculation apart at a glance.
+  **`Duplicate tab`** puts a second sheet with the same contents right
+  after it and brings it to the front: the numbers, the formulas (random
+  ones draw the very same numbers), the column names, which columns are
+  plotted against which axis and the colour of the tab.  It is called
+  after the original - `Signals copy`, `Signals copy 2` - and it is a
+  sheet of its own from then on; its `Plot with previous tab` is left off.
+  The last sheet is never deleted.
+* **Many sheets, long names**: when the tabs no longer fit into the width
+  of the window the row **scrolls**.  Two small arrows appear at its right
+  end, with the `+` beside them, so the `+` never slides out of the
+  window; the arrows scroll the row (hold one down to keep going), and so
+  do the wheel of the mouse or a sideways swipe on a trackpad over the
+  row.  The tab that comes to the front is always brought into view.  While
+  everything fits the arrows are not there and the `+` stands right after
+  the last tab.
 * **Every sheet is written into the `.aplt` file** with its name, **its
   colour**, its data, its formulas, which of its columns are ticked, and
   whether it is drawn with the one before it.  A file written by an older
@@ -661,6 +675,21 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
   column `E`) keeps its own meaning: the column always wins over the constant.
 * **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2)`,
   `OR(c1, c2)`, `NOT(c)`.
+* **Random numbers**: `RAND()` draws a number with a **uniform**
+  distribution between 0 and 1, `RAND(low, high)` one between `low` and
+  `high`.  `RANDN()` draws one with a **normal** (Gaussian) distribution of
+  mean 0 and standard deviation 1, `RANDN(mean, sd)` one of the mean and
+  standard deviation given.  Filled down a column (the fill handle, or
+  `Fill Down`), every row gets a number of its own, and they can be part
+  of a larger formula: `=A1 + RANDN(0, 0.05)` adds noise to a column.
+
+  Unlike Excel, the numbers **stay what they are** while the sheet is
+  worked on - an edit elsewhere, Undo, saving and opening the file do not
+  change them, so a diagram of them does not change under the user's
+  hands either.  **`Edit > New random numbers`** (`F9`, as in Excel) draws
+  all of them anew for the sheet in front; it is one step that `Undo`
+  takes back.  Column Math knows `rand()`, `rand(low, high)`, `randn()`
+  and `randn(mean, sd)` as well, with one number for every row.
 
 #### Error reporting and safety
 
@@ -927,6 +956,13 @@ nothing.
   writing - nothing has to be clicked first.  The sheet that is brought to
   the front, and the one left in front by an opened graph, take the
   keyboard the same way.
+* **Coming back to the window** - a click on its title bar, on its icon in
+  the Dock, `Cmd+Tab` - gives the keyboard back to the sheet as well, so
+  the arrows and the typing work at once, without clicking a cell first.
+  The same happens after a toolbar button was clicked.  A cell that is
+  being written, the formula bar and the name of a tab keep the keyboard,
+  and a key that would otherwise have gone nowhere is handed to the sheet,
+  so even the very first arrow or digit is not lost.
 * **Just start typing**: the first character opens the cell under the
   cursor and is the first character in it, as in a spreadsheet.  `Enter`
   or `F2` opens it with the value that is there instead.
