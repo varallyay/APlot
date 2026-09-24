@@ -96,6 +96,11 @@ TitleFontDialog          title text, title / legend font size
 DataTable                spreadsheet-like Treeview with in-place editing
 PlotWindow               the interactive figure window
 App                      main window, menus, file I/O
+
+Developer
+----------
+Zoltán Várallyay, PhD, Sept 2026, Budapest, Hungary
+with the help of AI technology (Antigravity, Claude)
 """
 
 from __future__ import annotations
