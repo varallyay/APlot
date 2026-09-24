@@ -151,9 +151,12 @@ from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                Formatter, FuncFormatter, LogFormatterSciNotation,
                                LogLocator, MultipleLocator, NullFormatter,
                                NullLocator)
-from matplotlib.transforms import Affine2D, Bbox, TransformedBbox
+from matplotlib.transforms import Affine2D, Bbox, IdentityTransform, TransformedBbox
 
 APP_NAME = "APlot"
+# who made it: the end of the description at the top, and the About window
+DEVELOPER = ("Zoltán Várallyay, PhD, Sept 2026, Budapest, Hungary\n"
+             "with the help of AI technology (Antigravity, Claude)")
 APP_ID = "hu.feti.aplot"        # what macOS calls the program among its own
 BUNDLE_MARK = "APLOT_APP_BUNDLE"   # set by the launcher of APlot.app
 PROJECT_SUFFIX = ".aplt"
@@ -162,9 +165,10 @@ PROJECT_MIMETYPE = "application/x-aplot"     # first, stored: "what am I"
 PROJECT_UTI = f"{APP_ID}.graph"  # what macOS calls the kind of file
 PROJECT_DOCUMENT = "document.json"           # the data and every diagram
 PROJECT_THUMBNAIL = "Thumbnails/thumbnail.png"   # a picture of the graph
-THUMBNAIL_SIZE = 1024           # the longer side of that picture, in pixels:
-                                # sharp in the Space bar preview of a Retina
-                                # screen, and in the largest Finder icons
+THUMBNAIL_SIZE = 2048           # the longer side of that picture, in pixels:
+                                # the Space bar preview shows it 1024 points
+                                # wide, which is still sharp on a Retina
+                                # screen, and the Finder icons shrink it
 THUMBNAIL_PAD = 0.08            # the air around the graph on it, in inches
 CONFIG_FILE = Path.home() / ".aplot" / "config.json"
 UNDO_STEPS = 60                 # how many changes can be taken back
@@ -279,7 +283,7 @@ FRAME_STYLES = [
 ]
 
 # matplotlib's own subplot position: left, bottom, width, height
-DEFAULT_POSITION = (0.36, 0.36, 0.275, 0.275)
+DEFAULT_POSITION = (0.35, 0.35, 0.32, 0.30)
 ## the room the texts around the plot area really need, in cm: the tick
 # numbers and the axis label on the left and below, a little air on the
 # right, and the title above.  The fractions of the page are worked out
@@ -1004,7 +1008,10 @@ DEFAULTS = {
         "title": 12, "axis_label": 12, "tick_label": 12, "legend": 12,
         "title_color": "#000000", "axis_label_color": "#000000",
         "tick_label_color": "#000000", "legend_color": "#000000",
-        "title_pad": 12.0, "axis_label_pad": 6.0, "tick_label_pad": 7.0,
+        "title_pad": 12.0, "axis_label_pad": 6.0,
+        # how far the numbers stand from their axis: the X axis and the
+        # two Y axes each have their own
+        "tick_label_pad": 7.0, "tick_label_pad_y": 5.0,
     },
     "grid": {
         "major": False, "minor": False, "color": "#b0b0b0",
@@ -1020,8 +1027,10 @@ DEFAULTS = {
         "x_length": DEFAULT_POSITION[2], "y_length": DEFAULT_POSITION[3],
     },
     "text": {
-        "size": 14, "color": "#000000", "frame": True,
-        "edge_color": "#000000", "background": "#ffffff", "transparent": False,
+        # a new text box is only its text: no box around it, and whatever
+        # is behind it shows through
+        "size": 14, "color": "#000000", "frame": False,
+        "edge_color": "#000000", "background": "#ffffff", "transparent": True,
     },
     "shape": {
         "kind": "Rectangle", "line_style": "Solid", "line_width": 1.5,
@@ -1092,7 +1101,8 @@ SETTINGS_SPEC = [
         ("legend_color", "Legend colour", "color"),
         ("title_pad", "Title distance from the axes [px]", "float"),
         ("axis_label_pad", "Axis label distance [px]", "float"),
-        ("tick_label_pad", "Axis numbers distance [px]", "float"),
+        ("tick_label_pad", "X axis numbers distance [px]", "float"),
+        ("tick_label_pad_y", "Y axis numbers distance [px]", "float"),
     ]),
     ("grid", "Grid", [
         ("major", "Major grid lines", "bool"),
@@ -2677,11 +2687,15 @@ def drawn_tool_icon(kind, action, size=ICON_SIZE, where=None):
 TAB_BAR_HEIGHT = 26          # the height of the row of tabs, in pixels
 TAB_PAD = 12                 # the room left and right of a tab's name
 TAB_SCROLL_STEP = 80         # how far one click on an arrow scrolls, pixels
-TAB_FACE = "#e6e9ee"         # a tab that is not in front
-TAB_FACE_ACTIVE = "#ffffff"  # ... and the one that is
-TAB_HOVER = "#eef1f5"        # a tab under the pointer
-TAB_EDGE = "#b6bec9"         # the thin line around them
-TAB_TEXT = "#1f2328"
+TAB_GAP = 2                  # the free room between two tabs
+# the tabs wear the dark grey of the buttons of the toolbar (as macOS draws
+# them) with light writing; the one in front is a shade lighter and bold
+TAB_FACE = "#56565a"         # a tab that is not in front
+TAB_FACE_ACTIVE = "#737378"  # ... and the one that is
+TAB_HOVER = "#636368"        # a tab under the pointer
+TAB_EDGE = "#3c3c3f"         # the thin line around them
+TAB_TEXT = "#e4e4e7"         # the name on a tab
+TAB_TEXT_ACTIVE = "#ffffff"  # ... and on the one in front
 
 
 class SheetNotebook(ttk.Notebook):
@@ -2876,31 +2890,29 @@ class SheetTabBar(ttk.Frame):
             if color:
                 width += 18
             spans.append((x, x + width))
-            x += width - 1              # the edges of two tabs are one line
-        total = max(1, x + 1)
+            x += width + TAB_GAP        # flat tabs, a little apart
+        total = max(1, x - TAB_GAP)
         self._spans = spans
-        canvas.create_line(0, 0, total + 2000, 0, fill=TAB_EDGE, tags="edge")
         for index, (name, (left, right)) in enumerate(zip(names, spans)):
             front = index == current
             face = (TAB_FACE_ACTIVE if front else
                     TAB_HOVER if index == self._hover else TAB_FACE)
-            top = -1 if front else 0    # the tab in front joins the sheet
-            canvas.create_rectangle(left, top, right, height - 3, fill=face,
-                                    outline=TAB_EDGE, tags=(f"tab{index}",))
+            canvas.create_rectangle(left, 1, right - 1, height - 3, fill=face,
+                                    outline=TAB_EDGE if front else face,
+                                    tags=(f"tab{index}",))
             text_x = left + TAB_PAD
             color = self._colors(index)
             if color:
                 canvas.create_rectangle(text_x, (height - 3) / 2 - 6,
                                         text_x + 12, (height - 3) / 2 + 6,
-                                        fill=color, outline=TAB_EDGE,
+                                        fill=color, outline=TAB_TEXT,
                                         tags=(f"tab{index}",))
                 text_x += 18
             canvas.create_text(text_x, (height - 3) / 2, anchor="w",
-                               text=str(name), fill=TAB_TEXT,
+                               text=str(name),
+                               fill=TAB_TEXT_ACTIVE if front else TAB_TEXT,
                                font=self.bold if front else self.font,
                                tags=(f"tab{index}",))
-            if front:                   # no line between it and the sheet
-                canvas.create_line(left + 1, 0, right, 0, fill=face)
         canvas.configure(scrollregion=(0, 0, total, height))
         self._total = total
         self._fit()
@@ -10732,7 +10744,8 @@ class PlotWindow(tk.Toplevel):
     HINT = ("One click selects (a text turns blue), a slow second click "
             "writes the text, a double click opens its properties   |   "
             "A curve: two clicks   |   Drag: move   |   "
-            "Drag a control point: resize\n"
+            "Drag a control point: resize   |   "
+            "Drag the background: choose several\n"
             "\"T\", the shape and the arrow button: add text, drawings and "
             "arrows   |   Shift: arrows at 45 deg steps   |   "
             f"{ACCEL_NAME}+C: copy the object, or the whole figure   |   "
@@ -10824,6 +10837,14 @@ class PlotWindow(tk.Toplevel):
         # a second click opens the properties of the selected object
         self.selection = None
         self._marked = None             # the text that wears the blue veil
+        # several objects chosen at once with a rectangle drawn on the
+        # background: they are marked together and move together
+        self.group = []                 # [(kind, key), ...]
+        self._group_marks = []          # the blue boxes drawn around them
+        self._group_hidden = False      # ...left off a picture that is saved
+        self._group_drag = None         # dragging all of them at once
+        self._band = None               # the rectangle being drawn
+        self._band_patch = None
         # the four sides of the plot area can be selected and pulled
         self.frame_sides = {name: name for name in FRAME_ENDS}
         self._inline = None             # the in-place text editor, while open
@@ -10867,7 +10888,7 @@ class PlotWindow(tk.Toplevel):
                     "label_color": safe_hex(self.fonts["axis_label_color"], "#000000"),
                     "tick_color": safe_hex(self.fonts["tick_label_color"], "#000000"),
                     "label_pad": float(self.fonts["axis_label_pad"]),
-                    "tick_pad": float(self.fonts["tick_label_pad"]),
+                    "tick_pad": self.default_tick_pad(which),
                     # every axis carries its own colour and its two switches
                     "axis_color": safe_hex(config.get("frame", "color"),
                                            "#000000"),
@@ -14855,6 +14876,8 @@ class PlotWindow(tk.Toplevel):
         self.apply_series_stack()
         self.apply_axis_stack()
         self.sync_axes_dialog()
+        if self.group or self._group_marks:
+            self._refresh_group_marks()  # the boxes follow their objects
         self.canvas.draw_idle()
 
     def sync_frame_dialog(self):
@@ -15698,6 +15721,9 @@ class PlotWindow(tk.Toplevel):
                 kind = None             # only a line that is really drawn
         if store is not None and key in store and kind is not None:
             self.selection = (kind, key)
+            if self.group:              # one object chosen: the group lets go
+                self.group = []
+                self._refresh_group_marks()
         else:
             self.selection = None
         self._refresh_handles()
@@ -16927,13 +16953,263 @@ class PlotWindow(tk.Toplevel):
             return self._nudge_selection(*args, **kwargs)
 
     def _nudge_selection(self, dx_pixels, dy_pixels):
-        """Move the selected object with the arrow keys."""
+        """Move the selected object (or every object of the group) with the
+        arrow keys."""
+        if self.group:
+            moved = self.move_group(dx_pixels, dy_pixels)
+            self.draw()
+            return moved
         kind, key = self.selection or (None, None)
         state = self.selected_state()
         if state is None:
             return False
         if kind == "axis":
             return self.move_axes(dx_pixels, dy_pixels)
+        self._move_object(kind, key, dx_pixels, dy_pixels)
+        self._refresh_handles()
+        self._refresh_highlight()
+        self.draw()
+        return True
+
+    # -- several objects at once: the rectangle drawn on the background ---
+    GROUP_KINDS = ("legend", "note", "text", "shape", "arrow")
+
+    def object_extent(self, kind, key):
+        """The box one object covers on the screen (pixels), or None."""
+        renderer = self._renderer()
+        artist = None
+        try:
+            if kind == "legend":
+                artist = self.legends.get(key)
+            elif kind == "note":
+                artist = self.notes.get(key)
+            elif kind == "text":
+                artist = (self.text_artist(key) if self.text_shown(key)
+                          else None)
+            elif kind == "shape":
+                artist = self.shapes.get(key)
+            elif kind == "arrow":
+                parts = [one.get_window_extent(renderer)
+                         for one in (self.arrows.get(key) or [])]
+                return Bbox.union(parts) if parts else None
+            if artist is None or not artist.get_visible():
+                return None
+            return artist.get_window_extent(renderer)
+        except (RuntimeError, ValueError, AttributeError, TypeError):
+            return None
+
+    def group_candidates(self):
+        """Every object a rectangle can take, topmost kinds first."""
+        found = [("arrow", key) for key in self.arrow_state]
+        found += [("shape", key) for key in self.shape_state]
+        found += [("note", key) for key in self.note_state]
+        found += [("legend", key) for key in self.legends]
+        found += [("text", name) for name in ("title", "x", "y", "y2")
+                  if self.text_shown(name)]
+        return found
+
+    def objects_in(self, box):
+        """The objects the rectangle `box` (pixels) touches."""
+        touched = []
+        for kind, key in self.group_candidates():
+            extent = self.object_extent(kind, key)
+            if extent is None:
+                continue
+            if (extent.x1 >= box.x0 and extent.x0 <= box.x1
+                    and extent.y1 >= box.y0 and extent.y0 <= box.y1):
+                touched.append((kind, key))
+        return touched
+
+    def set_group(self, members):
+        """Choose these objects together (one of them is simply selected)."""
+        members = [tuple(one) for one in members
+                   if one[0] in self.GROUP_KINDS
+                   and one[1] in (self._selection_store(one[0]) or {})]
+        unique = []
+        for one in members:
+            if one not in unique:
+                unique.append(one)
+        if len(unique) == 1:
+            self.group = []
+            self.select_object(*unique[0])
+            self.announce_selection()
+        else:
+            if self.selection is not None:
+                self.select_object(None, None)
+            self.group = unique
+            if unique:
+                self.flash(f"{len(unique)} objects selected - drag any of "
+                           "them to move them all, or use the arrow keys")
+        self._refresh_group_marks()
+        return list(self.group)
+
+    def clear_group(self):
+        if self.group:
+            self.group = []
+            self._refresh_group_marks()
+            return True
+        return False
+
+    def in_group(self, kind, key):
+        return (kind, key) in self.group
+
+    def _refresh_group_marks(self):
+        """A light blue box around every object of the group."""
+        for mark in self._group_marks:
+            try:
+                mark.remove()
+            except (ValueError, AttributeError):
+                pass
+        self._group_marks = []
+        # what was taken away in the meantime (Undo, Delete) leaves the group
+        self.group = [(kind, key) for kind, key in self.group
+                      if key in (self._selection_store(kind) or {})]
+        if not self.group or self._group_hidden:
+            return 0
+        for kind, key in self.group:
+            box = self.object_extent(kind, key)
+            if box is None:
+                continue
+            pad = 3.0
+            mark = Rectangle((box.x0 - pad, box.y0 - pad),
+                             box.width + 2 * pad, box.height + 2 * pad,
+                             transform=IdentityTransform(),
+                             facecolor=SELECT_FACE, edgecolor=SELECT_EDGE,
+                             linewidth=1.2, zorder=1000, clip_on=False)
+            mark.set_in_layout(False)      # a mark, not a part of the picture
+            self.fig.add_artist(mark)
+            self._group_marks.append(mark)
+        return len(self._group_marks)
+
+    def hide_group_marks(self, hidden=True):
+        """Leave the marks off a picture that is being saved (or put them back)."""
+        self._group_hidden = bool(hidden)
+        self._refresh_group_marks()
+
+    def move_group(self, dx_pixels, dy_pixels):
+        """Shift every object of the group by the same number of pixels."""
+        moved = False
+        for kind, key in list(self.group):
+            moved = self._move_object(kind, key, dx_pixels, dy_pixels) or moved
+        self._refresh_group_marks()
+        return moved
+
+    def numbers_at(self, x, y):
+        """The axis whose numbers are under the pointer ("x", "y", "y2")."""
+        if x is None or y is None:
+            return None
+        renderer = self._renderer()
+        axes = [("x", self.ax.xaxis), ("y", self.ax.yaxis)]
+        if self.ax2 is not None:
+            axes.append(("y2", self.ax2.yaxis))
+        for which, axis in axes:
+            try:
+                low, high = sorted(axis.get_view_interval())
+            except (ValueError, TypeError):
+                continue
+            span = abs(high - low) * 1e-6
+            for tick in axis.get_major_ticks():
+                try:
+                    where = float(tick.get_loc())
+                except (TypeError, ValueError):
+                    continue
+                if not (low - span <= where <= high + span):
+                    continue            # a tick matplotlib does not draw
+                for label in (tick.label1, tick.label2):
+                    if not (label.get_visible() and label.get_text()):
+                        continue
+                    try:
+                        box = label.get_window_extent(renderer)
+                    except (RuntimeError, ValueError, AttributeError):
+                        continue
+                    if box.expanded(1.15, 1.4).contains(x, y):
+                        return which
+        return None
+
+    def _start_band(self, event):
+        """The button went down on the background: a rectangle begins."""
+        if event is None or event.x is None or event.y is None \
+                or self.toolbar_busy():
+            self._band = None
+            return None
+        adding = self._shift_active(event)
+        base = list(self.group)
+        if adding and not base and self.selection is not None \
+                and self.selection[0] in self.GROUP_KINDS:
+            base = [tuple(self.selection)]
+        if not adding:
+            base = []
+            if self.selection is not None:
+                self.select_object(None, None)
+            if self.clear_group():
+                self.draw()
+        self._band = {"x0": float(event.x), "y0": float(event.y),
+                      "x1": float(event.x), "y1": float(event.y),
+                      "base": base, "moved": False}
+        return self._band
+
+    def _band_box(self, band=None):
+        band = self._band if band is None else band
+        return Bbox.from_extents(min(band["x0"], band["x1"]),
+                                 min(band["y0"], band["y1"]),
+                                 max(band["x0"], band["x1"]),
+                                 max(band["y0"], band["y1"]))
+
+    def _stretch_band(self, event):
+        band = self._band
+        if band is None or event.x is None or event.y is None:
+            return False
+        band["x1"], band["y1"] = float(event.x), float(event.y)
+        if abs(band["x1"] - band["x0"]) > 3 or abs(band["y1"] - band["y0"]) > 3:
+            band["moved"] = True
+        box = self._band_box()
+        if self._band_patch is None:
+            self._band_patch = Rectangle(
+                (box.x0, box.y0), box.width, box.height,
+                transform=IdentityTransform(), facecolor=SELECT_FACE,
+                edgecolor=SELECT_EDGE, linewidth=1.0, linestyle="--",
+                zorder=1001, clip_on=False)
+            self._band_patch.set_in_layout(False)
+            self.fig.add_artist(self._band_patch)
+        else:
+            self._band_patch.set_bounds(box.x0, box.y0, box.width, box.height)
+        # what the rectangle touches is marked while it is being drawn
+        if band["moved"]:
+            self.group = band["base"] + [one for one in self.objects_in(box)
+                                         if one not in band["base"]]
+            self._refresh_group_marks()
+        self.canvas.draw_idle()
+        return True
+
+    def _finish_band(self):
+        band, self._band = self._band, None
+        if self._band_patch is not None:
+            try:
+                self._band_patch.remove()
+            except (ValueError, AttributeError):
+                pass
+            self._band_patch = None
+        if band is None:
+            return None
+        if not band["moved"]:              # a plain click on the background
+            self.group = band["base"]
+            self._refresh_group_marks()
+            self.draw()
+            return []
+        box = self._band_box(band)
+        members = band["base"] + [one for one in self.objects_in(box)
+                                  if one not in band["base"]]
+        chosen = self.set_group(members)
+        self.draw()
+        return chosen if chosen else ([self.selection] if self.selection
+                                      else [])
+
+    def _move_object(self, kind, key, dx_pixels, dy_pixels):
+        """Shift one object by a number of pixels, whatever kind it is."""
+        store = self._selection_store(kind)
+        state = None if store is None else store.get(key)
+        if state is None:
+            return False
         dx, dy = self._axes_delta(dx_pixels, dy_pixels)
         if kind == "text":
             # the title and the axis labels are shifted in pixels already
@@ -16956,13 +17232,29 @@ class PlotWindow(tk.Toplevel):
                 self.refresh_arrow(key)
             else:
                 self._move_note(key, state["pos"])
-        self._refresh_handles()
-        self._refresh_highlight()
-        self.draw()
         return True
 
     def delete_selection(self, _event=None):
-        """Delete or Backspace: remove the selected object."""
+        """Delete or Backspace: remove the selected object.
+
+        With a group chosen, every drawing, arrow and text box of it goes
+        (in one step of Undo); a legend box or an axis label cannot be
+        deleted, so those simply stay.
+        """
+        if self.group:
+            removable = [(kind, key) for kind, key in self.group
+                         if kind in ("shape", "arrow", "note")]
+            if not removable:
+                self.flash("Legend boxes and axis texts cannot be deleted")
+                return False
+            with self.changed("deleting the objects"):
+                for kind, key in removable:
+                    {"shape": self.remove_shape, "arrow": self.remove_arrow,
+                     "note": self.remove_note}[kind](key)
+            self.set_group([one for one in self.group
+                            if one not in removable])
+            self.draw()
+            return True
         kind, key = self.selection or (None, None)
         remover = {"shape": self.remove_shape, "arrow": self.remove_arrow,
                    "note": self.remove_note}.get(kind)
@@ -16997,6 +17289,7 @@ class PlotWindow(tk.Toplevel):
                                 f"aplot_figure_{os.getpid()}.png")
         selection = self.selection
         self.select_object(None, None)
+        self.hide_group_marks(True)
         try:
             self.canvas.draw()
             if transparent is None:
@@ -17007,6 +17300,7 @@ class PlotWindow(tk.Toplevel):
                              transparent=bool(transparent),
                              facecolor=self.fig.get_facecolor())
         finally:
+            self.hide_group_marks(False)
             if selection is not None:
                 self.select_object(*selection)
             self.canvas.draw_idle()
@@ -17031,6 +17325,7 @@ class PlotWindow(tk.Toplevel):
         """
         selection = self.selection
         self.select_object(None, None)
+        self.hide_group_marks(True)
         try:
             self.canvas.draw()
             renderer = self.canvas.get_renderer()
@@ -17045,6 +17340,7 @@ class PlotWindow(tk.Toplevel):
                              facecolor=self.thumbnail_background(),
                              edgecolor="none")
         finally:
+            self.hide_group_marks(False)
             if selection is not None:
                 self.select_object(*selection)
             self.canvas.draw_idle()
@@ -17089,6 +17385,7 @@ class PlotWindow(tk.Toplevel):
         """
         selection = self.selection
         self.select_object(None, None)
+        self.hide_group_marks(True)
         try:
             self.canvas.draw()
             # matplotlib's own dialog knows every format it can write, and
@@ -17108,6 +17405,7 @@ class PlotWindow(tk.Toplevel):
             matplotlib.rcParams["savefig.directory"] = folder
             return written
         finally:
+            self.hide_group_marks(False)
             if selection is not None:
                 self.select_object(*selection)
             self.canvas.draw_idle()
@@ -17447,7 +17745,10 @@ class PlotWindow(tk.Toplevel):
         return (float(snapped[0]), float(snapped[1]))
 
     def cancel_tools(self):
-        """Escape: none of the three toolbar tools stays armed."""
+        """Escape: none of the three toolbar tools stays armed, and a group
+        of chosen objects is let go."""
+        if self.clear_group():
+            self.draw()
         self.cancel_inline_edit()
         self.arm_text_placement(False)
         self.arm_shape_drawing(armed=False)
@@ -17709,6 +18010,20 @@ class PlotWindow(tk.Toplevel):
             if (abs(event.x - pending["x"]) > 3.0
                     or abs(event.y - pending["y"]) > 3.0):
                 self._pending_rename = None    # this is a drag, not a rename
+        if self._band is not None:             # the rectangle that chooses
+            self._stretch_band(event)
+            return
+        if self._group_drag is not None:       # the whole group follows
+            if event.x is None or event.y is None:
+                return
+            drag = self._group_drag
+            dx, dy = float(event.x) - drag["x"], float(event.y) - drag["y"]
+            if dx or dy:
+                self.move_group(dx, dy)
+                drag["x"], drag["y"] = float(event.x), float(event.y)
+                drag["moved"] = True
+                self.draw()
+            return
         if self._plot_drag is not None:
             self._drag_plot_to(event)
             return
@@ -17841,8 +18156,12 @@ class PlotWindow(tk.Toplevel):
 
     def _on_release(self, event=None):
         moved_plot = (self._plot_drag or {}).get("moved", False)
+        moved_group = (self._group_drag or {}).get("moved", False)
+        self._group_drag = None
+        if self._band is not None:
+            self._finish_band()
         dragged = (self._shape_drag is not None or self._drag is not None
-                   or moved_plot)
+                   or moved_plot or moved_group)
         self._plot_drag = None
         self._finish_drag(event)
         self._open_pending_rename()
@@ -17850,6 +18169,7 @@ class PlotWindow(tk.Toplevel):
         app = getattr(self, "app", None)
         if dragged and before is not None and app is not None:
             app.record_plot(self, "moving the graph" if moved_plot
+                            else "moving the objects" if moved_group
                             else "moving the object", before)
         if moved_plot:
             self._set_cursor("")
@@ -17936,8 +18256,9 @@ class PlotWindow(tk.Toplevel):
             cursor = "fleur"           # one click selects it, then it is moved
         elif (self.frame_hit(event.x, event.y)
               or self.series_at(event) is not None
-              or self.plot_area_hit(event.x, event.y)):
-            # the frame, a curve and the plot area all carry the whole graph
+              or self.numbers_at(event.x, event.y) is not None):
+            # the frame, a curve and the numbers carry the whole graph; the
+            # empty background draws the rectangle that chooses objects
             cursor = "fleur"
         self._set_cursor(cursor)
 
@@ -18029,6 +18350,15 @@ class PlotWindow(tk.Toplevel):
         return self.ax, self.ax.yaxis, "y"
 
     # -- distances are given in pixels, matplotlib wants points ------------
+    def default_tick_pad(self, which):
+        """How far the numbers stand from an axis unless told otherwise:
+        the X axis has one distance of its own, the two Y axes another."""
+        fonts = self.fonts
+        if str(which) == "x":
+            return float(fonts.get("tick_label_pad", 7.0))
+        return float(fonts.get("tick_label_pad_y",
+                               fonts.get("tick_label_pad", 5.0)))
+
     def points(self, pixels):
         return float(pixels) * 72.0 / float(self.fig.get_dpi())
 
@@ -18161,7 +18491,7 @@ class PlotWindow(tk.Toplevel):
         tick_color = safe_hex(cfg.get("tick_color",
                                       self.fonts["tick_label_color"]), "#000000")
         label_pad = to_float(cfg.get("label_pad"), self.fonts["axis_label_pad"])
-        tick_pad = to_float(cfg.get("tick_pad"), self.fonts["tick_label_pad"])
+        tick_pad = to_float(cfg.get("tick_pad"), self.default_tick_pad(which))
         axis_color = safe_hex(cfg.get("axis_color",
                                       stored.get("axis_color", "#000000")),
                               "#000000")
@@ -18470,6 +18800,13 @@ class PlotWindow(tk.Toplevel):
                 ends = self.line_ends(self.shape_state[key])
                 self._shape_drag["fixed"] = tuple(ends[1 - index])
             return
+        if self.group:                    # grabbing one of a group: all move
+            hit = self.object_at(event.x, event.y)
+            if hit is not None and tuple(hit) in self.group:
+                self._group_drag = {"x": float(event.x), "y": float(event.y),
+                                    "moved": False}
+                self._set_cursor("fleur")
+                return
         key = self.arrow_at(event.x, event.y)
         if key is not None:               # select an arrow and drag it
             self.select_object("arrow", key)
@@ -18533,15 +18870,26 @@ class PlotWindow(tk.Toplevel):
             # a curve is never "selected", and a single click no longer opens
             # its properties: it grabs the graph, and two clicks open the
             # curve.  What was selected before is let go, as with any click.
-            if self.selection is not None:
+            if self.selection is not None or self.group:
                 self.select_object(None, None)
+                self.clear_group()
                 self.draw()
             self._start_plot_drag(event)
             return
-        if self.selection is not None:    # clicking elsewhere deselects
-            self.select_object(None, None)
-            self.draw()
-        self._start_plot_drag(event)      # the paper carries the graph too
+        if (self.numbers_at(event.x, event.y) is not None
+                or self.frame_hit(event.x, event.y)):
+            # the numbers of an axis and the frame are the graph as well:
+            # grabbed, they carry it, just as an axis line or a curve does
+            if self.selection is not None or self.group:
+                self.select_object(None, None)
+                self.clear_group()
+                self.draw()
+            self._start_plot_drag(event)
+            return
+        # the background - the paper, or the empty plot area - no longer
+        # carries the graph: a rectangle is drawn instead, and whatever it
+        # touches is chosen, to be moved together
+        self._start_band(event)
 
     def series_at(self, event):
         """The curve under the pointer, whichever Y axis it belongs to.
@@ -19377,7 +19725,9 @@ the `File` menu.
 ### 1.1 Sheets (tabs)
 
 Along the bottom of the table there is a **tab for every sheet** and a `+`
-that makes a new one.  Each sheet is a full table of its own: its own
+that makes a new one.  The tabs wear the dark grey of the toolbar buttons
+with their names written in a light colour; the sheet in front has the
+lighter tab and a bold name.  Each sheet is a full table of its own: its own
 columns, its own values, its own formulas and its own check buttons.  The
 sheet in front is the one every command of the toolbar and of the menus
 works on.
@@ -20356,7 +20706,9 @@ opening a single dialog.  What is selected is always visible:
 * a **text** - the title, an axis label, a legend box or a text box - is
   covered with a light **blue veil** in a blue frame,
 * a **drawing** or an **arrow** shows its **control points** instead,
-* clicking an empty part of the diagram deselects everything.
+* clicking an empty part of the diagram deselects everything, and
+  dragging there chooses several objects at once (see `Choosing several
+  objects at once`).
 
 The single exception is a **curve**: it is never selected, because there is
 nothing to move or copy on it by itself.  A curve is opened by clicking it
@@ -20365,7 +20717,8 @@ another place (see `Moving the whole graph`).
 
 | Action | Result |
 | --- | --- |
-| Drag the plot area, a curve or the frame | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
+| Drag a curve, an axis line or the numbers of an axis | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
+| Drag on the empty background | Draws a **rectangle**: every legend box, text box, title, axis label, drawing and arrow it touches is chosen, and they then move together (see `Choosing several objects at once`).  `Shift` adds to what is already chosen. |
 | Click a curve twice | Curve properties: line and marker settings separately.  One click does not open it - it grabs the graph. |
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
@@ -20381,7 +20734,7 @@ another place (see `Moving the whole graph`).
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
-| Drag the axis line itself | Moves the whole graph, the same as dragging the plot area. |
+| Drag the axis line itself | Moves the whole graph, the same as dragging a curve. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
@@ -20594,17 +20947,20 @@ All four sides work, each with the points on its own line:
 
 ### Moving the whole graph
 
-The plot area does not have to stay where the program put it.  **Press
-anywhere that is not an object of its own and drag**, and the whole graph
-travels with the pointer:
+The plot area does not have to stay where the program put it.  **Grab a
+part of the graph itself and drag**, and the whole graph travels with the
+pointer:
 
-* the **plot area** itself and everything in it,
 * any **curve** - grabbing a line no longer opens its properties, it takes
   hold of the graph (the properties are two clicks away now),
 * any **axis line** of the frame - the same line whose two ends resize the
-  axis, so its middle moves the graph and its ends stretch it,
-* the **empty paper** around the graph, the numbers and the labels
-  included.
+  axis, so its middle moves the graph and its ends stretch it - and the
+  other lines of a closed frame,
+* the **numbers** of an axis.
+
+The **empty background** - the paper around the graph and the empty inside
+of the plot area - does not move the graph: dragging there draws a
+rectangle that chooses objects (see `Choosing several objects at once`).
 
 Only the two distances of the origin change.  The length of both axes, the
 ranges, the ticks and everything drawn inside - the curves, the legend
@@ -20865,6 +21221,33 @@ files a sensible size and is still sharper than any screen.
 (`pip install tkinterdnd2`).  Without it everything else works as usual and
 pictures arrive by pasting or through the button.
 
+### Choosing several objects at once
+
+Moving the legend boxes of five curves one by one is tedious, so several
+objects can be taken together.  **Press on the empty background and drag**:
+a dashed rectangle follows the pointer, and every object it **touches** -
+it does not have to cover it whole - is marked with a light blue box at
+once.  When the button is let go, those objects are chosen together:
+
+* **drag any one of them** and all of them move by the same amount, so
+  they keep their places relative to each other; the whole move is one
+  step of `Undo`,
+* the **arrow keys** move all of them (`Shift`: ten pixels),
+* **`Delete`** removes the text boxes, drawings, pictures and arrows among
+  them in one step; legend boxes and the axis texts cannot be deleted, so
+  they simply stay chosen,
+* **`Shift`** held while drawing the rectangle **adds** what it touches to
+  the objects already chosen,
+* a click on the empty background, `Esc`, or a click on any single object
+  lets the group go.
+
+Legend boxes, text boxes, the title and the axis labels, drawings,
+pictures and arrows can be chosen this way.  The curves and the axes are
+not: they belong to the graph, which is moved by grabbing it.  A rectangle
+that touches only one object simply selects it, as a click would.  The
+light blue boxes are never part of a saved picture, a copied figure or the
+thumbnail of the file.
+
 ### Selecting, copying, moving and deleting the objects
 
 One click selects; what is selected is shown by the **blue veil** on a text
@@ -21011,7 +21394,9 @@ A text box behaves like a legend box:
   text, font size, font colour, and the `Surrounding box` section - the name
   of that section is a **check button**, so switching it off leaves the
   frame away, while its colour and the background (a colour, or fully
-  transparent) stay inside it,
+  transparent) stay inside it.  A new text box is **only its text**: the
+  surrounding box is off and the background transparent, unless the
+  `Text boxes` tab of the settings says otherwise,
 * `Delete` in that dialog - or an empty text - removes the box,
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,
@@ -21429,7 +21814,10 @@ place on the page.
 **Tick range, labels and fonts** (switched on)
 
 * the **font size** of the numbers with their **Colour** next to it, and
-  `Number offset [px]` (measured from the end of the tick marks),
+  `Number offset [px]` (measured from the end of the tick marks).  A new
+  diagram starts with the numbers **7** away from the X axis and **5** away
+  from the two Y axes - the `X axis numbers distance` and `Y axis numbers
+  distance` of the `Fonts` tab of the settings,
 * **Automatic range and ticks**, or an explicit range - `From` and `To`
   side by side on one line - and `Major ticks interval` with `Minor ticks`
   (how many minor ones sit between two major ones) on the next line.  On a
@@ -21540,7 +21928,9 @@ the commands of that diagram after a separator: `Axes properties...`,
 * **Y axis distance from the left** and **X axis distance from the bottom**
   - the position of the origin inside the window.
 * **Default layout** puts back the place a new diagram starts at (the one
-  in the `Frame` tab of the settings).  It moves and resizes the plot area
+  in the `Frame` tab of the settings): unless it was changed there, an X
+  axis `0.32` and a Y axis `0.30` of the page long, standing `0.35` from
+  the left and `0.35` from the bottom.  It moves and resizes the plot area
   only: unlike `Resize graph`, it leaves the fonts and the line widths
   alone.  To fill the page, use `Resize graph > Fit to page`.
 
@@ -21714,7 +22104,7 @@ there are three entries:
 | --- | --- |
 | `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
 | `document.json` | The data and every diagram: a readable JSON document (described below). |
-| `Thumbnails/thumbnail.png` | A picture of the graph, about 1024 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
+| `Thumbnails/thumbnail.png` | A picture of the graph, about 2048 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
 
 **The picture** shows the diagram in front - the one `Export` would write -
 cut out of the page with a little air around it, exactly as `Copy figure`
@@ -21730,9 +22120,11 @@ blank page.  The file managers do not look into an unknown container by
 themselves: a small viewer extension on macOS (the `APlotQuickLook`
 folder, see `The picture of the graph in the Finder`), a thumbnailer entry
 on Linux or a thumbnail handler on Windows has to be installed, and each of
-them only has to copy this one picture out.  It is drawn 1024 pixels
-along its longer side, so that it stays sharp in the largest Finder icons
-and in the Space bar preview of a Retina screen.
+them only has to copy this one picture out.  It is drawn 2048 pixels
+along its longer side: the Space bar preview shows it 1024 points wide -
+far larger than an icon - and it is still sharp there on a Retina screen.
+That makes a graph file some 200 KB larger than its data alone, and saving
+takes a fraction of a second longer.
 
 The file is written next to its final place and only then put there, so a
 save that fails half way never leaves a broken graph behind.
@@ -22985,7 +23377,8 @@ class App:
         messagebox.showinfo(
             f"About {APP_NAME}",
             f"{APP_NAME} - Data Visualizer\n\n"
-            "Spreadsheet editor and interactive Matplotlib plots.\n"
+            "Spreadsheet editor and interactive Matplotlib plots.\n\n"
+            f"Developer\n{DEVELOPER}\n\n"
             f"Settings file: {self.settings.path}", parent=self.root)
 
     def open_settings(self):

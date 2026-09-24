@@ -6,7 +6,7 @@ Quick Look extensions for APlot graphs (`.aplt` files):
 | Extension | What it does |
 | --- | --- |
 | **APlot Thumbnail** | The Finder shows the picture of the graph as the file's icon, in every view. The same icon appears in the Open and Save dialogs and in Spotlight. |
-| **APlot Preview** | Pressing the **Space bar** on a graph (or choosing *Quick Look*) shows the picture large. |
+| **APlot Preview** | Pressing the **Space bar** on a graph (or choosing *Quick Look*) shows the picture large: 1024 points along its longer side, twice the size of the largest icon. |
 
 Both extensions show the picture that APlot stores in the file when it saves
 it (`Thumbnails/thumbnail.png` inside the `.aplt` ZIP container). They never
@@ -62,6 +62,19 @@ To remove everything again:
 
     sh uninstall.sh
 
+## After an update of this folder
+
+Build and install again, then save each graph once more with the new
+APlot:
+
+    sh build.sh
+    sh install.sh
+
+The larger Space-bar preview needs both the rebuilt extension and the
+larger picture that the new `aplot.py` stores (2048 pixels instead of
+1024). A graph saved by an older version is still shown at the larger size,
+only a little softer.
+
 ## When the pictures do not appear
 
 1. **Is the extension switched on?** Open *System Settings > General >
@@ -91,7 +104,10 @@ To remove everything again:
          SIGN_IDENTITY="Apple Development: Your Name (ABCDE12345)" sh build.sh
          sh install.sh
 
-6. **What Quick Look itself says**, while pressing the Space bar on a graph:
+6. **Is the Space-bar preview only as large as an icon?** Then Quick Look
+   is showing the icon (the thumbnail), not the preview. Check that
+   *APlot Preview* is switched on (see 1.); `check.sh` shows it with a `+`.
+7. **What Quick Look itself says**, while pressing the Space bar on a graph:
 
        log stream --predicate 'subsystem == "com.apple.quicklook"' --level debug
 

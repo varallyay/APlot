@@ -215,7 +215,9 @@ the `File` menu.
 ### 1.1 Sheets (tabs)
 
 Along the bottom of the table there is a **tab for every sheet** and a `+`
-that makes a new one.  Each sheet is a full table of its own: its own
+that makes a new one.  The tabs wear the dark grey of the toolbar buttons
+with their names written in a light colour; the sheet in front has the
+lighter tab and a bold name.  Each sheet is a full table of its own: its own
 columns, its own values, its own formulas and its own check buttons.  The
 sheet in front is the one every command of the toolbar and of the menus
 works on.
@@ -1194,7 +1196,9 @@ opening a single dialog.  What is selected is always visible:
 * a **text** - the title, an axis label, a legend box or a text box - is
   covered with a light **blue veil** in a blue frame,
 * a **drawing** or an **arrow** shows its **control points** instead,
-* clicking an empty part of the diagram deselects everything.
+* clicking an empty part of the diagram deselects everything, and
+  dragging there chooses several objects at once (see `Choosing several
+  objects at once`).
 
 The single exception is a **curve**: it is never selected, because there is
 nothing to move or copy on it by itself.  A curve is opened by clicking it
@@ -1203,7 +1207,8 @@ another place (see `Moving the whole graph`).
 
 | Action | Result |
 | --- | --- |
-| Drag the plot area, a curve or the frame | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
+| Drag a curve, an axis line or the numbers of an axis | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
+| Drag on the empty background | Draws a **rectangle**: every legend box, text box, title, axis label, drawing and arrow it touches is chosen, and they then move together (see `Choosing several objects at once`).  `Shift` adds to what is already chosen. |
 | Click a curve twice | Curve properties: line and marker settings separately.  One click does not open it - it grabs the graph. |
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
@@ -1219,7 +1224,7 @@ another place (see `Moving the whole graph`).
 | Drop a picture file on the diagram | Lays that picture where it was dropped (see `Pictures in the diagram`). |
 | `Delete` / `Backspace` | Removes the selected text box, drawing, picture or arrow. |
 | Click an axis line (the frame) | Selects that axis: a control point appears on each of its two ends. |
-| Drag the axis line itself | Moves the whole graph, the same as dragging the plot area. |
+| Drag the axis line itself | Moves the whole graph, the same as dragging a curve. |
 | Drag one of those two points | Makes that axis longer or shorter - the other end stays where it is. |
 | Click the selected axis line again | Frame and origin settings. |
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
@@ -1432,17 +1437,20 @@ All four sides work, each with the points on its own line:
 
 ### Moving the whole graph
 
-The plot area does not have to stay where the program put it.  **Press
-anywhere that is not an object of its own and drag**, and the whole graph
-travels with the pointer:
+The plot area does not have to stay where the program put it.  **Grab a
+part of the graph itself and drag**, and the whole graph travels with the
+pointer:
 
-* the **plot area** itself and everything in it,
 * any **curve** - grabbing a line no longer opens its properties, it takes
   hold of the graph (the properties are two clicks away now),
 * any **axis line** of the frame - the same line whose two ends resize the
-  axis, so its middle moves the graph and its ends stretch it,
-* the **empty paper** around the graph, the numbers and the labels
-  included.
+  axis, so its middle moves the graph and its ends stretch it - and the
+  other lines of a closed frame,
+* the **numbers** of an axis.
+
+The **empty background** - the paper around the graph and the empty inside
+of the plot area - does not move the graph: dragging there draws a
+rectangle that chooses objects (see `Choosing several objects at once`).
 
 Only the two distances of the origin change.  The length of both axes, the
 ranges, the ticks and everything drawn inside - the curves, the legend
@@ -1703,6 +1711,33 @@ files a sensible size and is still sharper than any screen.
 (`pip install tkinterdnd2`).  Without it everything else works as usual and
 pictures arrive by pasting or through the button.
 
+### Choosing several objects at once
+
+Moving the legend boxes of five curves one by one is tedious, so several
+objects can be taken together.  **Press on the empty background and drag**:
+a dashed rectangle follows the pointer, and every object it **touches** -
+it does not have to cover it whole - is marked with a light blue box at
+once.  When the button is let go, those objects are chosen together:
+
+* **drag any one of them** and all of them move by the same amount, so
+  they keep their places relative to each other; the whole move is one
+  step of `Undo`,
+* the **arrow keys** move all of them (`Shift`: ten pixels),
+* **`Delete`** removes the text boxes, drawings, pictures and arrows among
+  them in one step; legend boxes and the axis texts cannot be deleted, so
+  they simply stay chosen,
+* **`Shift`** held while drawing the rectangle **adds** what it touches to
+  the objects already chosen,
+* a click on the empty background, `Esc`, or a click on any single object
+  lets the group go.
+
+Legend boxes, text boxes, the title and the axis labels, drawings,
+pictures and arrows can be chosen this way.  The curves and the axes are
+not: they belong to the graph, which is moved by grabbing it.  A rectangle
+that touches only one object simply selects it, as a click would.  The
+light blue boxes are never part of a saved picture, a copied figure or the
+thumbnail of the file.
+
 ### Selecting, copying, moving and deleting the objects
 
 One click selects; what is selected is shown by the **blue veil** on a text
@@ -1849,7 +1884,9 @@ A text box behaves like a legend box:
   text, font size, font colour, and the `Surrounding box` section - the name
   of that section is a **check button**, so switching it off leaves the
   frame away, while its colour and the background (a colour, or fully
-  transparent) stay inside it,
+  transparent) stay inside it.  A new text box is **only its text**: the
+  surrounding box is off and the background transparent, unless the
+  `Text boxes` tab of the settings says otherwise,
 * `Delete` in that dialog - or an empty text - removes the box,
 * **turn** it with the round handle above it or with `Angle [deg]` in its
   dialog; it turns around its own anchor point, so it stays in place,
@@ -2267,7 +2304,10 @@ place on the page.
 **Tick range, labels and fonts** (switched on)
 
 * the **font size** of the numbers with their **Colour** next to it, and
-  `Number offset [px]` (measured from the end of the tick marks),
+  `Number offset [px]` (measured from the end of the tick marks).  A new
+  diagram starts with the numbers **7** away from the X axis and **5** away
+  from the two Y axes - the `X axis numbers distance` and `Y axis numbers
+  distance` of the `Fonts` tab of the settings,
 * **Automatic range and ticks**, or an explicit range - `From` and `To`
   side by side on one line - and `Major ticks interval` with `Minor ticks`
   (how many minor ones sit between two major ones) on the next line.  On a
@@ -2378,7 +2418,9 @@ the commands of that diagram after a separator: `Axes properties...`,
 * **Y axis distance from the left** and **X axis distance from the bottom**
   - the position of the origin inside the window.
 * **Default layout** puts back the place a new diagram starts at (the one
-  in the `Frame` tab of the settings).  It moves and resizes the plot area
+  in the `Frame` tab of the settings): unless it was changed there, an X
+  axis `0.32` and a Y axis `0.30` of the page long, standing `0.35` from
+  the left and `0.35` from the bottom.  It moves and resizes the plot area
   only: unlike `Resize graph`, it leaves the fonts and the line widths
   alone.  To fill the page, use `Resize graph > Fit to page`.
 
@@ -2552,7 +2594,7 @@ there are three entries:
 | --- | --- |
 | `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
 | `document.json` | The data and every diagram: a readable JSON document (described below). |
-| `Thumbnails/thumbnail.png` | A picture of the graph, about 1024 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
+| `Thumbnails/thumbnail.png` | A picture of the graph, about 2048 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
 
 **The picture** shows the diagram in front - the one `Export` would write -
 cut out of the page with a little air around it, exactly as `Copy figure`
@@ -2568,9 +2610,11 @@ blank page.  The file managers do not look into an unknown container by
 themselves: a small viewer extension on macOS (the `APlotQuickLook`
 folder, see `The picture of the graph in the Finder`), a thumbnailer entry
 on Linux or a thumbnail handler on Windows has to be installed, and each of
-them only has to copy this one picture out.  It is drawn 1024 pixels
-along its longer side, so that it stays sharp in the largest Finder icons
-and in the Space bar preview of a Retina screen.
+them only has to copy this one picture out.  It is drawn 2048 pixels
+along its longer side: the Space bar preview shows it 1024 points wide -
+far larger than an icon - and it is still sharp there on a Retina screen.
+That makes a graph file some 200 KB larger than its data alone, and saving
+takes a fraction of a second longer.
 
 The file is written next to its final place and only then put there, so a
 save that fails half way never leaves a broken graph behind.
