@@ -11,6 +11,7 @@ Start it with:
 It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
+    python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
 
@@ -130,6 +131,39 @@ new place.
 With `pyobjc-framework-Cocoa` installed the program also tells macOS its
 name and its bundle directly, which is what the **bold application menu**
 reads; the Dock label, though, only the bundle settles for good.
+
+#### The graph files in the Finder
+
+`APlot.app` also tells macOS about the **kind of file** APlot writes: the
+`.aplt` extension is given the name `hu.feti.aplot.graph` and APlot as its
+owner.  After `--make-app` (run it again if the bundle is older than
+this) the Finder therefore
+
+* shows an **icon of its own** for every graph - a sheet of paper with the
+  spectrum across it - instead of the blank page with a question mark, and
+* **opens a graph in APlot** with a double click, or when the file is
+  dropped onto APlot in the Dock.  A graph that is open and edited is not
+  replaced without the usual question about saving it.
+
+From a terminal a graph can be opened the same way:
+
+    python3 aplot.py "Zanax dose.aplt"
+
+#### The picture of the graph in the Finder, and the Space bar
+
+Every graph carries a **picture of itself** (see `4. Files`).  To make the
+Finder show that picture as the icon of the file, and show it large when
+the Space bar is pressed, macOS needs two small **Quick Look extensions**.
+They cannot be written in Python: they are in the separate
+`APlotQuickLook` folder, in Swift, with a script that builds and installs
+them - Xcode (free in the App Store) is all it needs:
+
+    cd APlotQuickLook
+    sh build.sh
+    sh install.sh
+
+`APlotQuickLook/README.md` explains the rest, including what to do when
+macOS does not take the extensions at once.
 
 
 ## 0. The name
@@ -331,9 +365,23 @@ copied, saved with the graph and plotted in any style.
 
 Every icon of the toolbar is **drawn by the program itself** - there are no
 picture files to carry around.  Each one is painted four times as large as
-it is shown and then shrunk, which is what gives it smooth edges, and they
-are all kept in the same **pastel and grey** shades so the toolbar stays
-quiet beside the table.
+it is shown and then shrunk, which is what gives it smooth edges.  They
+are drawn in **clear flat colours** - soft but saturated fills, each with a
+darker edge of its own colour, on white paper - so they are easy to see on
+a light toolbar and still stay quiet beside the table.
+
+The icons are **24 pixels** large, and every outline is drawn a good pixel
+wide, so that none of them fades away when it is shrunk; the buttons have
+a little air around their pictures.  A few constants at the top of
+`aplot.py` set the look:
+
+| Constant | What it sets |
+| --- | --- |
+| `ICON_SIZE` (24) | how large the icons are, in pixels - the buttons grow with them |
+| `ICON_LINE_WEIGHT` (1.6) | how much stronger the thin outlines are drawn |
+| `ICON_STROKE_WEIGHT` (1.07) | ... and the strokes of the little curves |
+| `TOOLBUTTON_PADDING` (5, 4) | the free room around a picture on its button |
+| `ICON_BLUE`, `ICON_SAGE`, `ICON_SAND`, `ICON_ROSE`, `ICON_LILAC`, `ICON_EDGE`, ... | the colours themselves |
 
 The **Plot** button carries a little picture of the style it will draw, and
 that picture **follows the style**: a line, a line with markers, scattered
@@ -345,11 +393,11 @@ The four row and column tools are a tiny picture of a **sheet of three
 bands** - lying down for the rows, standing up for the columns - with a
 small badge in the corner:
 
-* **Pastel blue and a `+` add.**  The blue band is the new row or column,
+* **Blue and a `+` add.**  The blue band is the new row or column,
   and it is drawn **where it will appear**: at the near end for
   *above* / *before*, at the far end for *below* / *after*, and standing
   **apart** from the other two for *at the end of the sheet*.
-* **Pastel rose and a `-` delete.**  The rose band in the middle is the row
+* **Red and a `-` delete.**  The red band in the middle is the row
   or column that goes away.
 
 The three file tools beside them - an open folder, an arrow running into a
@@ -358,10 +406,10 @@ sheet and a disk - are drawn in the same shades.
 **The diagram window uses the very same set.**  The buttons matplotlib
 brings with it - `Home`, `Back`, `Forward`, `Pan`, `Zoom`, `Subplots` and
 `Save` - carried small black pictures of their own; they are replaced, one
-for one, with drawn pastel ones: a little house, two arrows, the four-way
+for one, with drawn ones in the same colours: a little house, two arrows, the four-way
 arrow, a magnifier, the plot area with its two handles, and the same disk
 as on the spreadsheet.  `Pan` and `Zoom` stay pressed while they are in
-use, and then show their icon on a **pale blue plate**, so it is plain
+use, and then show their icon on a **light blue plate**, so it is plain
 which of them is waiting for a click in the diagram.  The `T` of the text
 tool, the drawing tool, the arrow tool and the picture button are painted
 in the same shades, and the two split buttons stand on the toolbar itself
@@ -1141,7 +1189,7 @@ another place (see `Moving the whole graph`).
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
 | Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, the four stacking commands, plus closing this diagram. |
-| Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn pastel icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
+| Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
@@ -2468,7 +2516,7 @@ there are three entries:
 | --- | --- |
 | `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
 | `document.json` | The data and every diagram: a readable JSON document (described below). |
-| `Thumbnails/thumbnail.png` | A picture of the graph, about 512 pixels along its longer side, for the file managers (and for anyone who opens the container). |
+| `Thumbnails/thumbnail.png` | A picture of the graph, about 1024 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
 
 **The picture** shows the diagram in front - the one `Export` would write -
 cut out of the page with a little air around it, exactly as `Copy figure`
@@ -2481,9 +2529,12 @@ data and the diagrams saved all the same.
 
 The picture is what a file manager needs to show the graph instead of a
 blank page.  The file managers do not look into an unknown container by
-themselves: a small viewer extension on macOS, a thumbnailer entry on
-Linux or a thumbnail handler on Windows has to be installed, and each of
-them only has to copy this one picture out.
+themselves: a small viewer extension on macOS (the `APlotQuickLook`
+folder, see `The picture of the graph in the Finder`), a thumbnailer entry
+on Linux or a thumbnail handler on Windows has to be installed, and each of
+them only has to copy this one picture out.  It is drawn 1024 pixels
+along its longer side, so that it stays sharp in the largest Finder icons
+and in the Space bar preview of a Retina screen.
 
 The file is written next to its final place and only then put there, so a
 save that fails half way never leaves a broken graph behind.

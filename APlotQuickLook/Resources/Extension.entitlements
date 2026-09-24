@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Quick Look extensions must run in the App Sandbox.  They need no
+         other right: Quick Look hands them the one file they are asked
+         about, and they only read it. -->
+    <key>com.apple.security.app-sandbox</key><true/>
+</dict>
+</plist>

@@ -154,9 +154,12 @@ BUNDLE_MARK = "APLOT_APP_BUNDLE"   # set by the launcher of APlot.app
 PROJECT_SUFFIX = ".aplt"
 # an .aplt file is a ZIP container, like the files of an office suite:
 PROJECT_MIMETYPE = "application/x-aplot"     # first, stored: "what am I"
+PROJECT_UTI = f"{APP_ID}.graph"  # what macOS calls the kind of file
 PROJECT_DOCUMENT = "document.json"           # the data and every diagram
 PROJECT_THUMBNAIL = "Thumbnails/thumbnail.png"   # a picture of the graph
-THUMBNAIL_SIZE = 512            # the longer side of that picture, in pixels
+THUMBNAIL_SIZE = 1024           # the longer side of that picture, in pixels:
+                                # sharp in the Space bar preview of a Retina
+                                # screen, and in the largest Finder icons
 THUMBNAIL_PAD = 0.08            # the air around the graph on it, in inches
 CONFIG_FILE = Path.home() / ".aplot" / "config.json"
 UNDO_STEPS = 60                 # how many changes can be taken back
@@ -437,25 +440,35 @@ AXIS_TAGS = {
 X_SIDES = {"B": "bottom", "T": "top"}
 Y_SIDES = {"L": "left", "R": "right"}
 # the shades every drawn icon of the program is painted with
-ICON_SIZE = 20             # how big a toolbar icon is drawn, in pixels
+ICON_SIZE = 24             # how big a toolbar icon is drawn, in pixels
 ICON_SCALE = 4             # ... and how much bigger it is painted first
+# how much stronger the lines are drawn than the drawings give them: the
+# thin outlines (a sheet, a bar, a badge) and the strokes of the curves.
+# A hair line shrunk four times ends up under one pixel and all but
+# vanishes on a light toolbar - these keep every outline a clear pixel.
+ICON_LINE_WEIGHT = 1.6
+ICON_STROKE_WEIGHT = 1.07
+ICON_OUTLINE_LIMIT = 0.06  # a line thinner than this (of the icon) is an outline
+TOOLBUTTON_PADDING = (5, 4)  # the air around a toolbar picture, in pixels
 
-ICON_PAPER = "#eceff3"     # the sheet a row / column icon stands on
-ICON_MUTED = "#c2c8d0"     # the rows and columns that stay where they are
-ICON_EDGE = "#8b93a0"      # the thin outline around everything
-ICON_ADD_COLOR = "#9dc3e6"      # pastel blue: the row or column that appears
-ICON_ADD_EDGE = "#5b8bbd"
-ICON_DELETE_COLOR = "#e6a8a8"   # pastel rose: the one that goes away
-ICON_DELETE_EDGE = "#bd6b6b"
-# the pastel shades the nine plot icons are drawn with
-ICON_INK = "#6f7887"
-ICON_STROKE = "#6f97c4"    # the pastel blue a curve is drawn with
-ICON_BLUE = "#9dc3e6"
-ICON_SAGE = "#a8ccb0"
-ICON_SAND = "#e8cfa0"
-ICON_ROSE = "#e6a8a8"
-ICON_LILAC = "#c3b3dd"
-ICON_ARMED = "#cfe3f6"     # the plate behind a tool that waits for a click
+# clear flat colours: soft but saturated fills, each with a darker edge of
+# its own hue, on white paper - quiet beside the table, yet plain to see
+ICON_PAPER = "#f4f6f9"     # the sheet a row / column icon stands on
+ICON_MUTED = "#b6bec9"     # the rows and columns that stay where they are
+ICON_EDGE = "#4d5663"      # the outline around everything
+ICON_ADD_COLOR = "#4a90e2"      # blue: the row or column that appears
+ICON_ADD_EDGE = "#2667b3"
+ICON_DELETE_COLOR = "#e5605c"   # red: the one that goes away
+ICON_DELETE_EDGE = "#ad3632"
+# the shades the plot icons are drawn with
+ICON_INK = "#3c4450"
+ICON_STROKE = "#2f80d9"    # the blue a curve is drawn with
+ICON_BLUE = "#5aa0ea"
+ICON_SAGE = "#4caf7a"
+ICON_SAND = "#efab3a"
+ICON_ROSE = "#e5605c"
+ICON_LILAC = "#9b7fd6"
+ICON_ARMED = "#d4e6fa"     # the plate behind a tool that waits for a click
 
 
 AXIS_NAMES = {"x": "X axis", "y": "Left Y axis", "y2": "Right Y axis"}
@@ -1233,6 +1246,60 @@ def app_icon_png(size=APP_ICON_SIZE):
     return holder.getvalue()
 
 
+DOCUMENT_ICON_PAGE = "#ffffff"   # the sheet of paper of an .aplt file
+DOCUMENT_ICON_EDGE = "#b9b9b9"   # its outline
+DOCUMENT_ICON_FOLD = "#e3e3e3"   # the corner folded over
+
+
+def document_icon_png(size=APP_ICON_SIZE):
+    """The icon of an `.aplt` file as the bytes of a PNG file.
+
+    A sheet of paper with its top right corner folded over - the way macOS
+    draws a document - and the spectrum of the program's own icon across
+    its lower part, so that a graph is told from its program at a glance.
+    Finder shows it for every graph that has no picture of its own (a file
+    of an older version, or when the Quick Look viewer is not installed).
+    """
+    size = max(16, int(size))
+    fig = Figure(figsize=(size / 100.0, size / 100.0), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_axis_off()
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    left, right, bottom, top = 0.17, 0.83, 0.06, 0.94
+    fold = 0.18 * (right - left)
+    line = max(0.8, size / 170.0)
+    outline = [(left, bottom), (right, bottom), (right, top - fold),
+               (right - fold, top), (left, top)]
+    page = Polygon(outline, closed=True, facecolor=DOCUMENT_ICON_PAGE,
+                   edgecolor=DOCUMENT_ICON_EDGE, linewidth=line,
+                   joinstyle="round", zorder=1)
+    ax.add_patch(page)
+    corner = Polygon([(right - fold, top), (right - fold, top - fold),
+                      (right, top - fold)], closed=True,
+                     facecolor=DOCUMENT_ICON_FOLD,
+                     edgecolor=DOCUMENT_ICON_EDGE, linewidth=line,
+                     joinstyle="round", zorder=4)
+    ax.add_patch(corner)
+    # the spectrum across the lower part of the sheet, cut to the sheet
+    x = np.linspace(-0.05, 1.05, 700)
+    floor, ceiling = bottom + 0.04, bottom + 0.52
+    py = floor + icon_spectrum(x) * (ceiling - floor)
+    px = left + x * (right - left)
+    body = ax.fill_between(px, bottom - 0.1, py, facecolor=APP_ICON_FILL,
+                           edgecolor="none", zorder=2)
+    curve, = ax.plot(px, py, color=APP_ICON_LINE,
+                     linewidth=size * (right - left) / 50.0,
+                     solid_joinstyle="round", solid_capstyle="round",
+                     zorder=3)
+    for artist in (body, curve):
+        artist.set_clip_path(page)
+    holder = io.BytesIO()
+    fig.savefig(holder, format="png", dpi=100, transparent=True)
+    return holder.getvalue()
+
+
 _ICON_PHOTO = {}                 # size -> the Tk picture, which Tk may not lose
 
 
@@ -1279,21 +1346,23 @@ def write_icon_file(path, size=APP_ICON_SIZE):
     return target
 
 
-def write_icns(folder, name=APP_NAME):
+def write_icns(folder, name=APP_NAME, painter=None):
     """Build the `.icns` macOS wants, from the drawn icon; the path or None.
 
     macOS builds it out of a folder of PNGs with `iconutil`; when that tool
     is missing the largest PNG is written instead, which is enough for the
-    Dock of most systems.
+    Dock of most systems.  `painter(size)` draws one size (the icon of the
+    program unless another is given - the one of a document, say).
     """
+    painter = painter or app_icon_png
     folder = Path(str(folder)).expanduser()
     iconset = folder / f"{name}.iconset"
     try:
         iconset.mkdir(parents=True, exist_ok=True)
         for one in APP_ICON_SIZES:      # the names Apple's iconutil expects
-            (iconset / f"icon_{one}x{one}.png").write_bytes(app_icon_png(one))
+            (iconset / f"icon_{one}x{one}.png").write_bytes(painter(one))
             (iconset / f"icon_{one}x{one}@2x.png").write_bytes(
-                app_icon_png(one * 2))
+                painter(one * 2))
     except (OSError, ValueError):
         return None
     target = folder / f"{name}.icns"
@@ -1309,7 +1378,7 @@ def write_icns(folder, name=APP_NAME):
     shutil.rmtree(iconset, ignore_errors=True)
     fallback = folder / f"{name}.png"
     try:
-        fallback.write_bytes(app_icon_png(APP_ICON_SIZE))
+        fallback.write_bytes(painter(APP_ICON_SIZE))
     except OSError:
         return None
     return fallback
@@ -1331,9 +1400,52 @@ APP_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
     <key>CFBundleVersion</key><string>1.0</string>
     <key>LSMinimumSystemVersion</key><string>10.13</string>
     <key>NSHighResolutionCapable</key><true/>
+{documents}
 </dict>
 </plist>
 """
+
+# the kind of file APlot writes, told to macOS: its name (a "uniform type
+# identifier"), its extension, and that APlot is the program that owns it.
+# It is plain data to the system - not a ZIP archive - so that neither the
+# Archive Utility nor the preview of ZIP files takes it for its own.
+APP_PLIST_DOCUMENTS = """\
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>{uti}</string>
+            <key>UTTypeDescription</key><string>{name} graph</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string><string>public.content</string></array>
+            <key>UTTypeIconFile</key><string>{icon}</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key><array><string>{suffix}</string></array>
+                <key>public.mime-type</key><array><string>{mime}</string></array>
+            </dict>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>{name} graph</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>CFBundleTypeIconFile</key><string>{icon}</string>
+            <key>LSHandlerRank</key><string>Owner</string>
+            <key>LSItemContentTypes</key><array><string>{uti}</string></array>
+        </dict>
+    </array>"""
+DOCUMENT_ICON_NAME = f"{APP_NAME}Document"   # the .icns of the graph files
+
+
+def app_plist(name=APP_NAME, icon=None, document_icon=None):
+    """The Info.plist of APlot.app, with the kind of file it owns."""
+    documents = APP_PLIST_DOCUMENTS.format(
+        uti=PROJECT_UTI, name=name, suffix=PROJECT_SUFFIX.lstrip("."),
+        mime=PROJECT_MIMETYPE,
+        icon=document_icon or f"{DOCUMENT_ICON_NAME}.icns")
+    return APP_PLIST.format(name=name, identifier=APP_ID,
+                            icon=icon or f"{name}.icns", documents=documents)
 
 
 def make_macos_app(folder=None, name=APP_NAME):
@@ -1355,9 +1467,13 @@ def make_macos_app(folder=None, name=APP_NAME):
         macos.mkdir(parents=True, exist_ok=True)
         resources.mkdir(parents=True, exist_ok=True)
         icon = write_icns(resources, name)
+        # the graph files get an icon of their own: a sheet with the curve
+        document_icon = write_icns(resources, DOCUMENT_ICON_NAME,
+                                   painter=document_icon_png)
         (bundle / "Contents" / "Info.plist").write_text(
-            APP_PLIST.format(name=name, identifier=APP_ID,
-                             icon=(icon.name if icon else f"{name}.icns")),
+            app_plist(name, icon=icon.name if icon else None,
+                      document_icon=(document_icon.name if document_icon
+                                     else None)),
             encoding="utf-8")
         launcher = macos / name
         launcher.write_text(
@@ -1368,9 +1484,30 @@ def make_macos_app(folder=None, name=APP_NAME):
         launcher.chmod(0o755)
         # macOS keeps what it knows about a bundle: it is told to look again
         subprocess.run(["touch", str(bundle)], capture_output=True, timeout=30)
+        register_with_launch_services(bundle)
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
     return bundle
+
+
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+              "LaunchServices.framework/Support/lsregister")
+
+
+def register_with_launch_services(bundle):
+    """Tell macOS at once which files the bundle opens (and their icon).
+
+    Without it the system learns it the first time the bundle is opened
+    from the Finder, which is enough as well; this only saves the wait.
+    """
+    if not os.path.exists(LSREGISTER):
+        return False
+    try:
+        done = subprocess.run([LSREGISTER, "-f", str(bundle)],
+                              capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
 
 
 def running_from_bundle():
@@ -1951,12 +2088,12 @@ class ShapeToolButton(tk.Canvas):
     what the icon draws: the shapes or the arrow heads.
     """
 
-    ARROW_ZONE = 12
+    ARROW_ZONE = 14
     LINE = ICON_ADD_EDGE            # the outline of the shape it draws
     FILL = ICON_BLUE                # ...and what stands inside it
     MENU = ICON_EDGE                # the little arrow that opens the list
 
-    def __init__(self, master, kind="rect", size=24, family="shape",
+    def __init__(self, master, kind="rect", size=ICON_SIZE + 4, family="shape",
                  background=None, on_draw=None, on_menu=None):
         self._background = background or master.cget("background")
         super().__init__(master, width=size + ShapeToolButton.ARROW_ZONE,
@@ -1999,8 +2136,9 @@ class ShapeToolButton(tk.Canvas):
     def _draw_arrow_icon(self, kind, x0, y0, x1, y1):
         """A right pointing arrow whose head shows the selected type."""
         middle = (y0 + y1) / 2
-        tip, back = x1, x1 - 8
-        half = 5
+        # the head grows with the button
+        tip, back = x1, x1 - round(self._size * 0.32)
+        half = round(self._size * 0.2)
         self.create_line(x0, middle, back, middle, fill=self.LINE, width=3,
                          tags="icon")
         if kind == "chevron":
@@ -2087,8 +2225,37 @@ class PlotSplitButton(ttk.Button):
 # --------------------------------------------------------------------------
 # They are drawn by the program itself - no picture files to carry around -
 # four times as big as they are shown and then shrunk, which is what makes
-# the edges smooth.  The colours are pastel and grey so the buttons stay
-# quiet beside the table.
+# the edges smooth.  The colours are clear and flat, each shape with a
+# darker edge of its own colour, so the buttons are easy to see and still
+# stay quiet beside the table.
+
+
+class _WeightedDraw:
+    """An `ImageDraw` whose lines come out stronger (`ICON_LINE_WEIGHT`).
+
+    The drawings give their lines as fractions of the icon; this makes the
+    thin outlines thicker and the strokes of the curves a little thicker,
+    in one place, so that every icon of the program gets the same weight.
+    """
+
+    def __init__(self, draw, box):
+        self._draw = draw
+        self._box = float(box)
+
+    def __getattr__(self, name):
+        method = getattr(self._draw, name)
+        if not callable(method):
+            return method
+
+        def weighted(*args, **kwargs):
+            width = kwargs.get("width")
+            if width:
+                outline = width <= ICON_OUTLINE_LIMIT * self._box
+                grow = ICON_LINE_WEIGHT if outline else ICON_STROKE_WEIGHT
+                kwargs["width"] = max(1, int(round(width * grow)))
+            return method(*args, **kwargs)
+
+        return weighted
 
 
 
@@ -2104,7 +2271,7 @@ def _icon_photo(painter, size=ICON_SIZE):
     box = size * ICON_SCALE
     picture = Image.new("RGBA", (box, box), (0, 0, 0, 0))
     try:
-        painter(ImageDraw.Draw(picture), box)
+        painter(_WeightedDraw(ImageDraw.Draw(picture), box), box)
         picture = picture.resize((size, size), Image.Resampling.LANCZOS)
         photo = ImageTk.PhotoImage(picture)
         photo.source = picture          # the painting behind the Tk picture
@@ -2243,7 +2410,7 @@ def plot_style_icon(style, size=ICON_SIZE):
     return _icon_photo(painter, size)
 
 
-# -- the two file tools, in the same pastel shades --------------------------
+# -- the two file tools, in the same shades ---------------------------------
 
 def _paint_open(draw, box):
     """An open folder: the data file that is read."""
@@ -2406,7 +2573,7 @@ TOOLBAR_ICONS = {"Home": "home", "Back": "back", "Forward": "forward",
 def plot_tool_icon(name, size=ICON_SIZE, armed=False):
     """One tool icon of a diagram window, or None without Pillow.
 
-    `armed` paints the pastel plate behind it that says the tool is waiting
+    `armed` paints the light plate behind it that says the tool is waiting
     for a click in the diagram.
     """
     painter = PLOT_TOOL_PAINTERS.get(str(name))
@@ -2466,8 +2633,8 @@ def _band_places(action, where):
 def drawn_tool_icon(kind, action, size=ICON_SIZE, where=None):
     """A sheet of three bands: the painted one is what the button does.
 
-    Lying down for the rows, standing up for the columns.  A pastel blue
-    band is the row or column that appears, a pastel rose one is the one
+    Lying down for the rows, standing up for the columns.  A blue
+    band is the row or column that appears, a red one is the one
     that is taken away, and the others are grey.
     """
     painted, apart = _band_places(action, where)
@@ -10317,7 +10484,7 @@ class PlotWindow(tk.Toplevel):
         toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
         toolbar.update()
         self.toolbar = toolbar
-        self.restyle_toolbar(toolbar)     # pastel icons, as on the sheet
+        self.restyle_toolbar(toolbar)     # drawn icons, as on the sheet
         # "add text" button, a little away from the save button
         tk.Frame(toolbar, width=26, height=1).pack(side="left")
         self._text_icon = plot_tool_icon("text") or make_letter_icon("T")
@@ -10358,7 +10525,7 @@ class PlotWindow(tk.Toplevel):
         self.arrow_button.bind("<Leave>", lambda _e: toolbar.set_message(""),
                                add="+")
 
-        self._picture_icon = picture_tool_icon(20)
+        self._picture_icon = picture_tool_icon()
         self.picture_button = tk.Button(
             toolbar, image=self._picture_icon, text=("" if self._picture_icon
                                                      else "Picture"),
@@ -10900,14 +11067,14 @@ class PlotWindow(tk.Toplevel):
         return menu
 
     def restyle_toolbar(self, toolbar):
-        """Give matplotlib's own buttons the pastel icons of the program.
+        """Give matplotlib's own buttons the drawn icons of the program.
 
         The standard toolbar carries black pictures read from files, which
-        look nothing like the drawn, pastel buttons of the spreadsheet
+        look nothing like the drawn buttons of the spreadsheet
         window.  Emptying `_image_file` is what stops matplotlib from
         loading its own picture back over them when the resolution of the
         screen changes; the two tools that stay pressed - `Pan` and `Zoom` -
-        get a second icon on a pale blue plate, so it is plain to see which
+        get a second icon on a light blue plate, so it is plain to see which
         one is waiting for a click in the diagram.
         """
         self._tool_icons = {}
@@ -18508,6 +18675,7 @@ Start it with:
 It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
+    python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
 
@@ -18627,6 +18795,39 @@ new place.
 With `pyobjc-framework-Cocoa` installed the program also tells macOS its
 name and its bundle directly, which is what the **bold application menu**
 reads; the Dock label, though, only the bundle settles for good.
+
+#### The graph files in the Finder
+
+`APlot.app` also tells macOS about the **kind of file** APlot writes: the
+`.aplt` extension is given the name `hu.feti.aplot.graph` and APlot as its
+owner.  After `--make-app` (run it again if the bundle is older than
+this) the Finder therefore
+
+* shows an **icon of its own** for every graph - a sheet of paper with the
+  spectrum across it - instead of the blank page with a question mark, and
+* **opens a graph in APlot** with a double click, or when the file is
+  dropped onto APlot in the Dock.  A graph that is open and edited is not
+  replaced without the usual question about saving it.
+
+From a terminal a graph can be opened the same way:
+
+    python3 aplot.py "Zanax dose.aplt"
+
+#### The picture of the graph in the Finder, and the Space bar
+
+Every graph carries a **picture of itself** (see `4. Files`).  To make the
+Finder show that picture as the icon of the file, and show it large when
+the Space bar is pressed, macOS needs two small **Quick Look extensions**.
+They cannot be written in Python: they are in the separate
+`APlotQuickLook` folder, in Swift, with a script that builds and installs
+them - Xcode (free in the App Store) is all it needs:
+
+    cd APlotQuickLook
+    sh build.sh
+    sh install.sh
+
+`APlotQuickLook/README.md` explains the rest, including what to do when
+macOS does not take the extensions at once.
 
 
 ## 0. The name
@@ -18828,9 +19029,23 @@ copied, saved with the graph and plotted in any style.
 
 Every icon of the toolbar is **drawn by the program itself** - there are no
 picture files to carry around.  Each one is painted four times as large as
-it is shown and then shrunk, which is what gives it smooth edges, and they
-are all kept in the same **pastel and grey** shades so the toolbar stays
-quiet beside the table.
+it is shown and then shrunk, which is what gives it smooth edges.  They
+are drawn in **clear flat colours** - soft but saturated fills, each with a
+darker edge of its own colour, on white paper - so they are easy to see on
+a light toolbar and still stay quiet beside the table.
+
+The icons are **24 pixels** large, and every outline is drawn a good pixel
+wide, so that none of them fades away when it is shrunk; the buttons have
+a little air around their pictures.  A few constants at the top of
+`aplot.py` set the look:
+
+| Constant | What it sets |
+| --- | --- |
+| `ICON_SIZE` (24) | how large the icons are, in pixels - the buttons grow with them |
+| `ICON_LINE_WEIGHT` (1.6) | how much stronger the thin outlines are drawn |
+| `ICON_STROKE_WEIGHT` (1.07) | ... and the strokes of the little curves |
+| `TOOLBUTTON_PADDING` (5, 4) | the free room around a picture on its button |
+| `ICON_BLUE`, `ICON_SAGE`, `ICON_SAND`, `ICON_ROSE`, `ICON_LILAC`, `ICON_EDGE`, ... | the colours themselves |
 
 The **Plot** button carries a little picture of the style it will draw, and
 that picture **follows the style**: a line, a line with markers, scattered
@@ -18842,11 +19057,11 @@ The four row and column tools are a tiny picture of a **sheet of three
 bands** - lying down for the rows, standing up for the columns - with a
 small badge in the corner:
 
-* **Pastel blue and a `+` add.**  The blue band is the new row or column,
+* **Blue and a `+` add.**  The blue band is the new row or column,
   and it is drawn **where it will appear**: at the near end for
   *above* / *before*, at the far end for *below* / *after*, and standing
   **apart** from the other two for *at the end of the sheet*.
-* **Pastel rose and a `-` delete.**  The rose band in the middle is the row
+* **Red and a `-` delete.**  The red band in the middle is the row
   or column that goes away.
 
 The three file tools beside them - an open folder, an arrow running into a
@@ -18855,10 +19070,10 @@ sheet and a disk - are drawn in the same shades.
 **The diagram window uses the very same set.**  The buttons matplotlib
 brings with it - `Home`, `Back`, `Forward`, `Pan`, `Zoom`, `Subplots` and
 `Save` - carried small black pictures of their own; they are replaced, one
-for one, with drawn pastel ones: a little house, two arrows, the four-way
+for one, with drawn ones in the same colours: a little house, two arrows, the four-way
 arrow, a magnifier, the plot area with its two handles, and the same disk
 as on the spreadsheet.  `Pan` and `Zoom` stay pressed while they are in
-use, and then show their icon on a **pale blue plate**, so it is plain
+use, and then show their icon on a **light blue plate**, so it is plain
 which of them is waiting for a click in the diagram.  The `T` of the text
 tool, the drawing tool, the arrow tool and the picture button are painted
 in the same shades, and the two split buttons stand on the toolbar itself
@@ -19638,7 +19853,7 @@ another place (see `Moving the whole graph`).
 | Click twice beside an axis (on the numbers or the label) | Axes properties, opened on the tab of that axis (the window also carries the title page and both Y axis pages). |
 | Hold Shift while drawing or resizing an arrow or a line | Keeps it horizontal, vertical or at 45, 135, 225, 315 degrees. |
 | Plot menu | The axes dialog (axes, frame and origin), the title/fonts dialog, copy, cut, paste and delete of the selected object, the four stacking commands, plus closing this diagram. |
-| Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn pastel icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
+| Toolbar | The Matplotlib tools (home, back, forward, pan, zoom, subplots, saving the figure as an image) in the drawn icons of the program, the **T** button that adds a text box, the drawing tool, the arrow tool and the picture button. |
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
@@ -20965,7 +21180,7 @@ there are three entries:
 | --- | --- |
 | `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
 | `document.json` | The data and every diagram: a readable JSON document (described below). |
-| `Thumbnails/thumbnail.png` | A picture of the graph, about 512 pixels along its longer side, for the file managers (and for anyone who opens the container). |
+| `Thumbnails/thumbnail.png` | A picture of the graph, about 1024 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
 
 **The picture** shows the diagram in front - the one `Export` would write -
 cut out of the page with a little air around it, exactly as `Copy figure`
@@ -20978,9 +21193,12 @@ data and the diagrams saved all the same.
 
 The picture is what a file manager needs to show the graph instead of a
 blank page.  The file managers do not look into an unknown container by
-themselves: a small viewer extension on macOS, a thumbnailer entry on
-Linux or a thumbnail handler on Windows has to be installed, and each of
-them only has to copy this one picture out.
+themselves: a small viewer extension on macOS (the `APlotQuickLook`
+folder, see `The picture of the graph in the Finder`), a thumbnailer entry
+on Linux or a thumbnail handler on Windows has to be installed, and each of
+them only has to copy this one picture out.  It is drawn 1024 pixels
+along its longer side, so that it stays sharp in the largest Finder icons
+and in the Space bar preview of a Retina screen.
 
 The file is written next to its final place and only then put there, so a
 save that fails half way never leaves a broken graph behind.
@@ -21732,6 +21950,12 @@ class App:
 
     def _build_toolbar(self):
         alt = "Opt" if sys.platform == "darwin" else "Alt"
+        # the buttons grow with their larger icons: a little air around
+        # each picture, so that it does not touch the edge of its button
+        try:
+            ttk.Style().configure("Toolbutton", padding=TOOLBUTTON_PADDING)
+        except tk.TclError:
+            pass
         bar = ttk.Frame(self.root, padding=(10, 8))
         bar.pack(fill="x")
         self.current_plot_style = "line_symbol"
@@ -21905,6 +22129,14 @@ class App:
             # the event arrives here and asks first.
             try:
                 self.root.createcommand("tk::mac::Quit", self.quit_app)
+            except tk.TclError:
+                pass
+            # a double click on an .aplt file in the Finder (or a file
+            # dropped on the icon in the Dock) arrives as an Apple event
+            # too, with the paths of the files
+            try:
+                self.root.createcommand("::tk::mac::OpenDocument",
+                                        self.open_documents)
             except tk.TclError:
                 pass
         else:
@@ -22309,6 +22541,29 @@ class App:
         something really can be lost.
         """
         return self.load_project()
+
+    def open_documents(self, *paths):
+        """Open a graph handed over from outside: the Finder, the Dock, or
+        the command line.
+
+        The program holds one graph at a time, so the first `.aplt` file of
+        the list is opened.  The file comes from outside the program - the
+        user did not ask for it here - so an edited graph that is open is
+        not replaced without asking first.
+        """
+        graphs = [str(one) for one in paths
+                  if str(one).lower().endswith(PROJECT_SUFFIX)
+                  and os.path.isfile(str(one))]
+        if not graphs:
+            return False
+        if not self._may_discard("Open"):
+            return False
+        try:
+            self.root.deiconify()
+            self.root.lift()
+        except tk.TclError:
+            pass
+        return bool(self.load_project(graphs[0]))
 
     def save_graph(self, *_args):
         """Cmd/Ctrl+S: save the graph, asking for a name only the first time."""
@@ -23260,6 +23515,7 @@ class App:
 USAGE = f"""{APP_NAME} - plotting and editing tabular data
 
   python3 aplot.py                 start the program
+  python3 aplot.py FILE.aplt       start the program with that graph
   python3 aplot.py --make-app      build {APP_NAME}.app (macOS), so that the Dock
                                    shows this program's own icon and name
   python3 aplot.py --icon FILE     write the icon into a PNG file
@@ -23297,6 +23553,17 @@ def run_command(argv):
     return None
 
 
+def startup_graphs(argv):
+    """The `.aplt` files named on the command line (in the order given).
+
+    Anything else is left out - the `-psn_...` number an old macOS hands to
+    a program it starts, for one.
+    """
+    return [str(one) for one in argv
+            if not str(one).startswith("-")
+            and str(one).lower().endswith(PROJECT_SUFFIX)]
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     done = run_command(argv)
@@ -23304,7 +23571,10 @@ def main(argv=None):
         return done
     set_macos_app_name(APP_NAME)  # must run before the first Tk window
     root = tk.Tk()
-    App(root)
+    app = App(root)
+    graphs = startup_graphs(argv)
+    if graphs:                    # once the window stands
+        root.after(200, lambda: app.open_documents(*graphs))
     root.mainloop()
     return 0
 
