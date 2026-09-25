@@ -387,8 +387,11 @@ darker edge of its own colour, on white paper - so they are easy to see on
 a light toolbar and still stay quiet beside the table.
 
 The icons are **24 pixels** large, and every outline is drawn a good pixel
-wide, so that none of them fades away when it is shrunk; the buttons have
-a little air around their pictures.  A few constants at the top of
+wide, so that none of them fades away when it is shrunk.  The buttons of
+the main toolbar fit tightly around them, with no wide empty rim, and all
+of them are **equally tall**: a button with words only (`Update`,
+`Settings...`, `Regression`) carries an invisible picture as tall as an
+icon, so it stands exactly as high as the ones with icons.  A few constants at the top of
 `aplot.py` set the look:
 
 | Constant | What it sets |
@@ -396,7 +399,7 @@ a little air around their pictures.  A few constants at the top of
 | `ICON_SIZE` (24) | how large the icons are, in pixels - the buttons grow with them |
 | `ICON_LINE_WEIGHT` (1.6) | how much stronger the thin outlines are drawn |
 | `ICON_STROKE_WEIGHT` (1.07) | ... and the strokes of the little curves |
-| `TOOLBUTTON_PADDING` (5, 4) | the free room around a picture on its button |
+| `TOOLBUTTON_PADDING` (1, 0) | the free room around a picture on its button of the main toolbar |
 | `ICON_BLUE`, `ICON_SAGE`, `ICON_SAND`, `ICON_ROSE`, `ICON_LILAC`, `ICON_EDGE`, ... | the colours themselves |
 
 The **Plot** button carries a little picture of the style it will draw, and
@@ -471,7 +474,9 @@ an immediate action with a style menu:
 
 * **Clicking the main button** opens a new diagram drawn with whichever style is
   currently active (indicated by its vector icon on the button face).
-* **Clicking the dropdown arrow** opens the menu of all **6 plotting styles**:
+* **Clicking the dropdown arrow** opens the menu of all the plotting styles,
+  each line with the little picture of its diagram - the same picture the
+  button shows once that style is chosen:
   * **Line + Symbol**: A smooth or solid line connecting data points, with
     distinct marker symbols (circles, squares, diamonds, etc.).
   * **Line**: Clean continuous lines without markers, ideal for dense time
@@ -1086,8 +1091,11 @@ Click a column heading to edit its name.  The name is used
 * for the first column, as the label of the X axis.
 
 Renaming a column later also renames the legend entry and the X axis label
-of every open diagram - unless you gave them your own text, which is never
-overwritten.  When the first column is drawn as a curve of its own (a
+in the open diagrams **of that sheet** - the ones opened from it, or from a
+sheet glued to it with `Plot with previous tab` - unless you gave them your
+own text, which is never overwritten.  A diagram of another sheet is never
+touched, even when that sheet happens to have a column of the same name
+(two sheets easily both have a `Y4`).  When the first column is drawn as a curve of its own (a
 histogram, or a single filled column against the row numbers), renaming it
 renames that curve and its legend box as well.
 
@@ -1318,8 +1326,9 @@ that will be drawn, with a small arrow in its lower right corner:
 * clicking the **icon** starts drawing with the shape that is shown (a
   rectangle at the first start, later whatever was used last),
 * clicking the **arrow** opens the list `Rectangle`, `Triangle`, `Circle`,
-  `Ellipse`, `Line`; after choosing one the tool is armed with it and the
-  icon changes to that shape.
+  `Ellipse`, `Line`, each line with a little picture of its shape; after
+  choosing one the tool is armed with it and the icon changes to that
+  shape.
 
 While the tool is armed the button stays pressed and the pointer becomes a
 cross.  Press in the diagram and drag: the object is drawn between the
@@ -1602,8 +1611,9 @@ arrow in its lower right corner:
 * clicking the **icon** arms the tool with the head that is shown (a
   triangle head at the first start, later whatever was used last),
 * clicking the **arrow** in the corner opens the list `Triangle head`,
-  `Chevron head`, `Concave head`, `Convex head`; the icon changes to the
-  chosen one.
+  `Chevron head`, `Concave head`, `Convex head`, each with a little arrow
+  wearing that very head beside its name; the icon changes to the chosen
+  one.
 
 Press in the diagram at the **tail** of the arrow and drag: the arrow
 follows the pointer, so its length and its direction are drawn immediately,

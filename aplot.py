@@ -458,7 +458,12 @@ ICON_SCALE = 4             # ... and how much bigger it is painted first
 ICON_LINE_WEIGHT = 1.6
 ICON_STROKE_WEIGHT = 1.07
 ICON_OUTLINE_LIMIT = 0.06  # a line thinner than this (of the icon) is an outline
-TOOLBUTTON_PADDING = (5, 4)  # the air around a toolbar picture, in pixels
+# the buttons of the main toolbar: all of them exactly as tall as their
+# 24 pixel icon, with only a sliver of room around it - a button with words
+# only (Update, Settings) carries an invisible picture of that height, so
+# that it stands just as tall as the ones with an icon
+TOOLBAR_STYLE = "Tidy.Toolbutton"
+TOOLBUTTON_PADDING = (1, 0)  # the air around a toolbar picture, in pixels
 
 # clear flat colours: soft but saturated fills, each with a darker edge of
 # its own hue, on white paper - quiet beside the table, yet plain to see
@@ -2206,7 +2211,7 @@ class PlotSplitButton(ttk.Button):
     def __init__(self, master, style="line_symbol", width=0, height=26,
                  background=None, on_plot=None, on_menu=None):
         super().__init__(master, text=self.LABEL + self.ARROW, width=0,
-                         style="Toolbutton", compound="left", command=on_plot)
+                         style=TOOLBAR_STYLE, compound="left", command=on_plot)
         self.style = style
         self.icon_img = None
         self.on_menu = on_menu
@@ -2603,6 +2608,99 @@ def plot_tool_icon(name, size=ICON_SIZE, armed=False):
         painter(draw, box)
 
     return _icon_photo(lit, size)
+
+
+# -- the drawings and the arrow heads, as their split buttons list them ----
+
+def _paint_shape(kind):
+    """The painter of one drawing object: its outline, with a light fill."""
+    def paint(draw, box):
+        width = max(1, int(round(0.07 * box)))
+        low, high = 0.14 * box, 0.86 * box
+        if kind == "triangle":
+            draw.polygon([(0.5 * box, low), (high, high), (low, high)],
+                         fill=ICON_BLUE, outline=ICON_ADD_EDGE, width=width)
+        elif kind == "circle":
+            draw.ellipse([low, low, high, high], fill=ICON_BLUE,
+                         outline=ICON_ADD_EDGE, width=width)
+        elif kind == "ellipse":
+            draw.ellipse([0.06 * box, 0.26 * box, 0.94 * box, 0.74 * box],
+                         fill=ICON_BLUE, outline=ICON_ADD_EDGE, width=width)
+        elif kind == "line":
+            draw.line([(low, high), (high, low)], fill=ICON_ADD_EDGE,
+                      width=max(1, int(round(0.10 * box))))
+        else:                                       # a rectangle
+            draw.rectangle([0.08 * box, 0.22 * box, 0.92 * box, 0.78 * box],
+                           fill=ICON_BLUE, outline=ICON_ADD_EDGE, width=width)
+    return paint
+
+
+def _paint_arrow_head(head):
+    """A right pointing arrow whose head is the one of the list.
+
+    The head has the very shape the diagram draws (see `_head_polygon`),
+    only a little taller, so that the four kinds are told apart at a
+    glance even this small.
+    """
+    def paint(draw, box):
+        middle = 0.5 * box
+        tip = 0.95 * box
+        size = 0.50 * box
+        half = size * 0.55
+        base = tip - size
+        left, right = (base, middle - half), (base, middle + half)
+        line = max(1, int(round(0.09 * box)))
+        if head == "chevron":
+            draw.line([(0.05 * box, middle), (tip - 0.05 * box, middle)],
+                      fill=ICON_ADD_EDGE, width=line)
+            draw.line([left, (tip, middle), right], fill=ICON_ADD_EDGE,
+                      width=line, joint="curve")
+            return
+        draw.line([(0.05 * box, middle), (base + size * 0.15, middle)],
+                  fill=ICON_ADD_EDGE, width=line)
+        if head == "concave":
+            points = [(tip, middle), left, (base + size * 0.35, middle), right]
+        elif head == "convex":
+            points = [(tip, middle), left, (base - size * 0.22, middle), right]
+        else:                                        # a plain triangle
+            points = [(tip, middle), left, right]
+        draw.polygon(points, fill=ICON_ADD_EDGE, outline=ICON_ADD_EDGE,
+                     width=max(1, int(round(0.03 * box))))
+    return paint
+
+
+def shape_tool_icon(kind, size=ICON_SIZE):
+    """The little picture of one drawing object (rectangle, circle, line...)."""
+    return _icon_photo(_paint_shape(str(kind)), size)
+
+
+def arrow_head_icon(head, size=ICON_SIZE):
+    """The little picture of an arrow with one kind of head."""
+    return _icon_photo(_paint_arrow_head(str(head)), size)
+
+
+def popup_icon_menu(master, entries, where):
+    """A popup list whose lines carry a little picture beside the name.
+
+    `entries` is a list of (label, picture, command); a line without a
+    picture (no Pillow) keeps just its name.  The pictures are kept on the
+    menu itself, or Tk would let them go while the list is open.
+    """
+    menu = tk.Menu(master, tearoff=0)
+    menu._pictures = []
+    for label, picture, command in entries:
+        if picture is not None:
+            menu._pictures.append(picture)
+            menu.add_command(label=label, image=picture,
+                             compound="left", command=command)
+        else:
+            menu.add_command(label=label, command=command)
+    if where is not None:
+        try:
+            menu.tk_popup(*where)
+        finally:
+            menu.grab_release()
+    return menu
 
 
 def file_tool_icon(name, size=ICON_SIZE):
@@ -3110,7 +3208,7 @@ class TableToolButton(ttk.Button):
             full_text = ("Add " if action == "add" else "Delete ") + kind \
                 + full_text
         super().__init__(master, text=full_text, image=self.icon_img,
-                         compound="left", width=0, style="Toolbutton",
+                         compound="left", width=0, style=TOOLBAR_STYLE,
                          command=command)
         
         if self.split:
@@ -15088,19 +15186,17 @@ class PlotWindow(tk.Toplevel):
             self._cursor = ""
         return self._pending_shape
 
-    def show_shape_menu(self, event=None):
-        """The popup list of the drawing objects."""
-        menu = tk.Menu(self, tearoff=0)
-        for label, code in SHAPE_KINDS:
-            menu.add_command(label=label,
-                             command=lambda c=code: self.arm_shape_drawing(c, True))
-        try:
-            x = self.shape_button.winfo_rootx()
-            y = self.shape_button.winfo_rooty() + self.shape_button.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
-        return menu
+    def show_shape_menu(self, event=None, popup=True):
+        """The popup list of the drawing objects, each with its picture."""
+        entries = [(label, shape_tool_icon(code),
+                    lambda c=code: self.arm_shape_drawing(c, True))
+                   for label, code in SHAPE_KINDS]
+        where = None
+        if popup:
+            where = (self.shape_button.winfo_rootx(),
+                     self.shape_button.winfo_rooty()
+                     + self.shape_button.winfo_height())
+        return popup_icon_menu(self, entries, where)
 
     def default_shape_state(self, kind, x, y, width=0.0, height=0.0):
         cfg = self.settings.section("shape")
@@ -15516,18 +15612,17 @@ class PlotWindow(tk.Toplevel):
             self._cursor = ""
         return self._pending_arrow
 
-    def show_arrow_menu(self, event=None):
-        menu = tk.Menu(self, tearoff=0)
-        for label, code in ARROW_HEADS:
-            menu.add_command(label=label,
-                             command=lambda c=code: self.arm_arrow_drawing(c, True))
-        try:
-            x = self.arrow_button.winfo_rootx()
-            y = self.arrow_button.winfo_rooty() + self.arrow_button.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
-        return menu
+    def show_arrow_menu(self, event=None, popup=True):
+        """The popup list of the arrow heads, each drawn beside its name."""
+        entries = [(label, arrow_head_icon(code),
+                    lambda c=code: self.arm_arrow_drawing(c, True))
+                   for label, code in ARROW_HEADS]
+        where = None
+        if popup:
+            where = (self.arrow_button.winfo_rootx(),
+                     self.arrow_button.winfo_rooty()
+                     + self.arrow_button.winfo_height())
+        return popup_icon_menu(self, entries, where)
 
     def default_arrow_state(self, head, tail, tip):
         cfg = self.settings.section("arrow")
@@ -19897,8 +19992,11 @@ darker edge of its own colour, on white paper - so they are easy to see on
 a light toolbar and still stay quiet beside the table.
 
 The icons are **24 pixels** large, and every outline is drawn a good pixel
-wide, so that none of them fades away when it is shrunk; the buttons have
-a little air around their pictures.  A few constants at the top of
+wide, so that none of them fades away when it is shrunk.  The buttons of
+the main toolbar fit tightly around them, with no wide empty rim, and all
+of them are **equally tall**: a button with words only (`Update`,
+`Settings...`, `Regression`) carries an invisible picture as tall as an
+icon, so it stands exactly as high as the ones with icons.  A few constants at the top of
 `aplot.py` set the look:
 
 | Constant | What it sets |
@@ -19906,7 +20004,7 @@ a little air around their pictures.  A few constants at the top of
 | `ICON_SIZE` (24) | how large the icons are, in pixels - the buttons grow with them |
 | `ICON_LINE_WEIGHT` (1.6) | how much stronger the thin outlines are drawn |
 | `ICON_STROKE_WEIGHT` (1.07) | ... and the strokes of the little curves |
-| `TOOLBUTTON_PADDING` (5, 4) | the free room around a picture on its button |
+| `TOOLBUTTON_PADDING` (1, 0) | the free room around a picture on its button of the main toolbar |
 | `ICON_BLUE`, `ICON_SAGE`, `ICON_SAND`, `ICON_ROSE`, `ICON_LILAC`, `ICON_EDGE`, ... | the colours themselves |
 
 The **Plot** button carries a little picture of the style it will draw, and
@@ -19981,7 +20079,9 @@ an immediate action with a style menu:
 
 * **Clicking the main button** opens a new diagram drawn with whichever style is
   currently active (indicated by its vector icon on the button face).
-* **Clicking the dropdown arrow** opens the menu of all **6 plotting styles**:
+* **Clicking the dropdown arrow** opens the menu of all the plotting styles,
+  each line with the little picture of its diagram - the same picture the
+  button shows once that style is chosen:
   * **Line + Symbol**: A smooth or solid line connecting data points, with
     distinct marker symbols (circles, squares, diamonds, etc.).
   * **Line**: Clean continuous lines without markers, ideal for dense time
@@ -20596,8 +20696,11 @@ Click a column heading to edit its name.  The name is used
 * for the first column, as the label of the X axis.
 
 Renaming a column later also renames the legend entry and the X axis label
-of every open diagram - unless you gave them your own text, which is never
-overwritten.  When the first column is drawn as a curve of its own (a
+in the open diagrams **of that sheet** - the ones opened from it, or from a
+sheet glued to it with `Plot with previous tab` - unless you gave them your
+own text, which is never overwritten.  A diagram of another sheet is never
+touched, even when that sheet happens to have a column of the same name
+(two sheets easily both have a `Y4`).  When the first column is drawn as a curve of its own (a
 histogram, or a single filled column against the row numbers), renaming it
 renames that curve and its legend box as well.
 
@@ -20828,8 +20931,9 @@ that will be drawn, with a small arrow in its lower right corner:
 * clicking the **icon** starts drawing with the shape that is shown (a
   rectangle at the first start, later whatever was used last),
 * clicking the **arrow** opens the list `Rectangle`, `Triangle`, `Circle`,
-  `Ellipse`, `Line`; after choosing one the tool is armed with it and the
-  icon changes to that shape.
+  `Ellipse`, `Line`, each line with a little picture of its shape; after
+  choosing one the tool is armed with it and the icon changes to that
+  shape.
 
 While the tool is armed the button stays pressed and the pointer becomes a
 cross.  Press in the diagram and drag: the object is drawn between the
@@ -21112,8 +21216,9 @@ arrow in its lower right corner:
 * clicking the **icon** arms the tool with the head that is shown (a
   triangle head at the first start, later whatever was used last),
 * clicking the **arrow** in the corner opens the list `Triangle head`,
-  `Chevron head`, `Concave head`, `Convex head`; the icon changes to the
-  chosen one.
+  `Chevron head`, `Concave head`, `Convex head`, each with a little arrow
+  wearing that very head beside its name; the icon changes to the chosen
+  one.
 
 Press in the diagram at the **tail** of the arrow and drag: the arrow
 follows the pointer, so its length and its direction are drawn immediately,
@@ -22455,7 +22560,8 @@ class App:
         frame = ttk.Frame(self.notebook)
         table = DataTable(frame, self.settings,
                           on_change=lambda one=None: self._table_changed(table),
-                          on_rename=self._column_renamed,
+                          on_rename=lambda old, new, index: self._column_renamed(
+                              old, new, index, table=table),
                           on_add_column=self.add_column,
                           on_delete_column=self.delete_column)
         table.pack(fill="both", expand=True)
@@ -22526,8 +22632,11 @@ class App:
             drawn = [str(one) for one in frame.columns][1:]
             names = [one for one in drawn if one not in quiet]
             names += [f"{one} ({title})" for one in names]
+            # ...only in the diagrams that draw this group of sheets: a
+            # diagram of another sheet may well have a column of that name
             for window in self.open_windows():
-                window.draw_as_smooth_line(names)
+                if source + 1 in self.tab_chain(self.window_tab(window)):
+                    window.draw_as_smooth_line(names)
         return table
 
     def open_regression(self, *_args):
@@ -22975,6 +23084,26 @@ class App:
         return table.take_keyboard()
 
     # -- user interface ----------------------------------------------------
+    def as_tall_as_icons(self, button):
+        """A button with words only stands as tall as the ones with icons.
+
+        It carries an invisible picture one pixel wide and as tall as an
+        icon, laid under its words (`compound="center"`), so it takes no
+        room of its own sideways.
+        """
+        spacer = getattr(self, "_icon_spacer", None)
+        if spacer is None:
+            try:
+                spacer = tk.PhotoImage(width=1, height=ICON_SIZE)
+            except tk.TclError:
+                return None
+            self._icon_spacer = spacer
+        try:
+            button.configure(image=spacer, compound="center")
+        except tk.TclError:
+            return None
+        return spacer
+
     @staticmethod
     def _set_tool_icon(button, name, words):
         """Give a toolbar button its drawn icon (or words without Pillow)."""
@@ -22988,10 +23117,9 @@ class App:
 
     def _build_toolbar(self):
         alt = "Opt" if sys.platform == "darwin" else "Alt"
-        # the buttons grow with their larger icons: a little air around
-        # each picture, so that it does not touch the edge of its button
+        # tidy buttons: as tall as their icons, with no wide empty rim
         try:
-            ttk.Style().configure("Toolbutton", padding=TOOLBUTTON_PADDING)
+            ttk.Style().configure(TOOLBAR_STYLE, padding=TOOLBUTTON_PADDING)
         except tk.TclError:
             pass
         bar = ttk.Frame(self.root, padding=(10, 8))
@@ -23007,7 +23135,10 @@ class App:
         )
         self.plot_split_btn.pack(side="left")
         
-        btn_update = ttk.Button(bar, text="Update", style="Toolbutton", command=self.update_plot)
+        btn_update = ttk.Button(bar, text="Update", style=TOOLBAR_STYLE,
+                                command=self.update_plot)
+        self.as_tall_as_icons(btn_update)
+        self.update_btn = btn_update
         btn_update.pack(side="left", padx=(6, 0))
         Tooltip(btn_update, "Update open plots")
         
@@ -23016,7 +23147,7 @@ class App:
         # the folder opens a whole graph - the program's own file, with the
         # sheets and the diagrams in it
         self.open_graph_btn = ttk.Button(bar, text="", width=0,
-                                         style="Toolbutton",
+                                         style=TOOLBAR_STYLE,
                                          command=self.open_graph)
         self._set_tool_icon(self.open_graph_btn, "open", "Open")
         self.open_graph_btn.pack(side="left")
@@ -23025,14 +23156,14 @@ class App:
 
         # ...and the arrow beside it brings numbers in from a data file
         self.import_data_btn = ttk.Button(bar, text="", width=0,
-                                          style="Toolbutton",
+                                          style=TOOLBAR_STYLE,
                                           command=self.load_csv)
         self._set_tool_icon(self.import_data_btn, "import", "Import")
         self.import_data_btn.pack(side="left", padx=(2, 0))
         Tooltip(self.import_data_btn, f"Import data ({ACCEL_NAME}+I)")
 
         self.save_graph_btn = ttk.Button(bar, text="", width=0,
-                                         style="Toolbutton",
+                                         style=TOOLBAR_STYLE,
                                          command=self.save_graph)
         self._set_tool_icon(self.save_graph_btn, "save", "Save")
         self.save_graph_btn.pack(side="left", padx=(2, 0))
@@ -23057,7 +23188,11 @@ class App:
             bar, kind="column", action="delete", command=self.delete_column)
         self.delete_column_btn.pack(side="left", padx=(6, 0))
         
-        btn_settings = ttk.Button(bar, text="Settings...", style="Toolbutton", command=self.open_settings)
+        btn_settings = ttk.Button(bar, text="Settings...",
+                                  style=TOOLBAR_STYLE,
+                                  command=self.open_settings)
+        self.as_tall_as_icons(btn_settings)
+        self.settings_btn = btn_settings
         btn_settings.pack(side="right")
         Tooltip(btn_settings, "Graph settings")
 
@@ -23067,8 +23202,9 @@ class App:
         self.second_bar = second
 
         self.regression_btn = ttk.Button(second, text="Regression",
-                                         style="Toolbutton",
+                                         style=TOOLBAR_STYLE,
                                          command=self.open_regression)
+        self.as_tall_as_icons(self.regression_btn)
         self.regression_btn.pack(side="left")
         Tooltip(self.regression_btn,
                 "Fit a curve to the data of this sheet (Cmd/Ctrl+R)")
@@ -23114,19 +23250,21 @@ class App:
         self._place_menu(self.add_column_btn, self.COLUMN_PLACES,
                          "column_place", self.add_column)
 
-    def _show_plot_style_menu(self, _event=None):
-        menu = tk.Menu(self.root, tearoff=0)
-        for label, code, _desc in PLOT_STYLES:
-            def _choose(style=code):
-                self.set_plot_style(style)
-                self.open_plot(style)
-            menu.add_command(label=label, command=_choose)
-        try:
-            x = self.plot_split_btn.winfo_rootx()
-            y = self.plot_split_btn.winfo_rooty() + self.plot_split_btn.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
+    def _show_plot_style_menu(self, _event=None, popup=True):
+        """The list of the plot styles, each with the picture of its diagram."""
+        def choose(style):
+            self.set_plot_style(style)
+            self.open_plot(style)
+
+        entries = [(label, plot_style_icon(code),
+                    lambda style=code: choose(style))
+                   for label, code, _desc in PLOT_STYLES]
+        where = None
+        if popup:
+            where = (self.plot_split_btn.winfo_rootx(),
+                     self.plot_split_btn.winfo_rooty()
+                     + self.plot_split_btn.winfo_height())
+        return popup_icon_menu(self.root, entries, where)
 
     def set_plot_style(self, style):
         self.current_plot_style = style
@@ -24308,10 +24446,54 @@ class App:
             return False
         return True
 
-    def _column_renamed(self, old, new, index):
-        """A heading was edited: follow it in the open diagrams."""
+    def _column_renamed(self, old, new, index, table=None):
+        """A heading was edited: follow it in the diagrams of that sheet.
+
+        Only a diagram that really draws this sheet - opened from it, or
+        from a sheet glued to it with `Plot with previous tab` - follows
+        the new name.  Every other diagram is left alone: two sheets can
+        easily have a column of the same name (`Y4` in a fresh sheet and
+        `Y4` in a data file), and renaming one must never rename the curve
+        of the other.  In a group of sheets the curve may carry the name of
+        its sheet after it (`Y4 (Fit)`); that name is followed as well.
+        """
+        try:
+            sheet = self.tables.index(table) if table is not None else None
+        except ValueError:
+            sheet = None
+        if sheet is None:                  # the sheet is not known: the old way
+            for window in self.open_windows():
+                window.rename_series(old, new, is_x_column=(index == 0))
+            return 0
+        followed = 0
         for window in self.open_windows():
-            window.rename_series(old, new, is_x_column=(index == 0))
+            chain = self.tab_chain(self.window_tab(window))
+            if sheet not in chain:
+                continue                   # a diagram of another sheet
+            base_x, parts = self.chain_columns(chain)
+            names = next((found for number, _own, found in parts
+                          if number == sheet), {})
+            own_x = next((own for number, own, _found in parts
+                          if number == sheet), None)
+            first = bool(parts) and parts[0][0] == sheet
+            if new == own_x:               # the X column of this sheet
+                if first:                  # ...which is the X of the diagram
+                    window.rename_series(old, new, is_x_column=True)
+                    followed += 1
+                continue
+            if new not in names:
+                continue                   # not drawn from this sheet at all
+            drawn_new = names[new]
+            # ...and the name it was drawn under before: worked out the same
+            # way, as if the column were still called what it was
+            _x, before = self.chain_columns(chain, aliases={sheet: {new: old}})
+            drawn_old = next((found.get(new) for number, _own, found in before
+                              if number == sheet), None)
+            if drawn_old is not None and drawn_old != drawn_new \
+                    and drawn_old in window.series:
+                window.rename_series(drawn_old, drawn_new, is_x_column=False)
+                followed += 1
+        return followed
 
     def delete_column(self, name=None):
         """Delete the column of the selected cell, with its data."""
@@ -24411,7 +24593,7 @@ class App:
             last += 1
         return list(range(first, last + 1))
 
-    def chain_columns(self, chain):
+    def chain_columns(self, chain, aliases=None):
         """How the columns of a group of sheets are named in one diagram.
 
         Every sheet keeps its own column names, so that gluing two sheets
@@ -24422,7 +24604,12 @@ class App:
 
         It returns the name of the common X column and, for every sheet
         that has anything to draw, `(index, its own X, {column: name})`.
+
+        `aliases` ({sheet: {column: other name}}) works the names out as if
+        a column were still called something else - the name it had before
+        it was renamed, say.
         """
+        aliases = aliases or {}
         base_x, parts, taken = None, [], set()
         for number in chain:
             if not (0 <= number < len(self.tables)):
@@ -24437,13 +24624,15 @@ class App:
                 taken.add(str(base_x))
             title = str(self.notebook.tab(number, "text"))
             names = {}
+            renamed = aliases.get(number, {})
             for column in [one for one in frame.columns if one != own_x]:
-                name = str(column)
+                name = str(renamed.get(column, column))
+                column_shown = name
                 if name in taken:               # two curves of one name
-                    name = f"{column} ({title})"
+                    name = f"{column_shown} ({title})"
                     count = 2
                     while name in taken:
-                        name = f"{column} ({title} {count})"
+                        name = f"{column_shown} ({title} {count})"
                         count += 1
                 taken.add(name)
                 names[column] = name
