@@ -137,6 +137,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.backend_bases import MouseEvent
 from matplotlib.colors import to_hex, to_rgba
 from matplotlib.figure import Figure
@@ -151,7 +152,8 @@ from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                Formatter, FuncFormatter, LogFormatterSciNotation,
                                LogLocator, MultipleLocator, NullFormatter,
                                NullLocator)
-from matplotlib.transforms import Affine2D, Bbox, IdentityTransform, TransformedBbox
+from matplotlib.transforms import (Affine2D, Bbox, IdentityTransform,
+                                   ScaledTranslation, TransformedBbox)
 
 APP_NAME = "APlot"
 # who made it: the end of the description at the top, and the About window
@@ -165,6 +167,7 @@ PROJECT_MIMETYPE = "application/x-aplot"     # first, stored: "what am I"
 PROJECT_UTI = f"{APP_ID}.graph"  # what macOS calls the kind of file
 PROJECT_DOCUMENT = "document.json"           # the data and every diagram
 PROJECT_THUMBNAIL = "Thumbnails/thumbnail.png"   # a picture of the graph
+PROJECT_PREVIEW = "Thumbnails/preview.pdf"   # every diagram, one page each
 THUMBNAIL_SIZE = 2048           # the longer side of that picture, in pixels:
                                 # the Space bar preview shows it 1024 points
                                 # wide, which is still sharp on a Retina
@@ -672,7 +675,7 @@ def json_default(value):
     return str(value)
 
 
-def write_project_file(path, document, thumbnail=None):
+def write_project_file(path, document, thumbnail=None, preview=None):
     """Write one `.aplt` file: a ZIP container.
 
     Inside, in this order:
@@ -682,8 +685,10 @@ def write_project_file(path, document, thumbnail=None):
       from its first bytes (the way OpenDocument files do it),
     * `document.json` - the data and every diagram, exactly the JSON
       document the file used to be on its own,
-    * `Thumbnails/thumbnail.png` - a small picture of the graph, for the
-      file managers and for anyone who opens the container.
+    * `Thumbnails/thumbnail.png` - a picture of the first diagram, for the
+      icons of the file managers and for anyone who opens the container,
+    * `Thumbnails/preview.pdf` - every diagram of the file, one page each,
+      for the Space bar preview (and the PDF viewer on Linux).
 
     The file is written beside its final place and only then put there,
     so a save that fails half way never leaves a broken graph behind.
@@ -703,6 +708,10 @@ def write_project_file(path, document, thumbnail=None):
             if thumbnail:
                 # a PNG is compressed already
                 archive.writestr(PROJECT_THUMBNAIL, bytes(thumbnail),
+                                 compress_type=zipfile.ZIP_STORED)
+            if preview:
+                # ...and so are the drawings of a PDF, page by page
+                archive.writestr(PROJECT_PREVIEW, bytes(preview),
                                  compress_type=zipfile.ZIP_STORED)
         try:          # a new file gets the usual permissions, not 0600
             mode = (os.stat(path).st_mode & 0o777 if os.path.exists(path)
@@ -752,6 +761,15 @@ def read_project_thumbnail(path):
     try:
         with zipfile.ZipFile(os.fspath(path)) as archive:
             return archive.read(PROJECT_THUMBNAIL)
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+
+
+def read_project_preview(path):
+    """The PDF of every diagram stored in an `.aplt` file, or None."""
+    try:
+        with zipfile.ZipFile(os.fspath(path)) as archive:
+            return archive.read(PROJECT_PREVIEW)
     except (OSError, KeyError, zipfile.BadZipFile):
         return None
 
@@ -1528,6 +1546,501 @@ def register_with_launch_services(bundle):
     except (OSError, subprocess.SubprocessError):
         return False
     return done.returncode == 0
+
+
+# --------------------------------------------------------------------------
+# the graph files on a Linux desktop: kind of file, icon, thumbnail
+# --------------------------------------------------------------------------
+# `python3 aplot.py --install-desktop` writes the few small files the
+# freedesktop.org standards ask for, so that the file managers of Linux
+# (GNOME Files, Nemo, Caja, Thunar, PCManFM...) know an .aplt file: its
+# name, its icon, the picture of the graph as its thumbnail, and APlot as
+# the program that opens it.  Nothing is compiled; `--uninstall-desktop`
+# takes everything away again.
+
+DESKTOP_ID = "aplot"                          # aplot.desktop, the icon names
+DESKTOP_MIME_ICON = "application-x-aplot"     # the icon of the graph files
+DESKTOP_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
+THUMBNAILER_NAME = "aplot-thumbnailer"
+PREVIEW_NAME = "aplot-preview"              # every diagram, in the PDF viewer
+PREVIEW_MENU_NAME = "Preview all graphs (APlot)"   # the GNOME Files script
+SUSHI_VIEWER_NAME = f"{DESKTOP_ID}.js"      # ~/.local/share/sushi/viewers
+
+DESKTOP_MIME_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written by aplot.py (install-desktop): the kind of file APlot writes. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="{mime}">
+    <comment>{name} graph</comment>
+    <icon name="{icon}"/>
+    <glob pattern="*{suffix}"/>
+    <magic priority="60">
+      <match type="string" offset="30" value="mimetype{mime}"/>
+    </magic>
+  </mime-type>
+</mime-info>
+"""
+
+DESKTOP_THUMBNAILER = """[Thumbnailer Entry]
+TryExec={script}
+Exec={command} %i %o %s
+MimeType={mime};
+"""
+
+DESKTOP_ENTRY = """[Desktop Entry]
+Type=Application
+Name={name}
+GenericName=Data plotting
+Comment=Spreadsheet and publication quality diagrams
+Exec={command} %f
+Icon={icon}
+Terminal=false
+StartupNotify=true
+Categories=Science;DataVisualization;
+MimeType={mime};
+"""
+
+THUMBNAILER_SCRIPT = '''#!/usr/bin/env python3
+"""aplot-thumbnailer - the picture of an APlot graph, for the file managers.
+
+Written by `aplot.py --install-desktop`.  A file manager calls it as
+
+    aplot-thumbnailer INPUT OUTPUT SIZE
+
+and it copies the picture APlot stores in every graph it saves (the entry
+Thumbnails/thumbnail.png of the .aplt ZIP container) into OUTPUT, as a PNG
+no larger than SIZE pixels.  A graph without a picture - one saved by an
+older APlot, which is plain JSON - is refused, and the file manager shows
+the icon of the kind of file instead.  Only the standard library is
+needed; Pillow, when it is there, makes the picture exactly SIZE large.
+"""
+import io
+import sys
+import zipfile
+from urllib.parse import unquote, urlparse
+
+ENTRY = "Thumbnails/thumbnail.png"
+
+
+def main(argv):
+    if len(argv) < 3:
+        sys.stderr.write("usage: aplot-thumbnailer INPUT OUTPUT [SIZE]\\n")
+        return 2
+    source, target = argv[1], argv[2]
+    if source.startswith("file://"):         # some file managers pass a URI
+        source = unquote(urlparse(source).path)
+    try:
+        size = int(argv[3]) if len(argv) > 3 else 256
+    except ValueError:
+        size = 256
+    try:
+        with zipfile.ZipFile(source) as archive:
+            data = archive.read(ENTRY)
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return 1                              # no picture in this file
+    try:
+        from PIL import Image
+    except ImportError:
+        Image = None
+    if Image is not None and size > 0:
+        try:
+            picture = Image.open(io.BytesIO(data))
+            picture.load()
+            picture.thumbnail((size, size))
+            picture.save(target, "PNG")
+            return 0
+        except (OSError, ValueError):
+            pass                              # the plain copy below
+    with open(target, "wb") as handle:
+        handle.write(data)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+'''
+
+
+PREVIEW_SCRIPT = '''#!/usr/bin/env python3
+"""aplot-preview - every diagram of APlot graphs, in the PDF viewer.
+
+Written by `aplot.py --install-desktop`.  It is what "Preview all graphs"
+runs - in the "Open With" list of the file managers, as a script of GNOME
+Files and in the menu of KDE's Dolphin:
+
+    aplot-preview GRAPH.aplt [MORE.aplt ...]
+
+APlot stores every diagram of a graph as one page of a PDF inside the
+.aplt file (Thumbnails/preview.pdf).  That PDF is copied into a folder of
+its own and opened with the PDF viewer of the desktop, where the diagrams
+are paged through and zoomed as in any document.  A graph saved by an
+older APlot has only the picture of one diagram, which is opened instead.
+
+    aplot-preview --extract GRAPH.aplt
+
+only copies the PDF (or the picture) out and prints where it is: that is
+how the Space bar preview of GNOME Files (Sushi) gets it.
+"""
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from urllib.parse import unquote, urlparse
+
+ENTRIES = (("Thumbnails/preview.pdf", ".pdf"), ("Thumbnails/thumbnail.png", ".png"))
+
+
+def say(message):
+    """Tell the user - in a desktop notification when there is one."""
+    sys.stderr.write(message + "\\n")
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", "APlot", message], check=False)
+
+
+def folder():
+    base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+    place = os.path.join(base, "aplot-preview")
+    os.makedirs(place, exist_ok=True)
+    return place
+
+
+def show(path):
+    """Open one file with the program the desktop chose for it."""
+    for command in (["xdg-open", path], ["gio", "open", path]):
+        if shutil.which(command[0]):
+            subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            return True
+    say("There is no program to open " + path)
+    return False
+
+
+def copy_out(source):
+    """The PDF (or else the picture) of the graph `source`, copied into a
+    file of its own; its path, or None when the graph carries neither."""
+    if source.startswith("file://"):
+        source = unquote(urlparse(source).path)
+    name = os.path.splitext(os.path.basename(source))[0] or "graph"
+    try:
+        with zipfile.ZipFile(source) as archive:
+            names = set(archive.namelist())
+            for entry, suffix in ENTRIES:
+                if entry in names:
+                    target = os.path.join(folder(), name + suffix)
+                    part = target + ".part"
+                    with open(part, "wb") as handle:
+                        handle.write(archive.read(entry))
+                    os.replace(part, target)
+                    return target
+    except (OSError, KeyError, zipfile.BadZipFile):
+        pass
+    return None
+
+
+def preview(source):
+    target = copy_out(source)
+    if target is not None:
+        return show(target)
+    say(os.path.basename(source) + " carries no preview: open it in APlot "
+        "and save it once.")
+    return False
+
+
+def main(argv):
+    if len(argv) == 3 and argv[1] == "--extract":
+        target = copy_out(argv[2])
+        if target is None:
+            return 1
+        print(target)
+        return 0
+    if len(argv) < 2 or argv[1].startswith("--"):
+        sys.stderr.write("usage: aplot-preview GRAPH.aplt [MORE.aplt ...]\\n"
+                         "       aplot-preview --extract GRAPH.aplt\\n")
+        return 2
+    shown = [preview(one) for one in argv[1:]]
+    return 0 if all(shown) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+'''
+
+DESKTOP_PREVIEW_ENTRY = """[Desktop Entry]
+Type=Application
+Name=Preview all graphs ({name})
+Comment=Every diagram of the graph, in the PDF viewer
+Exec={command} %F
+Icon={icon}
+Terminal=false
+NoDisplay=true
+MimeType={mime};
+"""
+
+DESKTOP_SERVICE_MENU = """[Desktop Entry]
+Type=Service
+MimeType={mime};
+Actions=aplotPreview;
+X-KDE-Priority=TopLevel
+
+[Desktop Action aplotPreview]
+Name=Preview all graphs ({name})
+Icon={icon}
+Exec={command} %F
+"""
+
+NAUTILUS_SCRIPT = """#!/bin/sh
+# Written by aplot.py (install-desktop): every diagram of the chosen graphs.
+exec {command} "$@"
+"""
+
+# The Space bar preview of GNOME Files is Sushi (the "NautilusPreviewer").
+# It loads extra viewers written in JavaScript from
+# ~/.local/share/sushi/viewers - for one user only - and this one hands
+# the PDF of a graph to Sushi's own document viewer.
+SUSHI_VIEWER = """// aplot.js - APlot graphs in the Space bar preview of GNOME Files (Sushi).
+//
+// Written by `aplot.py --install-desktop`.  Sushi loads every viewer it
+// finds in ~/.local/share/sushi/viewers; this one takes the graphs of
+// APlot ({mime}).  The PDF that APlot stores in a graph - one page for
+// every diagram (Thumbnails/preview.pdf) - is copied out by aplot-preview
+// and shown by Sushi's own document viewer, with its page buttons.  A graph
+// with only a picture shows the picture, and a graph with neither (plain
+// JSON, saved by an older APlot) what Sushi shows for any other file.
+
+const {{Gio, GLib}} = imports.gi;
+const ByteArray = imports.byteArray;
+
+const HELPER = {helper};
+
+var mimeTypes = [{mimes}];
+
+function copiedOut(file) {{
+    let path = file.get_path();
+    if (!path)
+        return null;
+    try {{
+        let [, out] = GLib.spawn_sync(null, [HELPER, '--extract', path], null,
+                                      GLib.SpawnFlags.DEFAULT, null);
+        let copy = ByteArray.toString(out).trim();
+        if (copy && GLib.file_test(copy, GLib.FileTest.IS_REGULAR))
+            return Gio.File.new_for_path(copy);
+    }} catch (e) {{
+        logError(e, 'APlot: the preview of ' + path + ' cannot be copied out');
+    }}
+    return null;
+}}
+
+// Sushi calls `new Klass(file, fileInfo)`; what this returns is one of
+// Sushi's own viewers, given the copied-out preview instead of the graph.
+var Klass = function APlotRenderer(file, fileInfo) {{
+    let copy = copiedOut(file);
+    if (copy) {{
+        let info = copy.query_info('standard::*', Gio.FileQueryInfoFlags.NONE, null);
+        let kind = info.get_content_type();
+        if (Gio.content_type_is_a(kind, 'application/pdf'))
+            return new imports.viewers.evince.Klass(copy, info);
+        if (Gio.content_type_is_a(kind, 'image/png'))
+            return new imports.viewers.image.Klass(copy, info);
+    }}
+    return new imports.ui.fallbackRenderer.FallbackRenderer(file, fileInfo);
+}};
+"""
+
+
+def desktop_quote(argument):
+    """One argument of an `Exec=` line, quoted as the Desktop Entry
+    specification asks (and escaped once more for the key file)."""
+    text = str(argument)
+    if text and not any(ch in text for ch in ' \t\n"\'\\><~|&;$*?#()`'):
+        quoted = text
+    else:
+        inner = (text.replace("\\", "\\\\").replace('"', '\\"')
+                 .replace("`", "\\`").replace("$", "\\$"))
+        quoted = f'"{inner}"'
+    return quoted.replace("\\", "\\\\").replace("%", "%%")
+
+
+def _sudo_user():
+    """(home, uid, gid) of the user who ran `sudo`, or None."""
+    name = os.environ.get("SUDO_USER")
+    if not name or name == "root":
+        return None
+    try:
+        import pwd
+        entry = pwd.getpwnam(name)
+    except (ImportError, KeyError):
+        return None
+    return Path(entry.pw_dir), entry.pw_uid, entry.pw_gid
+
+
+def sushi_viewer_path(system=False, prefix=None):
+    """Where the Space bar viewer of GNOME Files (Sushi) goes, or None.
+
+    Sushi reads extra viewers only from the data folder of the user
+    (~/.local/share/sushi/viewers), never from a folder for everybody, so
+    an install for every user puts it into the home of the one who ran
+    `sudo` - and there is none to put it into when root ran it directly.
+    """
+    tail = Path("share") / "sushi" / "viewers" / SUSHI_VIEWER_NAME
+    if prefix is not None:
+        return Path(prefix).expanduser() / tail
+    if not system:
+        return Path.home() / ".local" / tail
+    user = _sudo_user()
+    return None if user is None else user[0] / ".local" / tail
+
+
+def linux_desktop_paths(system=False, prefix=None):
+    """Where every file of the desktop integration goes.
+
+    For one user (the default) everything lies under ~/.local; with
+    `system` (run through sudo) under /usr/local, for every user of the
+    computer - which is what GNOME Files needs for the thumbnails, because
+    it runs a thumbnailer in a sandbox that cannot look into the home
+    folder.  `prefix` puts it all somewhere else (used by the tests).
+    """
+    if prefix is not None:
+        root = Path(prefix).expanduser()
+    elif system:
+        root = Path("/usr/local")
+    else:
+        root = Path.home() / ".local"
+    share = root / "share"
+    paths = {
+        "root": root, "share": share,
+        "mime": share / "mime" / "packages" / f"{DESKTOP_ID}.xml",
+        "mime_db": share / "mime",
+        "script": root / "bin" / THUMBNAILER_NAME,
+        "thumbnailer": share / "thumbnailers" / f"{DESKTOP_ID}.thumbnailer",
+        "desktop": share / "applications" / f"{DESKTOP_ID}.desktop",
+        "applications": share / "applications",
+        # "Preview all graphs": the program, its line in "Open With", the
+        # menu of Dolphin (both kinds of KDE) and a script of GNOME Files
+        "preview": root / "bin" / PREVIEW_NAME,
+        "preview_desktop": share / "applications" / f"{DESKTOP_ID}-preview.desktop",
+        "service_menu": share / "kio" / "servicemenus" / f"{DESKTOP_ID}-preview.desktop",
+        "service_menu_5": share / "kservices5" / "ServiceMenus" / f"{DESKTOP_ID}-preview.desktop",
+        "nautilus": share / "nautilus" / "scripts" / PREVIEW_MENU_NAME,
+        "icons": share / "icons" / "hicolor",
+        # the Space bar of GNOME Files (None: there is no user to give it to)
+        "sushi": sushi_viewer_path(system, prefix),
+    }
+    for size in DESKTOP_ICON_SIZES:
+        folder = paths["icons"] / f"{size}x{size}"
+        paths[f"mime_icon_{size}"] = folder / "mimetypes" / f"{DESKTOP_MIME_ICON}.png"
+        paths[f"app_icon_{size}"] = folder / "apps" / f"{DESKTOP_ID}.png"
+    return paths
+
+
+def _run_quietly(command):
+    """Run a helper of the desktop, if it is installed; True when it worked."""
+    if shutil.which(command[0]) is None:
+        return False
+    try:
+        done = subprocess.run(command, capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def install_linux_desktop(system=False, prefix=None, program=None,
+                          python=None, refresh=True):
+    """Write the kind of file, its icon, the thumbnailer and APlot's entry.
+
+    `program` is the aplot.py that the double click starts (this file by
+    default) and `python` the interpreter that runs it (the one running
+    now).  Returns the list of the files written.
+    """
+    paths = linux_desktop_paths(system, prefix)
+    program = Path(program or __file__).resolve()
+    python = python or sys.executable or "python3"
+    written = []
+
+    def write(key, content, mode=0o644, owner=None):
+        target = paths[key]
+        made = [folder for folder in reversed(target.parents)
+                if not folder.exists()]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+        os.chmod(target, mode)
+        if owner is not None:           # a file in the home of someone else
+            for one in made + [target]:
+                try:
+                    os.chown(one, *owner)
+                except OSError:
+                    pass
+        written.append(target)
+
+    write("mime", DESKTOP_MIME_XML.format(
+        mime=PROJECT_MIMETYPE, name=APP_NAME, icon=DESKTOP_MIME_ICON,
+        suffix=PROJECT_SUFFIX))
+    write("script", THUMBNAILER_SCRIPT, mode=0o755)
+    write("thumbnailer", DESKTOP_THUMBNAILER.format(
+        script=paths["script"], command=desktop_quote(paths["script"]),
+        mime=PROJECT_MIMETYPE))
+    write("desktop", DESKTOP_ENTRY.format(
+        name=APP_NAME, icon=DESKTOP_ID, mime=PROJECT_MIMETYPE,
+        command=f"{desktop_quote(python)} {desktop_quote(program)}"))
+    write("preview", PREVIEW_SCRIPT, mode=0o755)
+    preview = desktop_quote(paths["preview"])
+    write("preview_desktop", DESKTOP_PREVIEW_ENTRY.format(
+        name=APP_NAME, icon=DESKTOP_ID, mime=PROJECT_MIMETYPE,
+        command=preview))
+    # KDE only runs the menu files of a user that may be run (executable)
+    for key in ("service_menu", "service_menu_5"):
+        write(key, DESKTOP_SERVICE_MENU.format(
+            name=APP_NAME, icon=DESKTOP_ID, mime=PROJECT_MIMETYPE,
+            command=preview), mode=0o755)
+    if not system:                      # GNOME Files keeps scripts per user
+        write("nautilus", NAUTILUS_SCRIPT.format(
+            command=shlex.quote(str(paths["preview"]))), mode=0o755)
+    if paths["sushi"] is not None:      # the Space bar of GNOME Files
+        user = _sudo_user() if system and prefix is None else None
+        write("sushi", SUSHI_VIEWER.format(
+            mime=PROJECT_MIMETYPE, mimes=json.dumps(PROJECT_MIMETYPE),
+            helper=json.dumps(str(paths["preview"]))),
+            owner=None if user is None else user[1:])
+    for size in DESKTOP_ICON_SIZES:
+        write(f"mime_icon_{size}", document_icon_png(size))
+        write(f"app_icon_{size}", app_icon_png(size))
+    if refresh:
+        _run_quietly(["update-mime-database", str(paths["mime_db"])])
+        _run_quietly(["update-desktop-database", str(paths["applications"])])
+        _run_quietly(["gtk-update-icon-cache", "-f", "-t", str(paths["icons"])])
+        if not system and prefix is None:  # APlot opens the graphs of this user
+            _run_quietly(["xdg-mime", "default", f"{DESKTOP_ID}.desktop",
+                          PROJECT_MIMETYPE])
+    return written
+
+
+def uninstall_linux_desktop(system=False, prefix=None, refresh=True):
+    """Take away everything `install_linux_desktop` wrote; the files removed."""
+    paths = linux_desktop_paths(system, prefix)
+    keys = ["mime", "script", "thumbnailer", "desktop", "preview",
+            "preview_desktop", "service_menu", "service_menu_5", "nautilus",
+            "sushi"]
+    keys += [f"{kind}_icon_{size}" for size in DESKTOP_ICON_SIZES
+             for kind in ("mime", "app")]
+    removed = []
+    for key in keys:
+        target = paths[key]
+        if target is None:
+            continue
+        try:
+            if target.is_file():
+                target.unlink()
+                removed.append(target)
+        except OSError:
+            continue
+    if refresh:
+        _run_quietly(["update-mime-database", str(paths["mime_db"])])
+        _run_quietly(["update-desktop-database", str(paths["applications"])])
+        _run_quietly(["gtk-update-icon-cache", "-f", "-t", str(paths["icons"])])
+    return removed
 
 
 def running_from_bundle():
@@ -2786,6 +3299,8 @@ TAB_BAR_HEIGHT = 26          # the height of the row of tabs, in pixels
 TAB_PAD = 12                 # the room left and right of a tab's name
 TAB_SCROLL_STEP = 80         # how far one click on an arrow scrolls, pixels
 TAB_GAP = 2                  # the free room between two tabs
+TAB_DRAG_START = 6           # pixels the pointer moves before a tab is dragged
+TAB_DROP_MARK = "#2f80d9"    # the line that shows where a dragged tab lands
 # the tabs wear the dark grey of the buttons of the toolbar (as macOS draws
 # them) with light writing; the one in front is a shade lighter and bold
 TAB_FACE = "#56565a"         # a tab that is not in front
@@ -2879,6 +3394,7 @@ class SheetTabBar(ttk.Frame):
         self.handlers = dict(handlers or {})
         self._spans = []             # (left, right) of every tab, canvas x
         self._hover = None
+        self._tab_drag = None        # a tab being carried to another place
         self._pending = None
         self._shown = None           # the tab that was in front last time
         background = self._background(master)
@@ -2914,6 +3430,7 @@ class SheetTabBar(ttk.Frame):
 
         canvas = self.canvas
         canvas.bind("<ButtonPress-1>", self._pressed)
+        canvas.bind("<B1-Motion>", self._dragged)
         canvas.bind("<ButtonRelease-1>", self._released)
         canvas.bind("<Double-Button-1>", self._double)
         for sequence in ("<Button-2>", "<Button-3>"):
@@ -3163,9 +3680,86 @@ class SheetTabBar(ttk.Frame):
         index = self.tab_at(here.x, here.y)
         if index is not None and index != self.selected():
             self.notebook.select(index)
+        plus = self.plus_index()
+        self._tab_drag = (None if index is None or index == plus else
+                          {"index": index, "x": here.x, "moving": False,
+                           "target": index})
         return self._call("press", here)
 
+    # -- carrying a tab to another place -----------------------------------
+    def drop_place(self, x):
+        """Where a tab dropped at `x` (pixels of the row) would stand.
+
+        The answer is the number the tab gets once it is there; it is found
+        from the middles of the other tabs, as in a web browser.
+        """
+        self.flush()
+        drag = self._tab_drag or {}
+        source = drag.get("index")
+        inside = x - self.canvas.winfo_x() + self.offset()
+        before = sum(1 for index, (left, right) in enumerate(self._spans)
+                     if index != source and (left + right) / 2.0 < inside)
+        return before
+
+    def _dragged(self, event):
+        drag = self._tab_drag
+        if drag is None:
+            return None
+        here = self._event(event)
+        if not drag["moving"]:
+            if abs(here.x - drag["x"]) < TAB_DRAG_START:
+                return None
+            drag["moving"] = True
+            try:
+                self.canvas.configure(cursor="sb_h_double_arrow")
+            except tk.TclError:
+                pass
+        # near an end of the row it scrolls, so a far place can be reached
+        left_edge = self.canvas.winfo_x()
+        right_edge = left_edge + self.view_width()
+        if self.overflow:
+            if here.x < left_edge + 18:
+                self.scroll_by(-12)
+            elif here.x > right_edge - 18:
+                self.scroll_by(12)
+        drag["target"] = self.drop_place(here.x)
+        self._show_drop(drag["target"])
+        return "break"
+
+    def _show_drop(self, place):
+        """A line in the gap where the tab would land."""
+        canvas = self.canvas
+        canvas.delete("drop")
+        drag = self._tab_drag or {}
+        others = [span for index, span in enumerate(self._spans)
+                  if index != drag.get("index")]
+        if not others:
+            return None
+        if place <= 0:
+            x = others[0][0] - 1
+        elif place >= len(others):
+            x = others[-1][1] + 1
+        else:
+            x = (others[place - 1][1] + others[place][0]) / 2.0
+        canvas.create_line(x, 0, x, TAB_BAR_HEIGHT - 2, fill=TAB_DROP_MARK,
+                           width=3, tags="drop")
+        return x
+
+    def _end_drag(self):
+        drag, self._tab_drag = self._tab_drag, None
+        try:
+            self.canvas.delete("drop")
+            self.canvas.configure(cursor="")
+        except tk.TclError:
+            pass
+        return drag
+
     def _released(self, event):
+        drag = self._end_drag()
+        if drag is not None and drag["moving"]:
+            if drag["target"] != drag["index"]:
+                self._call("move", (drag["index"], drag["target"]))
+            return "break"           # a drag is not a click (no renaming)
         return self._call("click", self._event(event))
 
     def _double(self, event):
@@ -6035,7 +6629,7 @@ class TitleTab(DiagramMirror, ttk.Frame):
                                            plot.fonts["title_pad"])
         plot.ax.set_title(self.title_var.get(), fontsize=plot.fonts["title"],
                           color=plot.fonts["title_color"],
-                          pad=plot.points(plot.fonts["title_pad"]))
+                          pad=plot.page_points(plot.fonts["title_pad"]))
         plot.ax.title.set_picker(True)
         plot.apply_text_offset("title")
         plot.refresh_legend()
@@ -10797,7 +11391,7 @@ def scale_style_document(document, factor):
             touch(axis.get("grid"), ("width",), length)
     offsets = document.get("text_offsets") or {}
     for name, value in list(offsets.items()):
-        try:                      # how far a text was dragged, in pixels
+        try:                      # how far a text was dragged (points)
             offsets[name] = [float(value[0]) * factor,
                              float(value[1]) * factor]
         except (TypeError, ValueError, IndexError):
@@ -11508,9 +12102,7 @@ class PlotWindow(tk.Toplevel):
         # three times over for every push
         with QuietDraws(self):
             # the dragged distances of the title and the axis labels are in
-            # pixels of the screen, so they grow with the view
-            self.text_offset = {name: (value[0] * ratio, value[1] * ratio)
-                                for name, value in self.text_offset.items()}
+            # points of the page: they follow the new resolution by themselves
             self.fig.set_dpi(self.render_dpi())
             self._layout_page()
             self.update_idletasks()      # the widget takes its new size now
@@ -13871,7 +14463,8 @@ class PlotWindow(tk.Toplevel):
             "                               LogFormatterSciNotation, LogLocator,",
             "                               MultipleLocator, NullFormatter,",
             "                               NullLocator)",
-            "from matplotlib.transforms import Affine2D, Bbox, TransformedBbox",
+            "from matplotlib.transforms import (Affine2D, Bbox, ScaledTranslation,",
+            "                                   TransformedBbox)",
             "",
         ]
         out += self._script_data()
@@ -14417,11 +15010,11 @@ class PlotWindow(tk.Toplevel):
             dx, dy = self.text_offset.get(name, (0.0, 0.0))
             if not dx and not dy:
                 continue
-            dx, dy = float(dx) / self.zoom, float(dy) / self.zoom
+            dx, dy = float(dx), float(dy)          # points of the page
             if name == "title":
                 out.append("ax._autotitlepos = False")
             out.append("%s.set_transform(%s.get_transform() + "
-                       "Affine2D().translate(%s, %s))"
+                       "ScaledTranslation(%s / 72, %s / 72, fig.dpi_scale_trans))"
                        % (artist, artist, lit(dx), lit(dy)))
         return out
 
@@ -14617,11 +15210,11 @@ class PlotWindow(tk.Toplevel):
                        "size": self.fonts["legend"],
                        "color": safe_hex(self.fonts["legend_color"], "#000000")},
             "frame": dict(self.frame_cfg),
-            # in pixels of the page itself, so that the file does not
-            # depend on how far the view happened to be zoomed in
-            "text_offsets": {name: [float(value[0]) / self.zoom,
-                                    float(value[1]) / self.zoom]
+            # in points of the page, so that the file depends neither on
+            # the zoom of the view nor on the screen it was made on
+            "text_offsets": {name: [float(value[0]), float(value[1])]
                              for name, value in self.text_offset.items()},
+            "text_offset_unit": "pt",
             # a name beginning with "_" is something the program keeps for
             # itself (the pixels of a picture), not a part of the graph
             "shapes": [{**{key_: (float(value)
@@ -14795,13 +15388,17 @@ class PlotWindow(tk.Toplevel):
         self.ax.set_title(title.get("text", self.ax.get_title()),
                           fontsize=self.fonts["title"],
                           color=safe_hex(self.fonts["title_color"], "#000000"),
-                          pad=self.points(self.fonts["title_pad"]))
+                          pad=self.page_points(self.fonts["title_pad"]))
         self.ax.title.set_picker(True)
 
+        # points since the unit is written down; before that, pixels of the
+        # page at its own resolution
+        to_points = (1.0 if state.get("text_offset_unit") == "pt"
+                     else 72.0 / (float(self.base_dpi) * self.screen_ratio()))
         for name, value in (state.get("text_offsets") or {}).items():
             if name in self.text_offset and value:
-                self.text_offset[name] = (float(value[0]) * self.zoom,
-                                          float(value[1]) * self.zoom)
+                self.text_offset[name] = (float(value[0]) * to_points,
+                                          float(value[1]) * to_points)
         self.apply_text_offsets()
 
         self.apply_series_stack()      # the curves first: the drawings that
@@ -14898,7 +15495,7 @@ class PlotWindow(tk.Toplevel):
             title = str(plot_cfg["title_template"])
         self.ax.set_title(title, fontsize=self.fonts["title"],
                           color=safe_hex(self.fonts["title_color"], "#000000"),
-                          pad=self.points(self.fonts["title_pad"]))
+                          pad=self.page_points(self.fonts["title_pad"]))
         self.ax.set_xlabel(x_col)
         self.ax.set_ylabel(str(plot_cfg["y_label"]))
         for which in ("x", "y"):
@@ -14931,12 +15528,12 @@ class PlotWindow(tk.Toplevel):
             if which == "y2" and self.ax2 is None:
                 continue
             ax, axis, axis_name = self._axis_pair(which)
-            axis.labelpad = self.points(self.axis_cfg[which]["label_pad"])
+            axis.labelpad = self.page_points(self.axis_cfg[which]["label_pad"])
             ax.tick_params(axis=axis_name, which="both",
-                           pad=self.points(self.axis_cfg[which]["tick_pad"]))
+                           pad=self.page_points(self.axis_cfg[which]["tick_pad"]))
         self.ax.set_title(self.ax.get_title(), fontsize=self.fonts["title"],
                           color=safe_hex(self.fonts["title_color"], "#000000"),
-                          pad=self.points(self.fonts["title_pad"]))
+                          pad=self.page_points(self.fonts["title_pad"]))
         self.ax.title.set_picker(True)
         self.apply_text_offsets()
 
@@ -15934,7 +16531,7 @@ class PlotWindow(tk.Toplevel):
                 self.ax.set_title(
                     text, fontsize=self.fonts["title"],
                     color=safe_hex(self.fonts["title_color"], "#000000"),
-                    pad=self.points(self.fonts["title_pad"]))
+                    pad=self.page_points(self.fonts["title_pad"]))
                 self.ax.title.set_picker(True)
                 self.apply_text_offset("title")   # set_title resets the place
             else:
@@ -17307,10 +17904,10 @@ class PlotWindow(tk.Toplevel):
             return False
         dx, dy = self._axes_delta(dx_pixels, dy_pixels)
         if kind == "text":
-            # the title and the axis labels are shifted in pixels already
+            # the title and the axis labels keep their shift in points
             offset = self.text_offset[key]
-            self.text_offset[key] = (offset[0] + float(dx_pixels),
-                                     offset[1] + float(dy_pixels))
+            self.text_offset[key] = (offset[0] + self.points(dx_pixels),
+                                     offset[1] + self.points(dy_pixels))
             self.apply_text_offset(key)
         elif kind == "legend":
             position = (float(state["pos"][0]) + dx,
@@ -17409,6 +18006,24 @@ class PlotWindow(tk.Toplevel):
         if paper == "none":
             return "#ffffff"
         return safe_hex(paper, "#ffffff")
+
+    def preview_page(self, pdf):
+        """This diagram as one page of the preview PDF (`PdfPages`)."""
+        selection = self.selection
+        self.select_object(None, None)
+        self.hide_group_marks(True)
+        try:
+            self.canvas.draw()
+            pdf.savefig(self.fig, bbox_inches="tight",
+                        pad_inches=THUMBNAIL_PAD, transparent=False,
+                        facecolor=self.thumbnail_background(),
+                        edgecolor="none")
+        finally:
+            self.hide_group_marks(False)
+            if selection is not None:
+                self.select_object(*selection)
+            self.canvas.draw_idle()
+        return True
 
     def thumbnail_png(self, size=THUMBNAIL_SIZE):
         """A small picture of the graph, as PNG bytes.
@@ -18005,7 +18620,13 @@ class PlotWindow(tk.Toplevel):
             return
         dx, dy = self.text_offset.get(name, (0.0, 0.0))
         if dx or dy:
-            artist.set_transform(base + Affine2D().translate(dx, dy))
+            # the distance is kept in points of the page and handed to
+            # matplotlib as such: it grows and shrinks with the resolution
+            # the figure is drawn at - the zoom of the view, a Retina
+            # screen, a copied or saved picture - exactly as the fonts and
+            # the axes do, so a moved label never creeps onto its axis
+            artist.set_transform(base + ScaledTranslation(
+                float(dx) / 72.0, float(dy) / 72.0, self.fig.dpi_scale_trans))
         else:
             artist.set_transform(base)
         if name == "title":
@@ -18225,9 +18846,9 @@ class PlotWindow(tk.Toplevel):
                 self._move_note(name[len(NOTE_KEY):],
                                 (drag["offset"][0] + now[0] - start[0],
                                  drag["offset"][1] + now[1] - start[1]))
-            else:
-                self.text_offset[name] = (drag["offset"][0] + dx,
-                                          drag["offset"][1] + dy)
+            else:                             # pixels of the view -> points
+                self.text_offset[name] = (drag["offset"][0] + self.points(dx),
+                                          drag["offset"][1] + self.points(dy))
                 self.apply_text_offset(name)
             self._refresh_highlight()
             self.draw()
@@ -18455,7 +19076,17 @@ class PlotWindow(tk.Toplevel):
                                fonts.get("tick_label_pad", 5.0)))
 
     def points(self, pixels):
+        """Pixels of the view (as the pointer moves them) in points."""
         return float(pixels) * 72.0 / float(self.fig.get_dpi())
+
+    def page_points(self, pixels):
+        """Pixels of the page itself - the unit of every distance setting
+        (`Label offset [px]`, `Number offset [px]`, the title distance) - in
+        points.  A pixel of the page is one at 100 % zoom, so the distances
+        stay the same on the paper whatever the view is zoomed to, and in
+        every picture made of the graph, as the fonts do."""
+        return float(pixels) * 72.0 / float(getattr(self, "base_dpi", 0)
+                                            or self.fig.get_dpi())
 
     def pixels(self, points):
         return float(points) * float(self.fig.get_dpi()) / 72.0
@@ -18602,9 +19233,9 @@ class PlotWindow(tk.Toplevel):
         axis.label.set_color(label_color)
         axis.label.set_visible(label_on)     # the section switch of the dialog
         axis.label.set_picker(True)
-        axis.labelpad = self.points(label_pad)      # distance of the label
+        axis.labelpad = self.page_points(label_pad)  # distance of the label
         ax.tick_params(axis=axis_name, which="both", labelsize=tick_size,
-                       labelcolor=tick_color, pad=self.points(tick_pad))
+                       labelcolor=tick_color, pad=self.page_points(tick_pad))
 
         # the scale comes first: telling matplotlib about it throws away
         # the tick locators, which the range below sets.  The height of the
@@ -19525,7 +20156,7 @@ class PlotWindow(tk.Toplevel):
             if distance is not None:
                 self.fonts["title_pad"] = distance
             self.ax.set_title(text, fontsize=size, color=color,
-                              pad=self.points(self.fonts["title_pad"]))
+                              pad=self.page_points(self.fonts["title_pad"]))
             self.ax.title.set_picker(True)
             self.apply_text_offset("title")   # set_title resets the placement
             self.draw()
@@ -19619,6 +20250,8 @@ It also answers a few questions on the command line:
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
+    python3 aplot.py --install-desktop   Linux: icons, thumbnails and
+                                         "open with" for .aplt (see below)
 
 
 ## What it needs
@@ -19756,9 +20389,11 @@ From a terminal a graph can be opened the same way:
 
 #### The picture of the graph in the Finder, and the Space bar
 
-Every graph carries a **picture of itself** (see `4. Files`).  To make the
-Finder show that picture as the icon of the file, and show it large when
-the Space bar is pressed, macOS needs two small **Quick Look extensions**.
+Every graph carries a **picture of itself** and a **PDF of all its
+diagrams** (see `4. Files`).  To make the Finder show the picture - the
+first diagram of the file - as the icon of the file, and show every
+diagram, one page each, when the Space bar is pressed, macOS needs two
+small **Quick Look extensions**.
 They cannot be written in Python: they are in the separate
 `APlotQuickLook` folder, in Swift, with a script that builds and installs
 them - Xcode (free in the App Store) is all it needs:
@@ -19768,7 +20403,83 @@ them - Xcode (free in the App Store) is all it needs:
     sh install.sh
 
 `APlotQuickLook/README.md` explains the rest, including what to do when
-macOS does not take the extensions at once.
+macOS does not take the extensions at once.  In the Space bar window the
+pages are scrolled through like a PDF (the sidebar button shows them all
+small); a graph saved before the PDF came in shows its one picture until
+it is saved again.  Extensions built before that version show only the
+picture as well: run `sh build.sh` and `sh install.sh` once more.
+
+#### The graph files on a Linux desktop
+
+On Linux one command does it all - nothing is compiled:
+
+    python3 aplot.py --install-desktop
+
+It writes the few small files the freedesktop.org standards ask for, under
+`~/.local` for the user who runs it:
+
+| File | What it does |
+| --- | --- |
+| `share/mime/packages/aplot.xml` | names the kind of file `application/x-aplot` - by the `.aplt` extension, and by the first bytes of the file, so a graph without its extension is known too |
+| `share/icons/hicolor/.../application-x-aplot.png` | the icon of the graph files (the sheet with the spectrum), in eight sizes, and APlot's own icon beside it |
+| `bin/aplot-thumbnailer` | a tiny program that copies the picture stored in a graph out of it, at the size the file manager asks for |
+| `share/thumbnailers/aplot.thumbnailer` | tells the file managers to use it for the graphs |
+| `share/applications/aplot.desktop` | APlot in the application menu, and as the program that opens a graph with a double click |
+| `bin/aplot-preview` | opens the PDF of every diagram of a graph in the PDF viewer of the desktop |
+| `share/applications/aplot-preview.desktop` | puts **Preview all graphs (APlot)** in the `Open With` list of the graphs (it is not in the application menu) |
+| `share/kio/servicemenus/aplot-preview.desktop` | the same in the right-click menu of KDE's Dolphin (and under `kservices5/ServiceMenus` for Plasma 5) |
+| `share/nautilus/scripts/Preview all graphs (APlot)` | the same under `Scripts` in the right-click menu of GNOME Files (only for one user: GNOME Files has no scripts for every user) |
+| `share/sushi/viewers/aplot.js` | the Space bar preview of GNOME Files: every diagram, page by page (always in the home folder of a user, see below) |
+
+The databases of the desktop are brought up to date at once
+(`update-mime-database`, `update-desktop-database`, the icon cache), and
+APlot is made the program that opens the graphs.  Then restart the file
+manager (GNOME Files: `nautilus -q`) and, if it had given up on the graphs
+before, remove its list of failures: `rm -rf ~/.cache/thumbnails/fail`.
+Graphs saved by an older APlot carry no picture yet: open and save them
+once.
+
+The file managers that follow the standard - **GNOME Files** (Nautilus),
+**Nemo**, **Caja**, **Thunar** (with its `tumbler` service) and others -
+then show the picture of every graph as its icon.  GNOME Files runs a
+thumbnailer in a sandbox that cannot look into the home folder, so if the
+pictures do not appear there, install it for every user of the computer
+instead:
+
+    sudo python3 aplot.py --install-desktop --system
+
+which writes the same files under `/usr/local`.  KDE's Dolphin has a
+thumbnail system of its own and may need a plugin of its own.
+
+**Every diagram of a graph.**  The icon is the first diagram of the file.
+To see all of them without starting APlot, right-click the graph and
+choose **Preview all graphs (APlot)** (in `Open With`, or under `Scripts`
+in GNOME Files, or at the top of Dolphin's menu).  It copies the PDF
+stored in the graph into a folder of its own and opens it with the PDF
+viewer of the desktop (Papers, Evince, Okular...), one diagram a page;
+choosing several graphs opens each of them.  A graph saved before the PDF
+came in opens its one picture instead, and a plain JSON graph of an older
+APlot is refused with a message.
+
+**The Space bar in GNOME Files.**  Pressing the Space bar on a graph in
+GNOME Files (the previewer called Sushi) shows every diagram of the graph
+as well, one page each, with the page buttons and the `Open With APlot`
+button of Sushi; a graph with only a picture shows the picture, and a
+plain JSON graph what Sushi shows for any file.  Sushi takes extra viewers
+from the home folder of each user only, so `--install-desktop` writes one
+there, `~/.local/share/sushi/viewers/aplot.js`; with `sudo ... --system`
+it goes into the home of the user who ran `sudo` (anyone else runs
+`python3 aplot.py --install-desktop` once as themselves).  Close a Space
+bar preview that is still open after the install, so that Sushi starts
+again with the new viewer.  It is tried with the Sushi of Ubuntu 20.04
+(3.34) and 24.04 (46); the one of 22.04 (41) reads viewers the same way.  The
+thumbnailer needs nothing but Python; with Pillow installed it makes the
+picture exactly the size asked for, without it the file manager scales the
+stored picture itself.
+
+`python3 aplot.py --uninstall-desktop` (with `--system` for the other
+kind) takes every one of these files away again.  Run the install again
+after moving `aplot.py`, so that the menu entry points at the new place.
 
 
 ## 0. The name
@@ -19847,6 +20558,14 @@ works on.
   after the original - `Signals copy`, `Signals copy 2` - and it is a
   sheet of its own from then on; its `Plot with previous tab` is left off.
   The last sheet is never deleted.
+* **Moving a sheet**: press on its tab and **drag it sideways**.  A blue
+  line shows the gap it will land in, and it goes there when the button is
+  let go; near either end of a long row the row scrolls along, so a far
+  place can be reached as well.  The moved sheet stays in front, every
+  diagram keeps drawing its own sheet, and `Undo` puts the tab back.  The
+  order of the sheets decides which ones are glued together by `Plot with
+  previous tab`, so a move can change a group - as always, the diagrams
+  follow at the next `Update`.  A short movement is still just a click.
 * **Many sheets, long names**: when the tabs no longer fit into the width
   of the window the row **scrolls**.  Two small arrows appear at its right
   end, with the `+` beside them, so the `+` never slides out of the
@@ -21524,8 +22243,16 @@ opens its dialog.  A selected label also moves with the arrow keys, one
 pixel at a time, or ten with `Shift` - handy for the last bit of fine
 tuning.
 
-The drag is stored as a shift in pixels **on top of** the automatic
-placement, which has two useful consequences:
+The drag is stored as a shift **on top of** the automatic placement,
+measured in **points of the page** - the unit the fonts are measured in -
+however far the view happens to be zoomed when the text is moved.  So a
+label moved inside the plot area stays exactly there at every zoom, in a
+copied or exported picture at any resolution and in the thumbnail of the
+file, just as a text box does.  (Files saved before this kept the shift in
+pixels of the page; they are converted when opened.)  The distances of the
+settings - `Label offset [px]`, `Number offset [px]`, the title distance -
+are pixels of the page at 100 % zoom, so they stay the same on paper
+whatever the zoom as well.  This has two further useful consequences:
 
 * the text keeps following the diagram - it stays in place when the window
   is resized, when the axes are moved in `Frame and origin`, or when longer
@@ -22203,33 +22930,44 @@ nothing was changed since the last save.
 
 An `.aplt` file is a **ZIP container**, the way the files of an office
 suite are.  Renamed to `.zip` it opens in any archive program, and inside
-there are three entries:
+there are four entries:
 
 | Entry | What it is |
 | --- | --- |
 | `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
 | `document.json` | The data and every diagram: a readable JSON document (described below). |
-| `Thumbnails/thumbnail.png` | A picture of the graph, about 2048 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
+| `Thumbnails/thumbnail.png` | A picture of the **first** diagram, about 2048 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
+| `Thumbnails/preview.pdf` | **Every** diagram of the graph, one page each, in the order of the windows: what the Space bar shows on a Mac and in GNOME Files, and `Preview all graphs` on Linux.  It is stored uncompressed too. |
 
-**The picture** shows the diagram in front - the one `Export` would write -
-cut out of the page with a little air around it, exactly as `Copy figure`
-does.  Its paper is the colour chosen `Around the axes` in `Frame and
+**The picture** shows the first diagram of the file - the first one
+opened, and the first page of the PDF - whichever window happens to be in
+front when the graph is saved, so the icon of a file does not change by
+itself.  It is cut out of the page with a little air around it, exactly as
+`Copy figure` does.  Its paper is the colour chosen `Around the axes` in `Frame and
 origin`, or **white** when that is transparent: a file manager draws the
 picture on its own background, light or dark, so it is never transparent.
 The selection marks are never on it.  A graph saved with no diagram open
 has no picture; a picture that cannot be drawn for any reason leaves the
 data and the diagrams saved all the same.
 
+**The PDF** has one page for each diagram, cut out and coloured the same
+way.  Its pages stay drawings - lines and letters, not pixels - so they
+are sharp at any zoom, and a diagram is usually only some 20-60 KB of
+it.  A diagram that cannot be drawn is left out of it, and the rest are
+still there.
+
 The picture is what a file manager needs to show the graph instead of a
 blank page.  The file managers do not look into an unknown container by
 themselves: a small viewer extension on macOS (the `APlotQuickLook`
 folder, see `The picture of the graph in the Finder`), a thumbnailer entry
-on Linux or a thumbnail handler on Windows has to be installed, and each of
+on Linux (`python3 aplot.py --install-desktop`, see `The graph files on a
+Linux desktop`) or a thumbnail handler on Windows has to be installed, and each of
 them only has to copy this one picture out.  It is drawn 2048 pixels
 along its longer side: the Space bar preview shows it 1024 points wide -
 far larger than an icon - and it is still sharp there on a Retina screen.
-That makes a graph file some 200 KB larger than its data alone, and saving
-takes a fraction of a second longer.
+That makes a graph file some 200 KB larger than its data alone (and the
+PDF a few tens of KB for each diagram), and saving takes a fraction of a
+second longer.
 
 The file is written next to its final place and only then put there, so a
 save that fails half way never leaves a broken graph behind.
@@ -22469,6 +23207,7 @@ class App:
             handlers={"click": self._on_tab_click,
                       "double": self._on_tab_double_click,
                       "menu": self._show_tab_context_menu,
+                      "move": lambda places: self.move_tab(*places),
                       "plus": lambda _e=None: self.add_sheet()})
         self.tab_bar.pack(side="bottom", fill="x", padx=10, pady=(0, 8))
         self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 0))
@@ -22723,6 +23462,59 @@ class App:
                          command=lambda: self.duplicate_tab(idx))
         menu.add_command(label="Delete tab", command=lambda: self.delete_tab(idx))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def move_tab(self, source, target, record=True):
+        """Put the sheet at `source` to the place `target` in the row of tabs.
+
+        Everything that knows a sheet by its place follows it: the diagrams
+        (each keeps drawing its own sheet), the steps that Undo can take
+        back, the sheet in front.  Which sheets are glued together with
+        `Plot with previous tab` depends on the order, so a group may change
+        with the move - as always, the diagrams wait for `Update`.  The move
+        is one step that Undo takes back.
+        """
+        count = len(self.tables)
+        try:
+            source, target = int(source), int(target)
+        except (TypeError, ValueError):
+            return False
+        if not (0 <= source < count and 0 <= target < count) or source == target:
+            return False
+        self.cancel_tab_rename()
+        for table in self.tables:
+            table._commit_edit()
+        order = list(range(count))
+        order.insert(target, order.pop(source))
+        new_place = {old: new for new, old in enumerate(order)}
+        table = self.tables.pop(source)
+        self.tables.insert(target, table)
+        self.notebook.insert(target, table.master)   # the tab moves with it
+        for window in self.open_windows():
+            where = getattr(window, "source_tab", None)
+            if where is not None and int(where) in new_place:
+                window.source_tab = new_place[int(where)]
+        self._remap_sheet_steps(new_place)
+        self.notebook.select(target)
+        self._follow_active_tab()
+        if record and not self.undo.busy():
+            self.undo.push(UndoStep(
+                "moving the tab", {"from": target, "to": source},
+                {"from": source, "to": target},
+                lambda step: self.move_tab(step["from"], step["to"],
+                                           record=False)))
+            self.refresh_edit_menus()
+        self.root.after_idle(self.focus_sheet)
+        return True
+
+    def _remap_sheet_steps(self, new_place):
+        """The steps of Undo that know a sheet by its place follow a move."""
+        for step in list(self.undo.done) + list(self.undo.undone):
+            if getattr(step, "restore", None) != self.apply_tab_document:
+                continue
+            for snapshot in (step.before, step.after):
+                if isinstance(snapshot, dict) and "index" in snapshot:
+                    old = int(snapshot["index"])
+                    snapshot["index"] = new_place.get(old, old)
 
     def duplicate_tab(self, idx):
         """A second sheet with the same contents, right after this one.
@@ -24200,17 +24992,44 @@ class App:
     def project_thumbnail(self):
         """The PNG picture of the graph that goes into the `.aplt` file.
 
-        It shows the diagram in front (the one Export would write); with
-        no diagram open the file simply has no picture.  A picture that
-        cannot be drawn never stops the graph from being saved.
+        It shows the **first** diagram of the file - the first page of the
+        preview as well - so the icon of a file does not depend on which
+        window happened to be in front when it was saved.  With no diagram
+        open the file simply has no picture.  A picture that cannot be
+        drawn never stops the graph from being saved.
         """
-        window = self.active_plot()
-        if window is None:
+        windows = self.open_windows()
+        if not windows:
             return None
         try:
-            return window.thumbnail_png()
+            return windows[0].thumbnail_png()
         except Exception:          # the data matter more than the picture
             return None
+
+    def project_preview(self):
+        """The PDF of every diagram of the file, one page each, in order.
+
+        The pages are drawn the way the thumbnail is: the graph cut out of
+        its page with a little air around it, on the colour chosen around
+        the axes (or white), without the marks of a selection.  They stay
+        drawings, so the preview is sharp at any zoom.
+        """
+        windows = self.open_windows()
+        if not windows:
+            return None
+        holder = io.BytesIO()
+        pages = 0
+        try:
+            with PdfPages(holder, metadata={"Creator": APP_NAME}) as pdf:
+                for window in windows:
+                    try:
+                        window.preview_page(pdf)
+                        pages += 1
+                    except Exception:      # one diagram never costs the rest
+                        continue
+        except Exception:
+            return None
+        return holder.getvalue() if pages else None
 
     def save_project(self, path=None, quiet=False):
         """Write the data and every diagram into one `.aplt` file.
@@ -24229,7 +25048,8 @@ class App:
             return None
         try:
             write_project_file(path, self.project_document(),
-                               self.project_thumbnail())
+                               self.project_thumbnail(),
+                               self.project_preview())
         except (OSError, TypeError, ValueError) as error:
             messagebox.showerror("Error", f"Could not save the file: {error}")
             return None
@@ -24781,6 +25601,12 @@ USAGE = f"""{APP_NAME} - plotting and editing tabular data
   python3 aplot.py --make-app      build {APP_NAME}.app (macOS), so that the Dock
                                    shows this program's own icon and name
   python3 aplot.py --icon FILE     write the icon into a PNG file
+  python3 aplot.py --install-desktop [--system]
+                                   Linux: icon, thumbnails and "open with"
+                                   for .aplt files (--system: every user,
+                                   run with sudo)
+  python3 aplot.py --uninstall-desktop [--system]
+                                   take that away again
   python3 aplot.py --help          this text
 """
 
@@ -24799,6 +25625,60 @@ def run_command(argv):
         print(f"The icon was written to {written}" if written
               else f"The icon could not be written to {path}")
         return 0 if written else 1
+    if first in ("--install-desktop", "--uninstall-desktop"):
+        if not sys.platform.startswith("linux"):
+            print(f"{first} sets up a Linux desktop; this system is "
+                  f"{sys.platform}.  (On macOS: --make-app and the "
+                  "APlotQuickLook folder.)")
+            return 1
+        system = "--system" in argv[1:]
+        where = "/usr/local (every user)" if system else "~/.local (this user)"
+        try:
+            if first == "--install-desktop":
+                files = install_linux_desktop(system=system)
+            else:
+                files = uninstall_linux_desktop(system=system)
+        except PermissionError as error:
+            print(f"Not allowed to write there: {error}\n"
+                  "Run it with sudo for --system.")
+            return 1
+        except OSError as error:
+            print(f"It could not be done: {error}")
+            return 1
+        if first == "--uninstall-desktop":
+            print(f"{len(files)} files of {APP_NAME} were taken away from {where}.")
+            return 0
+        print(f"{APP_NAME} is known to the desktop now - {len(files)} files "
+              f"written under {where}:\n"
+              "  * .aplt files have their own icon and open in APlot,\n"
+              "  * the file managers show the first diagram of every graph\n"
+              "    saved by this APlot as its thumbnail,\n"
+              "  * \"Preview all graphs\" (in Open With, in the scripts of\n"
+              "    GNOME Files and in the menu of Dolphin) shows every\n"
+              "    diagram of a graph in the PDF viewer,\n"
+              "  * the Space bar in GNOME Files (Sushi) shows every diagram\n"
+              "    too, page by page.\n\n"
+              "Next:\n"
+              "  * restart the file manager (GNOME Files: nautilus -q) and\n"
+              "    close a Space bar preview that is still open,\n"
+              "  * forget the old failed pictures: rm -rf ~/.cache/thumbnails/fail\n"
+              "  * graphs saved by an older APlot carry no picture: open and\n"
+              "    save them once.")
+        viewer = sushi_viewer_path(system=system)
+        if viewer is None:
+            print("\nThe Space bar preview of GNOME Files is set up per user, and\n"
+                  "this was run by root itself: run it once more as each user\n"
+                  "who wants it (without sudo):\n"
+                  "    python3 aplot.py --install-desktop")
+        elif system:
+            print(f"\nThe Space bar preview of GNOME Files is per user: it went\n"
+                  f"into {viewer.parent}.")
+        if not system:
+            print("\nGNOME Files runs thumbnailers in a sandbox that cannot see\n"
+                  "the home folder: if no pictures appear there, install for\n"
+                  "every user instead:\n"
+                  "    sudo python3 aplot.py --install-desktop --system")
+        return 0
     if first == "--make-app":
         if sys.platform != "darwin":
             print("--make-app builds a macOS application bundle; "

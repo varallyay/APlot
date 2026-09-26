@@ -5,12 +5,15 @@ Quick Look extensions for APlot graphs (`.aplt` files):
 
 | Extension | What it does |
 | --- | --- |
-| **APlot Thumbnail** | The Finder shows the picture of the graph as the file's icon, in every view. The same icon appears in the Open and Save dialogs and in Spotlight. |
-| **APlot Preview** | Pressing the **Space bar** on a graph (or choosing *Quick Look*) shows the picture large: 1024 points along its longer side, twice the size of the largest icon. |
+| **APlot Thumbnail** | The Finder shows the picture of the graph - its **first diagram** - as the file's icon, in every view. The same icon appears in the Open and Save dialogs and in Spotlight. |
+| **APlot Preview** | Pressing the **Space bar** on a graph (or choosing *Quick Look*) shows **every diagram** of the file, one page each, about 1024 points large. Scroll to page through them; the sidebar button of the Quick Look window shows them all small. |
 
-Both extensions show the picture that APlot stores in the file when it saves
-it (`Thumbnails/thumbnail.png` inside the `.aplt` ZIP container). They never
-run Python, and they never change a file.
+The extensions show what APlot stores in the file when it saves it, inside
+the `.aplt` ZIP container: `Thumbnails/thumbnail.png` for the icon and
+`Thumbnails/preview.pdf` (one page for each diagram) for the Space bar. A
+graph that has no PDF yet - saved by an APlot before it came in - shows its
+one picture in the Space bar instead. The extensions never run Python, and
+they never change a file.
 
 ## What it needs
 
@@ -70,10 +73,11 @@ APlot:
     sh build.sh
     sh install.sh
 
-The larger Space-bar preview needs both the rebuilt extension and the
-larger picture that the new `aplot.py` stores (2048 pixels instead of
-1024). A graph saved by an older version is still shown at the larger size,
-only a little softer.
+The Space bar preview of every diagram needs both the rebuilt extension and
+a graph saved by the new `aplot.py`, which stores the PDF of the diagrams.
+An extension built earlier shows only the first picture, and so does a
+graph saved earlier, until it is saved again. `check.sh` lists what a
+graph carries (`thumbnail.png`, `preview.pdf`).
 
 ## When the pictures do not appear
 
@@ -135,9 +139,9 @@ silicon and Intel Macs.
 
 | File | What it is |
 | --- | --- |
-| `Sources/Shared/APlotArchive.swift` | Finds the picture inside the `.aplt` ZIP container. It reads only the directory at the end of the file and that one entry. No ZIP library is needed. |
+| `Sources/Shared/APlotArchive.swift` | Finds the picture and the PDF inside the `.aplt` ZIP container. It reads only the directory at the end of the file and the one entry asked for. No ZIP library is needed. |
 | `Sources/Thumbnail/ThumbnailProvider.swift` | The Finder icon: the picture, fitted into the size the Finder asks for. |
-| `Sources/Preview/PreviewProvider.swift` | The Space bar preview: the picture itself, drawn by Quick Look. |
+| `Sources/Preview/PreviewProvider.swift` | The Space bar preview: the PDF of every diagram, shown by Quick Look as a document (or the picture, for a graph without the PDF). |
 | `Sources/Host/main.swift` | The program that carries the two extensions. It only says that it is installed. |
 | `Resources/*.plist` | What each part tells macOS. The kind of file is `hu.feti.aplot.graph` (`.aplt`, `application/x-aplot`). The extensions are `hu.feti.aplot.quicklook.thumbnail` and `hu.feti.aplot.quicklook.preview`. |
 | `Resources/Extension.entitlements` | The App Sandbox. Quick Look requires it for its extensions. |

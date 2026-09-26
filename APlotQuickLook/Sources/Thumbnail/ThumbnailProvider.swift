@@ -2,9 +2,10 @@
 //
 // Finder, the Open and Save dialogs and Spotlight ask this extension for
 // the icon of every .aplt file they show.  The answer is the picture APlot
-// stored in the file when it was saved, scaled to the size that is asked
-// for.  A graph without a picture (saved by an older APlot) gets an error
-// back, and Finder shows the ordinary document icon for it instead.
+// stored in the file when it was saved - the first diagram of the file -
+// scaled to the size that is asked for.  A graph without a picture (saved
+// by an older APlot) gets an error back, and Finder shows the ordinary
+// document icon for it instead.
 
 import Foundation
 import CoreGraphics

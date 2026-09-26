@@ -14,6 +14,8 @@ It also answers a few questions on the command line:
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
+    python3 aplot.py --install-desktop   Linux: icons, thumbnails and
+                                         "open with" for .aplt (see below)
 
 
 ## What it needs
@@ -151,9 +153,11 @@ From a terminal a graph can be opened the same way:
 
 #### The picture of the graph in the Finder, and the Space bar
 
-Every graph carries a **picture of itself** (see `4. Files`).  To make the
-Finder show that picture as the icon of the file, and show it large when
-the Space bar is pressed, macOS needs two small **Quick Look extensions**.
+Every graph carries a **picture of itself** and a **PDF of all its
+diagrams** (see `4. Files`).  To make the Finder show the picture - the
+first diagram of the file - as the icon of the file, and show every
+diagram, one page each, when the Space bar is pressed, macOS needs two
+small **Quick Look extensions**.
 They cannot be written in Python: they are in the separate
 `APlotQuickLook` folder, in Swift, with a script that builds and installs
 them - Xcode (free in the App Store) is all it needs:
@@ -163,7 +167,83 @@ them - Xcode (free in the App Store) is all it needs:
     sh install.sh
 
 `APlotQuickLook/README.md` explains the rest, including what to do when
-macOS does not take the extensions at once.
+macOS does not take the extensions at once.  In the Space bar window the
+pages are scrolled through like a PDF (the sidebar button shows them all
+small); a graph saved before the PDF came in shows its one picture until
+it is saved again.  Extensions built before that version show only the
+picture as well: run `sh build.sh` and `sh install.sh` once more.
+
+#### The graph files on a Linux desktop
+
+On Linux one command does it all - nothing is compiled:
+
+    python3 aplot.py --install-desktop
+
+It writes the few small files the freedesktop.org standards ask for, under
+`~/.local` for the user who runs it:
+
+| File | What it does |
+| --- | --- |
+| `share/mime/packages/aplot.xml` | names the kind of file `application/x-aplot` - by the `.aplt` extension, and by the first bytes of the file, so a graph without its extension is known too |
+| `share/icons/hicolor/.../application-x-aplot.png` | the icon of the graph files (the sheet with the spectrum), in eight sizes, and APlot's own icon beside it |
+| `bin/aplot-thumbnailer` | a tiny program that copies the picture stored in a graph out of it, at the size the file manager asks for |
+| `share/thumbnailers/aplot.thumbnailer` | tells the file managers to use it for the graphs |
+| `share/applications/aplot.desktop` | APlot in the application menu, and as the program that opens a graph with a double click |
+| `bin/aplot-preview` | opens the PDF of every diagram of a graph in the PDF viewer of the desktop |
+| `share/applications/aplot-preview.desktop` | puts **Preview all graphs (APlot)** in the `Open With` list of the graphs (it is not in the application menu) |
+| `share/kio/servicemenus/aplot-preview.desktop` | the same in the right-click menu of KDE's Dolphin (and under `kservices5/ServiceMenus` for Plasma 5) |
+| `share/nautilus/scripts/Preview all graphs (APlot)` | the same under `Scripts` in the right-click menu of GNOME Files (only for one user: GNOME Files has no scripts for every user) |
+| `share/sushi/viewers/aplot.js` | the Space bar preview of GNOME Files: every diagram, page by page (always in the home folder of a user, see below) |
+
+The databases of the desktop are brought up to date at once
+(`update-mime-database`, `update-desktop-database`, the icon cache), and
+APlot is made the program that opens the graphs.  Then restart the file
+manager (GNOME Files: `nautilus -q`) and, if it had given up on the graphs
+before, remove its list of failures: `rm -rf ~/.cache/thumbnails/fail`.
+Graphs saved by an older APlot carry no picture yet: open and save them
+once.
+
+The file managers that follow the standard - **GNOME Files** (Nautilus),
+**Nemo**, **Caja**, **Thunar** (with its `tumbler` service) and others -
+then show the picture of every graph as its icon.  GNOME Files runs a
+thumbnailer in a sandbox that cannot look into the home folder, so if the
+pictures do not appear there, install it for every user of the computer
+instead:
+
+    sudo python3 aplot.py --install-desktop --system
+
+which writes the same files under `/usr/local`.  KDE's Dolphin has a
+thumbnail system of its own and may need a plugin of its own.
+
+**Every diagram of a graph.**  The icon is the first diagram of the file.
+To see all of them without starting APlot, right-click the graph and
+choose **Preview all graphs (APlot)** (in `Open With`, or under `Scripts`
+in GNOME Files, or at the top of Dolphin's menu).  It copies the PDF
+stored in the graph into a folder of its own and opens it with the PDF
+viewer of the desktop (Papers, Evince, Okular...), one diagram a page;
+choosing several graphs opens each of them.  A graph saved before the PDF
+came in opens its one picture instead, and a plain JSON graph of an older
+APlot is refused with a message.
+
+**The Space bar in GNOME Files.**  Pressing the Space bar on a graph in
+GNOME Files (the previewer called Sushi) shows every diagram of the graph
+as well, one page each, with the page buttons and the `Open With APlot`
+button of Sushi; a graph with only a picture shows the picture, and a
+plain JSON graph what Sushi shows for any file.  Sushi takes extra viewers
+from the home folder of each user only, so `--install-desktop` writes one
+there, `~/.local/share/sushi/viewers/aplot.js`; with `sudo ... --system`
+it goes into the home of the user who ran `sudo` (anyone else runs
+`python3 aplot.py --install-desktop` once as themselves).  Close a Space
+bar preview that is still open after the install, so that Sushi starts
+again with the new viewer.  It is tried with the Sushi of Ubuntu 20.04
+(3.34) and 24.04 (46); the one of 22.04 (41) reads viewers the same way.  The
+thumbnailer needs nothing but Python; with Pillow installed it makes the
+picture exactly the size asked for, without it the file manager scales the
+stored picture itself.
+
+`python3 aplot.py --uninstall-desktop` (with `--system` for the other
+kind) takes every one of these files away again.  Run the install again
+after moving `aplot.py`, so that the menu entry points at the new place.
 
 
 ## 0. The name
@@ -242,6 +322,14 @@ works on.
   after the original - `Signals copy`, `Signals copy 2` - and it is a
   sheet of its own from then on; its `Plot with previous tab` is left off.
   The last sheet is never deleted.
+* **Moving a sheet**: press on its tab and **drag it sideways**.  A blue
+  line shows the gap it will land in, and it goes there when the button is
+  let go; near either end of a long row the row scrolls along, so a far
+  place can be reached as well.  The moved sheet stays in front, every
+  diagram keeps drawing its own sheet, and `Undo` puts the tab back.  The
+  order of the sheets decides which ones are glued together by `Plot with
+  previous tab`, so a move can change a group - as always, the diagrams
+  follow at the next `Update`.  A short movement is still just a click.
 * **Many sheets, long names**: when the tabs no longer fit into the width
   of the window the row **scrolls**.  Two small arrows appear at its right
   end, with the `+` beside them, so the `+` never slides out of the
@@ -1919,8 +2007,16 @@ opens its dialog.  A selected label also moves with the arrow keys, one
 pixel at a time, or ten with `Shift` - handy for the last bit of fine
 tuning.
 
-The drag is stored as a shift in pixels **on top of** the automatic
-placement, which has two useful consequences:
+The drag is stored as a shift **on top of** the automatic placement,
+measured in **points of the page** - the unit the fonts are measured in -
+however far the view happens to be zoomed when the text is moved.  So a
+label moved inside the plot area stays exactly there at every zoom, in a
+copied or exported picture at any resolution and in the thumbnail of the
+file, just as a text box does.  (Files saved before this kept the shift in
+pixels of the page; they are converted when opened.)  The distances of the
+settings - `Label offset [px]`, `Number offset [px]`, the title distance -
+are pixels of the page at 100 % zoom, so they stay the same on paper
+whatever the zoom as well.  This has two further useful consequences:
 
 * the text keeps following the diagram - it stays in place when the window
   is resized, when the axes are moved in `Frame and origin`, or when longer
@@ -2598,33 +2694,44 @@ nothing was changed since the last save.
 
 An `.aplt` file is a **ZIP container**, the way the files of an office
 suite are.  Renamed to `.zip` it opens in any archive program, and inside
-there are three entries:
+there are four entries:
 
 | Entry | What it is |
 | --- | --- |
 | `mimetype` | The words `application/x-aplot`.  It is the very first entry and is stored uncompressed, so a program can tell what the file is from its first bytes. |
 | `document.json` | The data and every diagram: a readable JSON document (described below). |
-| `Thumbnails/thumbnail.png` | A picture of the graph, about 2048 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
+| `Thumbnails/thumbnail.png` | A picture of the **first** diagram, about 2048 pixels along its longer side, for the file managers (and for anyone who opens the container).  It is stored uncompressed, so a viewer can read it without unpacking anything. |
+| `Thumbnails/preview.pdf` | **Every** diagram of the graph, one page each, in the order of the windows: what the Space bar shows on a Mac and in GNOME Files, and `Preview all graphs` on Linux.  It is stored uncompressed too. |
 
-**The picture** shows the diagram in front - the one `Export` would write -
-cut out of the page with a little air around it, exactly as `Copy figure`
-does.  Its paper is the colour chosen `Around the axes` in `Frame and
+**The picture** shows the first diagram of the file - the first one
+opened, and the first page of the PDF - whichever window happens to be in
+front when the graph is saved, so the icon of a file does not change by
+itself.  It is cut out of the page with a little air around it, exactly as
+`Copy figure` does.  Its paper is the colour chosen `Around the axes` in `Frame and
 origin`, or **white** when that is transparent: a file manager draws the
 picture on its own background, light or dark, so it is never transparent.
 The selection marks are never on it.  A graph saved with no diagram open
 has no picture; a picture that cannot be drawn for any reason leaves the
 data and the diagrams saved all the same.
 
+**The PDF** has one page for each diagram, cut out and coloured the same
+way.  Its pages stay drawings - lines and letters, not pixels - so they
+are sharp at any zoom, and a diagram is usually only some 20-60 KB of
+it.  A diagram that cannot be drawn is left out of it, and the rest are
+still there.
+
 The picture is what a file manager needs to show the graph instead of a
 blank page.  The file managers do not look into an unknown container by
 themselves: a small viewer extension on macOS (the `APlotQuickLook`
 folder, see `The picture of the graph in the Finder`), a thumbnailer entry
-on Linux or a thumbnail handler on Windows has to be installed, and each of
+on Linux (`python3 aplot.py --install-desktop`, see `The graph files on a
+Linux desktop`) or a thumbnail handler on Windows has to be installed, and each of
 them only has to copy this one picture out.  It is drawn 2048 pixels
 along its longer side: the Space bar preview shows it 1024 points wide -
 far larger than an icon - and it is still sharp there on a Retina screen.
-That makes a graph file some 200 KB larger than its data alone, and saving
-takes a fraction of a second longer.
+That makes a graph file some 200 KB larger than its data alone (and the
+PDF a few tens of KB for each diagram), and saving takes a fraction of a
+second longer.
 
 The file is written next to its final place and only then put there, so a
 save that fails half way never leaves a broken graph behind.

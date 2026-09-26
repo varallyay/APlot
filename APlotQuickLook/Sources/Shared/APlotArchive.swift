@@ -4,12 +4,13 @@
 //
 //     mimetype                   "application/x-aplot", stored, first
 //     document.json              the data and every diagram
-//     Thumbnails/thumbnail.png   a picture of the graph (stored)
+//     Thumbnails/thumbnail.png   a picture of the first diagram (stored)
+//     Thumbnails/preview.pdf     every diagram, one page each (stored)
 //
-// Both Quick Look extensions only need that one picture, so this file
-// reads just enough of the ZIP format to find it: the directory at the
+// The Quick Look extensions only need those two entries, so this file
+// reads just enough of the ZIP format to find one: the directory at the
 // end of the file, one entry of it, and that entry's local header.  APlot
-// stores the picture uncompressed; a picture that some other program has
+// stores them uncompressed; an entry that some other program has
 // compressed again ("deflate") is unpacked with Apple's Compression library.
 // No third party code is needed.
 
@@ -36,6 +37,7 @@ enum APlotArchiveError: Error, CustomStringConvertible {
 
 enum APlotArchive {
     static let thumbnailEntry = "Thumbnails/thumbnail.png"
+    static let previewEntry = "Thumbnails/preview.pdf"
     /// Nothing larger is unpacked: a picture of a graph is far smaller.
     static let largestEntry = 64 << 20
 
@@ -45,6 +47,27 @@ enum APlotArchive {
     static func thumbnailData(at url: URL) throws -> Data {
         let file = try Data(contentsOf: url, options: .mappedIfSafe)
         return try entry(named: thumbnailEntry, in: file)
+    }
+
+    /// The PDF of every diagram of the graph at `url` (one page each).
+    static func previewData(at url: URL) throws -> Data {
+        let file = try Data(contentsOf: url, options: .mappedIfSafe)
+        return try entry(named: previewEntry, in: file)
+    }
+
+    /// The size of the first page of a PDF, in points.
+    static func firstPageSize(of pdf: Data) throws -> CGSize {
+        guard let provider = CGDataProvider(data: pdf as CFData),
+              let document = CGPDFDocument(provider),
+              document.numberOfPages > 0,
+              let page = document.page(at: 1) else {
+            throw APlotArchiveError.unreadablePicture
+        }
+        let box = page.getBoxRect(.mediaBox)
+        guard box.width > 0, box.height > 0 else {
+            throw APlotArchiveError.unreadablePicture
+        }
+        return box.size
     }
 
     /// The picture of the graph at `url`, ready to be drawn.

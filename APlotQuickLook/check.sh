@@ -17,6 +17,8 @@ echo "1. The kind of the file (should be hu.feti.aplot.graph):"
 mdls -name kMDItemContentType "$FILE" 2>/dev/null || true
 echo "   Its first bytes (should begin with PK and mimetypeapplication/x-aplot):"
 head -c 60 "$FILE" | tr -c '[:print:]' '.'; echo
+echo "   What it carries (thumbnail.png: the icon; preview.pdf: every diagram):"
+unzip -l "$FILE" 2>/dev/null | grep "Thumbnails/" || echo "   no pictures inside: open the graph in APlot and save it once"
 
 echo ""
 echo "2. The extensions ('+' in front means switched on):"
