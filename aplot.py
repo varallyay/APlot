@@ -152,8 +152,9 @@ from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                Formatter, FuncFormatter, LogFormatterSciNotation,
                                LogLocator, MultipleLocator, NullFormatter,
                                NullLocator)
-from matplotlib.transforms import (Affine2D, Bbox, IdentityTransform,
-                                   ScaledTranslation, TransformedBbox)
+from matplotlib.transforms import (Affine2D, Bbox, BboxTransformTo,
+                                   IdentityTransform, ScaledTranslation,
+                                   TransformedBbox)
 
 APP_NAME = "APlot"
 # who made it: the end of the description at the top, and the About window
@@ -339,15 +340,24 @@ SIDE_HANDLES = (4, 5, 6, 7)
 ROTATE_GAP = 26.0           # pixels between the object and that point
 # How the control points look.  Their sizes are points of the screen, not
 # of the page: they stay this large however far the view is zoomed in, so
-# at 200 % they do not cover what they are placing.  They are see-through
-# (HANDLE_ALPHA is how much of them shows), so the tip of an arrow or the
-# corner of a picture can be seen right under the point that moves it.
+# at 200 % they do not cover what they are placing.
 HANDLE_SIZE = 5.5           # the squares
 ROTATOR_SIZE = 6.5          # the round one that turns the object
 HANDLE_EDGE = 1.0           # their outline
 ROTATOR_STEM = 0.8          # the thin line to the round one
-HANDLE_ALPHA = 0.55         # 45 % transparent
 HANDLE_COLOR = "#1a5fb4"
+# See-through control points: True (the default) lets the tip of an arrow
+# or the corner of a picture show through the point that moves it; False
+# draws them solid white with a blue outline.  HANDLE_ALPHA is how much of
+# a see-through point shows (0.75: 25 % transparent).
+TRANSPARENT_HANDLES = True
+HANDLE_ALPHA = 0.75
+# Dragging draws the still part of the page only once, when the drag
+# begins, and then paints just the object that moves over that picture
+# (matplotlib calls this "blitting").  False draws the whole page for
+# every step, as before.
+FAST_DRAGS = True
+STILL_PAD = 10              # pixels of air around what is painted again
 ROTATE_SNAP = 15.0          # degrees, while Shift is held
 MIN_SHAPE_SIZE = 0.01       # in axes coordinates
 MIN_AXIS_SIZE = 0.08        # smallest plot area, as a fraction of the figure
@@ -3923,6 +3933,80 @@ def picture_as_text(picture, max_side=PICTURE_MAX_SIDE):
     holder = io.BytesIO()
     picture.save(holder, format="PNG")
     return base64.b64encode(holder.getvalue()).decode("ascii")
+
+
+PICTURE_SMALLEST = 48        # pixels: no smaller copy of a picture is made
+
+
+def picture_levels(values):
+    """The picture, then copies of it each half as large (a "mipmap").
+
+    Drawing a picture of 300 dpi into a box a few hundred pixels wide
+    makes matplotlib shrink millions of pixels on every drawing of the
+    diagram - which is what made dragging slow.  From these copies the
+    smallest one that is still at least as large as the box is shrunk
+    instead: the same sharp result for a fraction of the work.
+    """
+    levels = [values]
+    current = values
+    while min(current.shape[0], current.shape[1]) >= 2 * PICTURE_SMALLEST:
+        smaller = None
+        if current.dtype == np.uint8 and (current.ndim == 2 or (
+                current.ndim == 3 and current.shape[2] in (3, 4))):
+            try:
+                from PIL import Image
+                smaller = np.asarray(Image.fromarray(current).reduce(2))
+            except (ImportError, ValueError, TypeError, OSError):
+                smaller = None
+        if smaller is None:               # anything else: the mean of 2 x 2
+            rows = current.shape[0] // 2 * 2
+            cols = current.shape[1] // 2 * 2
+            cut = current[:rows, :cols].astype(np.float64)
+            smaller = ((cut[0::2, 0::2] + cut[1::2, 0::2]
+                        + cut[0::2, 1::2] + cut[1::2, 1::2]) / 4.0
+                       ).astype(current.dtype)
+        levels.append(smaller)
+        current = smaller
+    return levels
+
+
+class PictureImage(BboxImage):
+    """A picture in its box, shrunk from the right copy of it.
+
+    It draws exactly as a `BboxImage` of the whole picture does, but it
+    first picks, from `picture_levels`, the smallest copy that still has
+    at least as many pixels as the box it fills - on the screen at any
+    zoom, and in an exported file at any resolution alike, since both
+    say how many pixels they need.
+    """
+
+    def __init__(self, bbox, levels, **kwargs):
+        super().__init__(bbox, **kwargs)
+        self._levels = list(levels)
+        self.set_data(self._levels[0])
+
+    def level_for(self, width, height):
+        """The copy to shrink into a box of `width` x `height` pixels."""
+        chosen = self._levels[0]
+        for level in self._levels:
+            if level.shape[1] >= width and level.shape[0] >= height:
+                chosen = level
+            else:
+                break
+        return chosen
+
+    def make_image(self, renderer, magnification=1.0, unsampled=False):
+        width, height = renderer.get_canvas_width_height()
+        bbox_in = self.get_window_extent(renderer).frozen()
+        bbox_out = self.get_window_extent(renderer)
+        needed = (abs(bbox_out.width) * magnification,
+                  abs(bbox_out.height) * magnification)
+        values = self.level_for(*needed)
+        bbox_in._points /= [width, height]
+        clip = Bbox([[0, 0], [width, height]])
+        self._transform = BboxTransformTo(clip)
+        return self._make_image(values, bbox_in, bbox_out, clip,
+                                magnification, unsampled=unsampled)
 
 
 def picture_from_text(text):
@@ -11548,6 +11632,8 @@ class PlotWindow(tk.Toplevel):
         self._group_drag = None         # dragging all of them at once
         self._band = None               # the rectangle being drawn
         self._band_patch = None
+        # while something is dragged: the page without it, drawn once
+        self._still = None
         # the four sides of the plot area can be selected and pulled
         self.frame_sides = {name: name for name in FRAME_ENDS}
         self._inline = None             # the in-place text editor, while open
@@ -15579,6 +15665,13 @@ class PlotWindow(tk.Toplevel):
         # user had moved it, before anything is painted
         if getattr(self, "_quiet_draws", False):
             return                       # one drawing is coming at the end
+        if self._still is not None:      # a drag: paint only what moves
+            if self._dragged_objects() is not None:
+                if self.group or self._group_marks:
+                    self._refresh_group_marks()
+                if self._still_frame():
+                    return
+            self._end_still(draw=False)
         self.apply_series_stack()
         self.apply_axis_stack()
         self.sync_axes_dialog()
@@ -15933,10 +16026,15 @@ class PlotWindow(tk.Toplevel):
                              max(MIN_SHAPE_SIZE, float(state["h"]))),
             self.ax.transAxes)
         height = float(state.get("z") or Z_DEFAULT["shape"])
-        artist = BboxImage(box, interpolation="antialiased",
-                           zorder=height - Z_PICTURE_GAP,
-                           alpha=float(state.get("alpha", 1.0)))
-        artist.set_data(values)
+        # the smaller copies are made once and kept with the picture: a
+        # drag that builds the artist anew for every step reuses them
+        kept = state.get("_levels")
+        if not kept or kept[0] is not values:
+            kept = picture_levels(values)
+            state["_levels"] = kept
+        artist = PictureImage(box, kept, interpolation="antialiased",
+                              zorder=height - Z_PICTURE_GAP,
+                              alpha=float(state.get("alpha", 1.0)))
         artist.set_clip_on(False)
         artist.set_in_layout(False)
         self.object_axes("shape", key).add_artist(artist)
@@ -17881,7 +17979,7 @@ class PlotWindow(tk.Toplevel):
             self.group = band["base"] + [one for one in self.objects_in(box)
                                          if one not in band["base"]]
             self._refresh_group_marks()
-        self.canvas.draw_idle()
+        self.draw()
         return True
 
     def _finish_band(self):
@@ -18161,6 +18259,12 @@ class PlotWindow(tk.Toplevel):
             return self.arrow_handle_positions(self.arrow_state[key])
         return None
 
+    @staticmethod
+    def handle_alpha():
+        """The opacity of the control points: None (solid) unless
+        TRANSPARENT_HANDLES is switched on."""
+        return HANDLE_ALPHA if TRANSPARENT_HANDLES else None
+
     def handle_scale(self):
         """Points of the page for one point of the screen: the control
         points are drawn on the page, which the zoom makes larger, but
@@ -18187,7 +18291,7 @@ class PlotWindow(tk.Toplevel):
             self._handles, = host.plot(
                 [], [], linestyle="none", marker="s",
                 markerfacecolor="#ffffff", markeredgecolor=HANDLE_COLOR,
-                alpha=HANDLE_ALPHA, transform=self.ax.transAxes,
+                alpha=self.handle_alpha(), transform=self.ax.transAxes,
                 clip_on=False, zorder=8, label="_nolegend_")
             # a control point is a tool, not a part of the picture: it must
             # not make a saved image any bigger
@@ -18220,7 +18324,7 @@ class PlotWindow(tk.Toplevel):
             self._rotator, = host.plot(
                 [], [], linestyle="-", color=HANDLE_COLOR,
                 marker="o", markerfacecolor="#ffffff",
-                markeredgecolor=HANDLE_COLOR, alpha=HANDLE_ALPHA,
+                markeredgecolor=HANDLE_COLOR, alpha=self.handle_alpha(),
                 markevery=[1], transform=self.ax.transAxes,
                 clip_on=False, zorder=8, label="_nolegend_")
             self._rotator.set_in_layout(False)
@@ -18767,12 +18871,216 @@ class PlotWindow(tk.Toplevel):
         self._drag = {"column": y_col,
                       "dx": pos[0] - point[0], "dy": pos[1] - point[1]}
 
+    # -- dragging: the still part of the page is drawn once ---------------
+    def _dragged_objects(self):
+        """The objects the running drag moves, as (kind, key) pairs.
+
+        None when no drag is running, or when the drag changes the whole
+        diagram (the graph carried along, an axis made longer): then every
+        step draws the whole page, as it must.
+        """
+        if self._band is not None:
+            return []                    # only the rectangle and its marks
+        if self._group_drag is not None:
+            return [tuple(one) for one in self.group]
+        if self._plot_drag is not None:
+            return None
+        drag = self._shape_drag
+        if drag is not None:
+            mode = str(drag.get("mode", ""))
+            if mode == "axis-end":
+                return None
+            if mode.startswith("arrow"):
+                return [("arrow", drag["key"])]
+            if mode == "rotate":
+                return [(drag.get("kind") or "shape", drag["key"])]
+            return [("shape", drag["key"])]
+        if self._text_drag is not None:
+            name = str(self._text_drag["name"])
+            if name.startswith(NOTE_KEY):
+                return [("note", name[len(NOTE_KEY):])]
+            return [("text", name)]
+        if self._drag is not None:
+            return [("legend", self._drag["column"])]
+        return None
+
+    def object_artists(self, kind, key):
+        """What matplotlib draws for one object (the artists)."""
+        found = []
+        if kind == "shape":
+            found = [self.shapes.get(key), self.shape_pictures.get(key)]
+        elif kind == "arrow":
+            found = list(self.arrows.get(key) or [])
+        elif kind == "note":
+            found = [self.notes.get(key)]
+        elif kind == "legend":
+            found = [self.legends.get(key)]
+        elif kind == "text":
+            found = [self.text_artist(key)]
+        return [one for one in found if one is not None]
+
+    def _moving_artists(self):
+        """Everything that is painted again at each step of the drag."""
+        still = self._still
+        objects = (still["objects"] if still is not None
+                   else self._dragged_objects()) or []
+        found = []
+        for kind, key in objects:
+            found += self.object_artists(kind, key)
+        # the tools that go with them: the control points, the rectangle
+        # that chooses and the blue boxes of a group
+        found += [self._handles, self._rotator, self._band_patch]
+        found += list(self._group_marks)
+        seen, unique = set(), []
+        for one in found:
+            if one is not None and id(one) not in seen:
+                seen.add(id(one))
+                unique.append(one)
+        return unique
+
+    def _extent_of(self, artist, renderer):
+        """The box (pixels) an artist covers, with its frame, or None."""
+        try:
+            box = artist.get_window_extent(renderer)
+            patch = getattr(artist, "get_bbox_patch", lambda: None)()
+            if patch is not None:
+                box = Bbox.union([box, patch.get_window_extent(renderer)])
+        except (RuntimeError, ValueError, AttributeError, TypeError):
+            return None
+        if box is None or not np.all(np.isfinite(box.get_points())) \
+                or box.width < 0 or box.height < 0:
+            return None
+        return box
+
+    def _begin_still(self):
+        """A drag has begun: draw the page once without what it moves."""
+        if not FAST_DRAGS or self._still is not None:
+            return False
+        objects = self._dragged_objects()
+        if objects is None:
+            return False
+        canvas = self.canvas
+        if not hasattr(canvas, "copy_from_bbox") \
+                or not hasattr(canvas, "restore_region"):
+            return False
+        self._still = {"objects": objects}
+        # a see-through page cannot be painted over in parts - the old
+        # pixels would show through, as a trail - so while the drag lasts
+        # it wears the colour that shows through it anyway
+        patch = self.fig.patch
+        face = tuple(patch.get_facecolor())
+        if not patch.get_visible() or float(face[3]) < 1.0:
+            behind = self._colour_behind_page()
+            if behind is not None:
+                self._still["paper"] = (patch.get_visible(), face)
+                patch.set_visible(True)
+                patch.set_facecolor(behind)
+        movers = self._moving_artists()
+        try:
+            renderer = canvas.get_renderer()
+            dirty = [self._extent_of(one, renderer) for one in movers
+                     if one.get_visible()]
+        except (RuntimeError, ValueError, AttributeError, TypeError):
+            dirty = []
+        hidden = [one for one in movers if one.get_visible()]
+        places = [(one, one.get_position()) for one in hidden
+                  if isinstance(one, Text)]
+        background = None
+        with QuietDraws(self):
+            for one in hidden:
+                one.set_visible(False)
+            try:
+                # only matplotlib's own drawing: the screen keeps showing
+                # the page as it was until the first step paints over it
+                FigureCanvasAgg.draw(canvas)
+                background = canvas.copy_from_bbox(self.fig.bbox)
+            except Exception:          # no fast drag - the usual one then
+                background = None
+            finally:
+                for one in hidden:
+                    one.set_visible(True)
+                # matplotlib places a title it cannot see far off: each
+                # text is put back where it stood before the still page
+                for one, spot in places:
+                    one.set_position(spot)
+        if background is None:
+            self._end_still(draw=False)
+            canvas.draw_idle()
+            return False
+        self._still.update(background=background,
+                           size=tuple(self.fig.bbox.bounds),
+                           dirty=[box for box in dirty if box is not None])
+        return True
+
+    def _colour_behind_page(self):
+        """The colour the screen shows through a see-through page."""
+        try:
+            widget = self.canvas.get_tk_widget()
+            red, green, blue = widget.winfo_rgb(widget.cget("background"))
+        except (tk.TclError, AttributeError, ValueError):
+            return None
+        return (red / 65535.0, green / 65535.0, blue / 65535.0, 1.0)
+
+    def _still_frame(self):
+        """One step of a drag: the still page, what moves, on the screen."""
+        still = self._still
+        canvas = self.canvas
+        if tuple(self.fig.bbox.bounds) != still.get("size"):
+            return False                  # zoomed or resized meanwhile
+        try:
+            canvas.restore_region(still["background"])
+            renderer = canvas.get_renderer()
+            boxes = []
+            for artist in sorted(self._moving_artists(),
+                                 key=lambda one: one.get_zorder()):
+                if not artist.get_visible():
+                    continue
+                try:
+                    self.fig.draw_artist(artist)
+                except Exception:
+                    continue
+                box = self._extent_of(artist, renderer)
+                if box is not None:
+                    boxes.append(box)
+            # the pixels that change: where the object was, and where it is
+            changed = boxes + list(still.get("dirty") or [])
+            still["dirty"] = boxes
+            if not changed:
+                return True
+            face = self.fig.patch.get_facecolor()
+            if not self.fig.patch.get_visible() or float(face[3]) < 1.0:
+                canvas.blit()             # see-through: it is sent whole
+                return True
+            pad = STILL_PAD * self.screen_ratio()
+            area = Bbox.union(changed)
+            area = Bbox.from_extents(area.x0 - pad, area.y0 - pad,
+                                     area.x1 + pad, area.y1 + pad)
+            canvas.blit(area)
+        except Exception:                 # draw the whole page instead
+            return False
+        return True
+
+    def _end_still(self, draw=True):
+        """The drag is over: the whole page is drawn again, as it is."""
+        still, self._still = self._still, None
+        if still is None:
+            return False
+        paper = still.get("paper")
+        if paper is not None:              # the page is see-through again
+            self.fig.patch.set_visible(paper[0])
+            self.fig.patch.set_facecolor(paper[1])
+        if draw:
+            self.draw()
+        return True
+
     def _on_motion(self, event):
         pending = self._pending_rename
         if pending is not None and event.x is not None and event.y is not None:
             if (abs(event.x - pending["x"]) > 3.0
                     or abs(event.y - pending["y"]) > 3.0):
                 self._pending_rename = None    # this is a drag, not a rename
+        if self._still is None and event.x is not None:
+            self._begin_still()                # only when a drag is running
         if self._band is not None:             # the rectangle that chooses
             self._stretch_band(event)
             return
@@ -18920,6 +19228,7 @@ class PlotWindow(tk.Toplevel):
         self.draw()
 
     def _on_release(self, event=None):
+        self._end_still()                      # the whole page is drawn again
         moved_plot = (self._plot_drag or {}).get("moved", False)
         moved_group = (self._group_drag or {}).get("moved", False)
         self._group_drag = None
@@ -21617,14 +21926,35 @@ another place (see `Moving the whole graph`).
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
 
-The control points are small, see-through squares (45 % transparent), so
-the tip of an arrow or the corner of a picture shows right through the
-point that moves it.  They keep **the same size on the screen at every
-zoom**: at 200 % they are no larger than at 100 %, while the diagram under
-them is twice as large - which is the comfortable way to place a tip
-exactly.  A point grabbed a little off its centre does not jump onto the
-pointer: it keeps that small distance and moves exactly as far as the
-mouse does.
+The control points are small, slightly see-through squares (25 %
+transparent), so the tip of an arrow or the corner of a picture shows
+through the point that moves it.  Near the top of `aplot.py`,
+`TRANSPARENT_HANDLES = False` makes them solid white squares instead, and
+`HANDLE_ALPHA` beside it is how much of a see-through point shows (0.75).
+They keep **the same size on the screen at every zoom**: at 200 % they are
+no larger than at 100 %, while the diagram under them is twice as large -
+which is the comfortable way to place a tip exactly.  A point grabbed a
+little off its centre does not jump onto the pointer: it keeps that small
+distance and moves exactly as far as the mouse does.
+
+**Dragging is fast at any zoom.**  When a drag begins, the page is drawn
+once without the object that moves; every step of the drag then paints
+only that object (with its control points) over the still page and sends
+just the few pixels that changed to the screen.  When the mouse is let
+go, the whole page is drawn again as it really is.  During the drag the
+moving object is shown on top of everything; its real place in the stack
+(see below) is back as soon as it is dropped.  Moving the whole graph and
+pulling an axis end still draw the whole page at each step, since they
+change all of it.  `FAST_DRAGS = False` near the top of `aplot.py` goes
+back to drawing the whole page at every step.
+
+**Large pictures** - a scan or a photograph of 300 dpi has millions of
+pixels - are kept whole in the graph and in its file, but they are not
+shrunk from all those pixels at each drawing: a few smaller copies, each
+half as large as the one before, are made once, and the smallest one that
+still has at least as many pixels as the picture's box on the screen is
+drawn.  An exported picture, a copied figure or the thumbnail asks for as
+many pixels as it needs, and gets a larger copy or the whole picture.
 
 ### Which object is in front
 

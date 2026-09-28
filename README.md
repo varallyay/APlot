@@ -1331,14 +1331,35 @@ another place (see `Moving the whole graph`).
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
 
-The control points are small, see-through squares (45 % transparent), so
-the tip of an arrow or the corner of a picture shows right through the
-point that moves it.  They keep **the same size on the screen at every
-zoom**: at 200 % they are no larger than at 100 %, while the diagram under
-them is twice as large - which is the comfortable way to place a tip
-exactly.  A point grabbed a little off its centre does not jump onto the
-pointer: it keeps that small distance and moves exactly as far as the
-mouse does.
+The control points are small, slightly see-through squares (25 %
+transparent), so the tip of an arrow or the corner of a picture shows
+through the point that moves it.  Near the top of `aplot.py`,
+`TRANSPARENT_HANDLES = False` makes them solid white squares instead, and
+`HANDLE_ALPHA` beside it is how much of a see-through point shows (0.75).
+They keep **the same size on the screen at every zoom**: at 200 % they are
+no larger than at 100 %, while the diagram under them is twice as large -
+which is the comfortable way to place a tip exactly.  A point grabbed a
+little off its centre does not jump onto the pointer: it keeps that small
+distance and moves exactly as far as the mouse does.
+
+**Dragging is fast at any zoom.**  When a drag begins, the page is drawn
+once without the object that moves; every step of the drag then paints
+only that object (with its control points) over the still page and sends
+just the few pixels that changed to the screen.  When the mouse is let
+go, the whole page is drawn again as it really is.  During the drag the
+moving object is shown on top of everything; its real place in the stack
+(see below) is back as soon as it is dropped.  Moving the whole graph and
+pulling an axis end still draw the whole page at each step, since they
+change all of it.  `FAST_DRAGS = False` near the top of `aplot.py` goes
+back to drawing the whole page at every step.
+
+**Large pictures** - a scan or a photograph of 300 dpi has millions of
+pixels - are kept whole in the graph and in its file, but they are not
+shrunk from all those pixels at each drawing: a few smaller copies, each
+half as large as the one before, are made once, and the smallest one that
+still has at least as many pixels as the picture's box on the screen is
+drawn.  An exported picture, a copied figure or the thumbnail asks for as
+many pixels as it needs, and gets a larger copy or the whole picture.
 
 ### Which object is in front
 
