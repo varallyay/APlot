@@ -337,6 +337,17 @@ ROTATE_HANDLE = 8           # the round control point above the object
 CORNER_HANDLES = (0, 1, 2, 3)
 SIDE_HANDLES = (4, 5, 6, 7)
 ROTATE_GAP = 26.0           # pixels between the object and that point
+# How the control points look.  Their sizes are points of the screen, not
+# of the page: they stay this large however far the view is zoomed in, so
+# at 200 % they do not cover what they are placing.  They are see-through
+# (HANDLE_ALPHA is how much of them shows), so the tip of an arrow or the
+# corner of a picture can be seen right under the point that moves it.
+HANDLE_SIZE = 5.5           # the squares
+ROTATOR_SIZE = 6.5          # the round one that turns the object
+HANDLE_EDGE = 1.0           # their outline
+ROTATOR_STEM = 0.8          # the thin line to the round one
+HANDLE_ALPHA = 0.55         # 45 % transparent
+HANDLE_COLOR = "#1a5fb4"
 ROTATE_SNAP = 15.0          # degrees, while Shift is held
 MIN_SHAPE_SIZE = 0.01       # in axes coordinates
 MIN_AXIS_SIZE = 0.08        # smallest plot area, as a fraction of the figure
@@ -18150,6 +18161,16 @@ class PlotWindow(tk.Toplevel):
             return self.arrow_handle_positions(self.arrow_state[key])
         return None
 
+    def handle_scale(self):
+        """Points of the page for one point of the screen: the control
+        points are drawn on the page, which the zoom makes larger, but
+        they keep their size on the screen."""
+        try:
+            zoom = float(self.zoom)
+        except (AttributeError, TypeError, ValueError):
+            zoom = 1.0
+        return 1.0 / zoom if zoom > 0 else 1.0
+
     def _refresh_handles(self):
         points = self.selected_handle_positions()
         # the control points belong on the axes that is drawn last, or the
@@ -18164,14 +18185,17 @@ class PlotWindow(tk.Toplevel):
             self._handles = None
         if self._handles is None and points is not None:
             self._handles, = host.plot(
-                [], [], linestyle="none", marker="s", markersize=7,
-                markerfacecolor="#ffffff", markeredgecolor="#1a5fb4",
-                markeredgewidth=1.2, transform=self.ax.transAxes,
+                [], [], linestyle="none", marker="s",
+                markerfacecolor="#ffffff", markeredgecolor=HANDLE_COLOR,
+                alpha=HANDLE_ALPHA, transform=self.ax.transAxes,
                 clip_on=False, zorder=8, label="_nolegend_")
             # a control point is a tool, not a part of the picture: it must
             # not make a saved image any bigger
             self._handles.set_in_layout(False)
         if self._handles is not None:
+            scale = self.handle_scale()
+            self._handles.set_markersize(HANDLE_SIZE * scale)
+            self._handles.set_markeredgewidth(HANDLE_EDGE * scale)
             if points is None:
                 self._handles.set_data([], [])
             else:
@@ -18194,15 +18218,19 @@ class PlotWindow(tk.Toplevel):
             if point is None:
                 return
             self._rotator, = host.plot(
-                [], [], linestyle="-", linewidth=0.8, color="#1a5fb4",
-                marker="o", markersize=8, markerfacecolor="#ffffff",
-                markeredgecolor="#1a5fb4", markeredgewidth=1.2,
+                [], [], linestyle="-", color=HANDLE_COLOR,
+                marker="o", markerfacecolor="#ffffff",
+                markeredgecolor=HANDLE_COLOR, alpha=HANDLE_ALPHA,
                 markevery=[1], transform=self.ax.transAxes,
                 clip_on=False, zorder=8, label="_nolegend_")
             self._rotator.set_in_layout(False)
         if point is None:
             self._rotator.set_data([], [])
             return
+        scale = self.handle_scale()
+        self._rotator.set_markersize(ROTATOR_SIZE * scale)
+        self._rotator.set_markeredgewidth(HANDLE_EDGE * scale)
+        self._rotator.set_linewidth(ROTATOR_STEM * scale)
         centre = self.rotation_centre()
         kind, key = self.selection or (None, None)
         if kind == "shape":
@@ -18714,6 +18742,25 @@ class PlotWindow(tk.Toplevel):
         x, y = self.ax.transAxes.inverted().transform((event.x, event.y))
         return (float(x), float(y))
 
+    def _grab_offset(self, index, event):
+        """How far (pixels) the control point `index` lies from the pointer
+        that grabs it.  The point keeps that distance while it is dragged,
+        so it never jumps onto the pointer: grabbed a little off its
+        centre, the tip of an arrow stays exactly where it was until the
+        mouse moves."""
+        try:
+            point = (self.selected_handle_positions() or [])[index]
+            px, py = self.ax.transAxes.transform(point)
+            return (float(px) - float(event.x), float(py) - float(event.y))
+        except (IndexError, TypeError, ValueError):
+            return (0.0, 0.0)
+
+    def _grabbed_point(self, event, drag):
+        """Where a dragged control point goes: the pointer, plus the
+        distance it was grabbed at (axes coordinates)."""
+        dx, dy = drag.get("grab") or (0.0, 0.0)
+        return self._axes_point_at(float(event.x) + dx, float(event.y) + dy)
+
     def _start_legend_drag(self, y_col, event):
         pos = self.legend_state[y_col]["pos"]
         point = self._axes_point(event)
@@ -18768,7 +18815,8 @@ class PlotWindow(tk.Toplevel):
                 if key not in self.arrow_state:
                     self._shape_drag = None
                     return
-                point = self._axes_point(event)
+                point = (self._grabbed_point(event, drag) if mode == "arrow-end"
+                         else self._axes_point(event))
                 state = self.arrow_state[key]
                 snap = self._shift_active(event)
                 if mode == "arrow-new":
@@ -18794,7 +18842,8 @@ class PlotWindow(tk.Toplevel):
             if key not in self.shape_state:
                 self._shape_drag = None
                 return
-            point = self._axes_point(event)
+            point = (self._grabbed_point(event, drag)
+                     if mode in ("line-end", "resize") else self._axes_point(event))
             state = self.shape_state[key]
             snap = self._shift_active(event)
             if mode == "line-end":             # one end of a line, as an arrow
@@ -19514,7 +19563,8 @@ class PlotWindow(tk.Toplevel):
             elif (kind == "shape"
                   and self.shape_state[key]["kind"] in OPEN_SHAPES):
                 mode = "line-end"         # a line is dragged by its two ends
-            self._shape_drag = {"key": key, "index": index, "mode": mode}
+            self._shape_drag = {"key": key, "index": index, "mode": mode,
+                                "grab": self._grab_offset(index, event)}
             if mode == "resize" and kind == "shape":
                 state = self.shape_state[key]
                 self._shape_drag["ratio"] = self.shape_ratio(state)
@@ -21566,6 +21616,15 @@ another place (see `Moving the whole graph`).
 
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
+
+The control points are small, see-through squares (45 % transparent), so
+the tip of an arrow or the corner of a picture shows right through the
+point that moves it.  They keep **the same size on the screen at every
+zoom**: at 200 % they are no larger than at 100 %, while the diagram under
+them is twice as large - which is the comfortable way to place a tip
+exactly.  A point grabbed a little off its centre does not jump onto the
+pointer: it keeps that small distance and moves exactly as far as the
+mouse does.
 
 ### Which object is in front
 

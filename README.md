@@ -1331,6 +1331,15 @@ another place (see `Moving the whole graph`).
 The blue veil and the control points are only on the screen: they are left
 out of the image that the save button of the toolbar writes.
 
+The control points are small, see-through squares (45 % transparent), so
+the tip of an arrow or the corner of a picture shows right through the
+point that moves it.  They keep **the same size on the screen at every
+zoom**: at 200 % they are no larger than at 100 %, while the diagram under
+them is twice as large - which is the comfortable way to place a tip
+exactly.  A point grabbed a little off its centre does not jump onto the
+pointer: it keeps that small distance and moves exactly as far as the
+mouse does.
+
 ### Which object is in front
 
 Everything drawn inside the plot area stands in one **stack**: the curves,
