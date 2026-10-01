@@ -11,11 +11,47 @@ Start it with:
 It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
+    python3 aplot.py --version       which APlot this is
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
     python3 aplot.py --install-desktop   Linux: icons, thumbnails and
                                          "open with" for .aplt (see below)
+
+
+## Version
+
+This is **APlot 1.0.0 (2026-10-01)**.  The number is written in one place
+only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
+beside it); the About window, `python3 aplot.py --version`, APlot.app on a
+Mac and every saved `.aplt` file (`application_version` in
+`document.json`) all read it from there.
+
+The numbers follow **Semantic Versioning**, `MAJOR.MINOR.PATCH`:
+
+| Step | Example | When |
+| --- | --- | --- |
+| PATCH | 1.0.0 -> 1.0.1 | a fix: nothing new to learn, the files stay the same |
+| MINOR | 1.0.1 -> 1.1.0 | something new; every older `.aplt` file still opens |
+| MAJOR | 1.1.0 -> 2.0.0 | a change older versions cannot follow, such as a new kind of `.aplt` file |
+
+A release is made in four small steps: raise `APP_VERSION` and set
+`APP_VERSION_DATE`, write the same number into the description at the top
+of `aplot.py`, add a line to the **Version history** below, and - with git
+keeping the history of the code - commit and tag it:
+
+    git commit -am "APlot 1.0.1"
+    git tag -a v1.0.1 -m "APlot 1.0.1"
+
+`git log` then lists every change, `git diff v1.0.0 v1.0.1` shows what a
+release changed, and `git checkout v1.0.0` brings back an older version
+exactly as it was.
+
+### Version history
+
+| Version | Date | What changed |
+| --- | --- | --- |
+| 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
 
 
 ## What it needs
@@ -658,7 +694,12 @@ live where they are needed and do not take room above the sheet.
     and computes the results at once.  What is written depends on what was
     selected - a **series**, a **formula** or a **copy**; see the next
     section.
-  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel - and if there is no neighbouring column with data, down to the last row of the sheet.
+  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel - and if there is no neighbouring column with data, down to the last row of the sheet.  Only the **columns of the selection** are filled: the handle of a single cell fills that one column, and a formula in the cell beside it is left as it is.
+  * The handle has to be **pulled** by a few pixels before it fills
+    anything, so a click on it - or the first click of a double click,
+    with the little twitch of the hand that goes with it - never fills
+    the neighbouring cell by accident (half of the square lies over the
+    next column).
   * The handle is always **on top of the cell editor**, so it can be grabbed
     at once - also right after walking to the cell with the arrow keys,
     while the cell is still open for typing.
@@ -992,6 +1033,14 @@ buttons**: pulling the window in stops there and the horizontal scroll bar
 takes over, so neither the switches nor the numbers under them can be
 squeezed out of sight.  `Settings > Spreadsheet > Column width` sets the
 starting width; anything smaller than that minimum is raised to it.
+
+**A column is made wider or narrower** by dragging the right edge of its
+heading, and it **keeps that width**: it no longer stretches with the
+window, so neither a redrawing of the sheet nor a resized window pulls the
+edge back.  The other columns still share out the rest of the window, and
+when the columns are wider than the window, the table scrolls sideways.
+The width follows the column when it is renamed, is copied with
+`Duplicate tab` and is written into the `.aplt` file.
 
 The rules are simple:
 

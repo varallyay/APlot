@@ -97,6 +97,11 @@ DataTable                spreadsheet-like Treeview with in-place editing
 PlotWindow               the interactive figure window
 App                      main window, menus, file I/O
 
+Version
+-------
+1.0.0 (2026-10-01) - see `APP_VERSION` below and "Version history" in the
+documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
+
 Developer
 ----------
 Zoltán Várallyay, PhD, Sept 2026, Budapest, Hungary
@@ -157,6 +162,19 @@ from matplotlib.transforms import (Affine2D, Bbox, BboxTransformTo,
                                    TransformedBbox)
 
 APP_NAME = "APlot"
+# The version of the program - the ONE place where it is written.  The
+# About window, `--version`, APlot.app and every saved .aplt file read it
+# from here.  Semantic Versioning (https://semver.org), MAJOR.MINOR.PATCH:
+#   PATCH  (1.0.0 -> 1.0.1)  a fix; nothing new to learn, files unchanged
+#   MINOR  (1.0.1 -> 1.1.0)  something new; files of older versions open
+#   MAJOR  (1.1.0 -> 2.0.0)  a change older versions cannot follow (the
+#                            .aplt file changed in a way they cannot read)
+# Each release also gets a line in "Version history" of DOCUMENTATION, the
+# date below, the same number in the description at the top of this file -
+# and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
+APP_VERSION = "1.0.0"
+APP_VERSION_DATE = "2026-10-01"
+__version__ = APP_VERSION
 # who made it: the end of the description at the top, and the About window
 DEVELOPER = ("Zoltán Várallyay, PhD, Sept 2026, Budapest, Hungary\n"
              "with the help of AI technology (Antigravity, Claude)")
@@ -561,6 +579,10 @@ LETTER_WIDTH = 56          # the clickable strip under the check buttons
 # a table column is never narrower than its two check buttons
 MIN_COLUMN_WIDTH = 104
 FILL_HANDLE_SIZE = 6       # the black square that pulls a selection down
+# pixels the fill handle has to be pulled before it fills anything: the
+# square sits on the corner of the cell, half of it over the next column, so
+# a click - or the first click of a double click - must not fill sideways
+FILL_DRAG_START = 6
 MAX_AUTO_COLUMNS = 64      # a blank sheet never grows past this
 HISTOGRAM_BINS = 20        # a histogram counts into this many bins by default
 MAX_HISTOGRAM_BINS = 1000  # ... and never into more than this
@@ -1455,8 +1477,8 @@ APP_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
     <key>CFBundleIconFile</key><string>{icon}</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1.0</string>
+    <key>CFBundleShortVersionString</key><string>{version}</string>
+    <key>CFBundleVersion</key><string>{version}</string>
     <key>LSMinimumSystemVersion</key><string>10.13</string>
     <key>NSHighResolutionCapable</key><true/>
 {documents}
@@ -1504,7 +1526,8 @@ def app_plist(name=APP_NAME, icon=None, document_icon=None):
         mime=PROJECT_MIMETYPE,
         icon=document_icon or f"{DOCUMENT_ICON_NAME}.icns")
     return APP_PLIST.format(name=name, identifier=APP_ID,
-                            icon=icon or f"{name}.icns", documents=documents)
+                            icon=icon or f"{name}.icns", documents=documents,
+                            version=APP_VERSION)
 
 
 def make_macos_app(folder=None, name=APP_NAME):
@@ -8496,6 +8519,11 @@ class DataTable(ttk.Frame):
         self.on_add_column = on_add_column
         self.on_delete_column = on_delete_column
         self.df = pd.DataFrame()
+        # the widths the user gave columns by dragging the edge of their
+        # heading: {column name: pixels}.  They are kept through every
+        # redrawing of the sheet and written into the .aplt file.
+        self.column_widths = {}
+        self._resizing = None           # the heading edge being dragged
         self.current_column = None      # column of the last clicked cell/heading
         self._editor = None
         self._heading_editor = None
@@ -9375,7 +9403,14 @@ class DataTable(ttk.Frame):
         self._fill_dragging = True
         self._fill_start_bounds = bounds
         self._fill_target_row = bounds[2]
+        self._fill_target_col = bounds[3]
+        self._fill_direction = None        # nothing from an earlier pull
         self._fill_point = None
+        try:
+            self._fill_press = (event.x_root - self.tree.winfo_rootx(),
+                                event.y_root - self.tree.winfo_rooty())
+        except (tk.TclError, AttributeError, TypeError):
+            self._fill_press = None
         self._show_fill_feedback(bounds[2], bounds[2], bounds[1], bounds[3])
         return "break"
 
@@ -9461,9 +9496,17 @@ class DataTable(ttk.Frame):
         except tk.TclError:
             pass
 
-        col_id = self.tree.identify_column(tree_x)
-
         r0, c0, r1, c1 = self._fill_start_bounds
+        press = getattr(self, "_fill_press", None)
+        if press is not None and abs(tree_x - press[0]) < FILL_DRAG_START \
+                and abs(tree_y - press[1]) < FILL_DRAG_START:
+            # still where the button went down: a click, not a pull
+            self._fill_direction = None
+            self._fill_target_row, self._fill_target_col = r1, c1
+            self._hide_fill_feedback()
+            return "break"
+
+        col_id = self.tree.identify_column(tree_x)
 
         target_r = r1
         target_c = c1
@@ -9565,7 +9608,14 @@ class DataTable(ttk.Frame):
         return "break"
 
     def _on_fill_double_click(self, _event=None):
+        """Fill the selected column(s) down as far as the neighbours go.
+
+        Only the columns of the selection are filled - a single cell fills
+        its own column and nothing beside it.
+        """
         self._commit_edit()
+        self._fill_dragging = False        # the second click is no pull
+        self._fill_direction = None
         bounds = self.block_bounds()
         if bounds is None:
             return "break"
@@ -10096,9 +10146,10 @@ class DataTable(ttk.Frame):
         # their own, readable size whatever the table font is
         self.style.configure("APlot.Axis.TCheckbutton",
                              font=("TkDefaultFont", AXIS_CHECK_FONT), padding=0)
-        width = self.column_width()
         for column in self.tree["columns"]:
-            self.tree.column(column, width=width, minwidth=MIN_COLUMN_WIDTH)
+            self.tree.column(column, width=self.column_width(column),
+                             minwidth=MIN_COLUMN_WIDTH,
+                             stretch=str(column) not in self.column_widths)
         self.after(1, self._place_checks)
 
     def table_background(self):
@@ -10125,10 +10176,60 @@ class DataTable(ttk.Frame):
         """The colour of the row numbers: the one of the column letters."""
         return HEADER_COLOR
 
-    def column_width(self):
-        """The width of one column: never narrower than its check buttons."""
+    def column_width(self, name=None):
+        """The width of one column: never narrower than its check buttons.
+
+        A column the user has made wider or narrower keeps that width
+        (`column_widths`); every other one has the width of the settings.
+        """
         wanted = int(self.config_obj.get("table", "column_width"))
+        if name is not None and str(name) in self.column_widths:
+            wanted = int(self.column_widths[str(name)])
         return max(MIN_COLUMN_WIDTH, wanted)
+
+    def _column_of(self, column_id):
+        """The name of the column `#3` stands for, or None."""
+        try:
+            index = int(str(column_id).lstrip("#")) - 1
+        except (TypeError, ValueError):
+            return None
+        columns = list(self.df.columns)
+        return str(columns[index]) if 0 <= index < len(columns) else None
+
+    def keep_column_width(self, name, width=None):
+        """Hold one column at the width it was dragged to (or `width`).
+
+        Such a column stops stretching with the window - otherwise Tk would
+        share the room out again at the next redrawing and pull the edge
+        back to where it was.  The other columns still fill the window;
+        when the columns are wider than it, the table scrolls sideways.
+        """
+        name = str(name)
+        if name not in [str(one) for one in self.df.columns]:
+            return None
+        try:
+            if width is None:
+                width = int(self.tree.column(name, "width"))
+            width = max(MIN_COLUMN_WIDTH, int(width))
+            self.tree.column(name, width=width, stretch=False)
+        except (tk.TclError, TypeError, ValueError):
+            return None
+        self.column_widths[name] = width
+        self.after(1, self._place_checks)
+        self.after(1, self._refresh_outline)
+        return width
+
+    def forget_column_width(self, name):
+        """Let one column follow the settings and the window again."""
+        if self.column_widths.pop(str(name), None) is None:
+            return False
+        try:
+            self.tree.column(str(name), width=self.column_width(),
+                             stretch=True)
+        except tk.TclError:
+            return False
+        self.after(1, self._place_checks)
+        return True
 
     # -- data --------------------------------------------------------------
     def set_dataframe(self, df, check_all=False, blank=False,
@@ -10230,16 +10331,22 @@ class DataTable(ttk.Frame):
         if hasattr(self, "row_tree"):
             self.row_tree.delete(*self.row_tree.get_children())
         columns = list(self.df.columns)
-        width = self.column_width()
         self.tree["columns"] = columns
+        # a column that is gone takes its width with it
+        for name in [one for one in self.column_widths
+                     if one not in [str(col) for col in columns]]:
+            del self.column_widths[name]
         for idx, col in enumerate(columns):
             c_letter = col_to_letter(idx)
             self.tree.heading(col, text=f"{c_letter}  ({col})")
             # minwidth keeps the two check buttons - and the numbers under
             # them - readable however narrow the window is made; the
-            # horizontal scroll bar takes over from there
-            self.tree.column(col, width=width, minwidth=MIN_COLUMN_WIDTH,
-                             anchor="center", stretch=True)
+            # horizontal scroll bar takes over from there.  A column the
+            # user has sized keeps its width and does not stretch.
+            sized = str(col) in self.column_widths
+            self.tree.column(col, width=self.column_width(col),
+                             minwidth=MIN_COLUMN_WIDTH,
+                             anchor="center", stretch=not sized)
         self.update_idletasks()
         for index, row in enumerate(self.df.itertuples(index=False, name=None)):
             self.tree.insert("", "end", iid=str(index),
@@ -10430,6 +10537,8 @@ class DataTable(ttk.Frame):
         if new in self.df.columns:
             return False
         index = list(self.df.columns).index(old)
+        if str(old) in self.column_widths:     # the width goes with the name
+            self.column_widths[str(new)] = self.column_widths.pop(str(old))
         self.df = self.df.rename(columns={old: new})
         self.refresh()
         self.current_column = new
@@ -10453,6 +10562,11 @@ class DataTable(ttk.Frame):
         self.tree.focus_set()
         region = self.tree.identify_region(event.x, event.y)
         column_id = self.tree.identify_column(event.x)
+        if region == "separator" and column_id:
+            # the edge of a heading: Tk itself drags it; the new width is
+            # taken over when the button is let go
+            self._resizing = self._column_of(column_id)
+            return None
         if region == "heading" and column_id:
             self.after(1, lambda: self._begin_heading_edit(column_id))
             return
@@ -10616,6 +10730,9 @@ class DataTable(ttk.Frame):
             pass
 
     def _on_drag_end(self, _event=None):
+        if self._resizing is not None:
+            name, self._resizing = self._resizing, None
+            self.after_idle(lambda n=name: self.keep_column_width(n))
         self._stop_auto_scroll()
         self._selecting = False
         self._press = None
@@ -20699,11 +20816,47 @@ Start it with:
 It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
+    python3 aplot.py --version       which APlot this is
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
     python3 aplot.py --install-desktop   Linux: icons, thumbnails and
                                          "open with" for .aplt (see below)
+
+
+## Version
+
+This is **APlot 1.0.0 (2026-10-01)**.  The number is written in one place
+only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
+beside it); the About window, `python3 aplot.py --version`, APlot.app on a
+Mac and every saved `.aplt` file (`application_version` in
+`document.json`) all read it from there.
+
+The numbers follow **Semantic Versioning**, `MAJOR.MINOR.PATCH`:
+
+| Step | Example | When |
+| --- | --- | --- |
+| PATCH | 1.0.0 -> 1.0.1 | a fix: nothing new to learn, the files stay the same |
+| MINOR | 1.0.1 -> 1.1.0 | something new; every older `.aplt` file still opens |
+| MAJOR | 1.1.0 -> 2.0.0 | a change older versions cannot follow, such as a new kind of `.aplt` file |
+
+A release is made in four small steps: raise `APP_VERSION` and set
+`APP_VERSION_DATE`, write the same number into the description at the top
+of `aplot.py`, add a line to the **Version history** below, and - with git
+keeping the history of the code - commit and tag it:
+
+    git commit -am "APlot 1.0.1"
+    git tag -a v1.0.1 -m "APlot 1.0.1"
+
+`git log` then lists every change, `git diff v1.0.0 v1.0.1` shows what a
+release changed, and `git checkout v1.0.0` brings back an older version
+exactly as it was.
+
+### Version history
+
+| Version | Date | What changed |
+| --- | --- | --- |
+| 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
 
 
 ## What it needs
@@ -21346,7 +21499,12 @@ live where they are needed and do not take room above the sheet.
     and computes the results at once.  What is written depends on what was
     selected - a **series**, a **formula** or a **copy**; see the next
     section.
-  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel - and if there is no neighbouring column with data, down to the last row of the sheet.
+  * **Option+Double-Click / Double-Click**: Double-clicking the fill handle (or pressing `Option`/`Alt` while double-clicking) automatically fills down all rows until the adjacent left or right column has empty cells, exactly like Microsoft Excel - and if there is no neighbouring column with data, down to the last row of the sheet.  Only the **columns of the selection** are filled: the handle of a single cell fills that one column, and a formula in the cell beside it is left as it is.
+  * The handle has to be **pulled** by a few pixels before it fills
+    anything, so a click on it - or the first click of a double click,
+    with the little twitch of the hand that goes with it - never fills
+    the neighbouring cell by accident (half of the square lies over the
+    next column).
   * The handle is always **on top of the cell editor**, so it can be grabbed
     at once - also right after walking to the cell with the arrow keys,
     while the cell is still open for typing.
@@ -21680,6 +21838,14 @@ buttons**: pulling the window in stops there and the horizontal scroll bar
 takes over, so neither the switches nor the numbers under them can be
 squeezed out of sight.  `Settings > Spreadsheet > Column width` sets the
 starting width; anything smaller than that minimum is raised to it.
+
+**A column is made wider or narrower** by dragging the right edge of its
+heading, and it **keeps that width**: it no longer stretches with the
+window, so neither a redrawing of the sheet nor a resized window pulls the
+edge back.  The other columns still share out the rest of the window, and
+when the columns are wider than the window, the table scrolls sideways.
+The width follows the column when it is renamed, is copied with
+`Duplicate tab` and is written into the `.aplt` file.
 
 The rules are simple:
 
@@ -24861,7 +25027,8 @@ class App:
     def show_about(self):
         messagebox.showinfo(
             f"About {APP_NAME}",
-            f"{APP_NAME} - Data Visualizer\n\n"
+            f"{APP_NAME} - Data Visualizer\n"
+            f"Version {APP_VERSION} ({APP_VERSION_DATE})\n\n"
             "Spreadsheet editor and interactive Matplotlib plots.\n\n"
             f"Developer\n{DEVELOPER}\n\n"
             f"Settings file: {self.settings.path}", parent=self.root)
@@ -25305,6 +25472,7 @@ class App:
                      for name in frame.columns},
             "formulas": dict(getattr(table, "cell_formulas", {})),
             "random_seed": int(getattr(table, "random_seed", 0) or 0),
+            "column_widths": dict(getattr(table, "column_widths", {}) or {}),
             "plot_with_previous": bool(
                 getattr(table, "plot_with_previous_var", None)
                 and table.plot_with_previous_var.get()),
@@ -25322,6 +25490,9 @@ class App:
         frame = pd.DataFrame(snapshot.get("rows") or [],
                              columns=snapshot.get("columns") or [])
         frame = frame.where(frame.notna(), "")
+        if snapshot.get("column_widths") is not None:
+            table.column_widths = {str(k): int(v) for k, v
+                                   in snapshot["column_widths"].items()}
         table.set_dataframe(frame)
         table.cell_formulas = dict(snapshot.get("formulas") or {})
         if snapshot.get("random_seed") is not None:
@@ -25532,11 +25703,15 @@ class App:
                 # what RAND() and RANDN() draw from: the numbers of the
                 # sheet come back the same when the file is opened again
                 "random_seed": int(getattr(tab, "random_seed", 0) or 0),
+                # the columns the user made wider or narrower
+                "column_widths": dict(getattr(tab, "column_widths", {}) or {}),
             })
             
         first_tab = tabs_data[0] if tabs_data else {"columns": [], "rows": [], "formulas": {}}
         return {
             "format": "aplot", "version": 2, "application": APP_NAME,
+            # which APlot wrote it ("version" above is the file format)
+            "application_version": APP_VERSION,
             "data": first_tab,
             "tabs": tabs_data,
             "plots": [dict(window.to_state(),
@@ -25685,6 +25860,14 @@ class App:
                     table.random_seed = int(tab_data["random_seed"])
                 except (TypeError, ValueError):
                     pass
+            widths = tab_data.get("column_widths") or {}
+            if isinstance(widths, dict) and widths:
+                try:
+                    table.column_widths = {str(k): int(v)
+                                           for k, v in widths.items()}
+                except (TypeError, ValueError):
+                    table.column_widths = {}
+                table.apply_config()
             
         self.notebook.select(0)
 
@@ -26149,7 +26332,7 @@ class App:
         return int(index)
 
 
-USAGE = f"""{APP_NAME} - plotting and editing tabular data
+USAGE = f"""{APP_NAME} {APP_VERSION} - plotting and editing tabular data
 
   python3 aplot.py                 start the program
   python3 aplot.py FILE.aplt       start the program with that graph
@@ -26162,6 +26345,7 @@ USAGE = f"""{APP_NAME} - plotting and editing tabular data
                                    run with sudo)
   python3 aplot.py --uninstall-desktop [--system]
                                    take that away again
+  python3 aplot.py --version       the version of this APlot
   python3 aplot.py --help          this text
 """
 
@@ -26173,6 +26357,9 @@ def run_command(argv):
     first = str(argv[0])
     if first in ("-h", "--help"):
         print(USAGE)
+        return 0
+    if first in ("-V", "--version"):
+        print(f"{APP_NAME} {APP_VERSION} ({APP_VERSION_DATE})")
         return 0
     if first == "--icon":
         path = argv[1] if len(argv) > 1 else f"{APP_NAME.lower()}_icon.png"
