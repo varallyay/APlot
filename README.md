@@ -315,21 +315,29 @@ works on.
 * **Colouring, duplicating and deleting**: right click (or Ctrl-click) a
   tab.  `Tab colour` paints a small square on it, which is useful for
   telling a fit, a measurement and a calculation apart at a glance.
-  **`Duplicate tab`** puts a second sheet with the same contents right
-  after it and brings it to the front: the numbers, the formulas (random
+  **`Duplicate tab`** puts a second sheet with the same contents after
+  it - after the sheets glued to it with `Plot with previous tab` (its
+  fits), never between them - and brings it to the front: the numbers, the formulas (random
   ones draw the very same numbers), the column names, which columns are
   plotted against which axis and the colour of the tab.  It is called
   after the original - `Signals copy`, `Signals copy 2` - and it is a
   sheet of its own from then on; its `Plot with previous tab` is left off.
-  The last sheet is never deleted.
+  The last sheet is never deleted.  When a sheet with glued sheets after
+  it is deleted, those stay together as a group of their own instead of
+  being glued to the sheet before it.
 * **Moving a sheet**: press on its tab and **drag it sideways**.  A blue
   line shows the gap it will land in, and it goes there when the button is
   let go; near either end of a long row the row scrolls along, so a far
   place can be reached as well.  The moved sheet stays in front, every
   diagram keeps drawing its own sheet, and `Undo` puts the tab back.  The
-  order of the sheets decides which ones are glued together by `Plot with
-  previous tab`, so a move can change a group - as always, the diagrams
-  follow at the next `Update`.  A short movement is still just a click.
+  sheets glued to it by `Plot with previous tab` - a `Fit` sheet, say -
+  **move with it**, as one block, so its diagram keeps its fitted curves;
+  and a sheet dropped between another one and its glued sheets goes after
+  that whole group instead, so it cannot take them over.  A glued sheet
+  dragged by its own tab moves alone and joins the sheet it is dropped
+  after - that is how a fit is given to another sheet on purpose.  As
+  always, the diagrams follow at the next `Update`.  A short movement is
+  still just a click.
 * **Many sheets, long names**: when the tabs no longer fit into the width
   of the window the row **scrolls**.  Two small arrows appear at its right
   end, with the `+` beside them, so the `+` never slides out of the

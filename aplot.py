@@ -20910,21 +20910,29 @@ works on.
 * **Colouring, duplicating and deleting**: right click (or Ctrl-click) a
   tab.  `Tab colour` paints a small square on it, which is useful for
   telling a fit, a measurement and a calculation apart at a glance.
-  **`Duplicate tab`** puts a second sheet with the same contents right
-  after it and brings it to the front: the numbers, the formulas (random
+  **`Duplicate tab`** puts a second sheet with the same contents after
+  it - after the sheets glued to it with `Plot with previous tab` (its
+  fits), never between them - and brings it to the front: the numbers, the formulas (random
   ones draw the very same numbers), the column names, which columns are
   plotted against which axis and the colour of the tab.  It is called
   after the original - `Signals copy`, `Signals copy 2` - and it is a
   sheet of its own from then on; its `Plot with previous tab` is left off.
-  The last sheet is never deleted.
+  The last sheet is never deleted.  When a sheet with glued sheets after
+  it is deleted, those stay together as a group of their own instead of
+  being glued to the sheet before it.
 * **Moving a sheet**: press on its tab and **drag it sideways**.  A blue
   line shows the gap it will land in, and it goes there when the button is
   let go; near either end of a long row the row scrolls along, so a far
   place can be reached as well.  The moved sheet stays in front, every
   diagram keeps drawing its own sheet, and `Undo` puts the tab back.  The
-  order of the sheets decides which ones are glued together by `Plot with
-  previous tab`, so a move can change a group - as always, the diagrams
-  follow at the next `Update`.  A short movement is still just a click.
+  sheets glued to it by `Plot with previous tab` - a `Fit` sheet, say -
+  **move with it**, as one block, so its diagram keeps its fitted curves;
+  and a sheet dropped between another one and its glued sheets goes after
+  that whole group instead, so it cannot take them over.  A glued sheet
+  dragged by its own tab moves alone and joins the sheet it is dropped
+  after - that is how a fit is given to another sheet on purpose.  As
+  always, the diagrams follow at the next `Update`.  A short movement is
+  still just a click.
 * **Many sheets, long names**: when the tabs no longer fit into the width
   of the window the row **scrolls**.  Two small arrows appear at its right
   end, with the `+` beside them, so the `+` never slides out of the
@@ -23852,15 +23860,30 @@ class App:
         menu.add_command(label="Delete tab", command=lambda: self.delete_tab(idx))
         menu.tk_popup(event.x_root, event.y_root)
 
+    def tab_group_end(self, index):
+        """The last sheet of the run glued (`Plot with previous tab`) after
+        the sheet at `index` - `index` itself when nothing is glued to it."""
+        last = int(index)
+        while self.tab_ticked(last + 1):
+            last += 1
+        return last
+
     def move_tab(self, source, target, record=True):
         """Put the sheet at `source` to the place `target` in the row of tabs.
 
+        `target` is the place it gets among the other tabs (0 = first).
         Everything that knows a sheet by its place follows it: the diagrams
         (each keeps drawing its own sheet), the steps that Undo can take
-        back, the sheet in front.  Which sheets are glued together with
-        `Plot with previous tab` depends on the order, so a group may change
-        with the move - as always, the diagrams wait for `Update`.  The move
-        is one step that Undo takes back.
+        back, the sheet in front.
+
+        The sheets glued to it with `Plot with previous tab` - a fitted
+        curve, say - **go with it**, as one block: they belong to its
+        diagram, and left behind they would be glued to whichever sheet
+        happened to come before them then.  For the same reason a sheet is
+        never put between another one and the sheets glued to that one: it
+        goes after the whole group.  A glued sheet dragged by itself moves
+        alone and joins the sheets it is dropped at.  The move is one step
+        that Undo takes back.
         """
         count = len(self.tables)
         try:
@@ -23869,29 +23892,62 @@ class App:
             return False
         if not (0 <= source < count and 0 <= target < count) or source == target:
             return False
+        head = not self.tab_ticked(source)
+        last = self.tab_group_end(source) if head else source
+        block = list(range(source, last + 1))
+        rest = [one for one in range(count) if one not in block]
+        followers = len(block) - 1
+        # `target` counts the tabs without the dragged one; its own glued
+        # sheets stand right after it in that count
+        if target <= source:
+            place = target
+        elif target >= source + followers:
+            place = target - followers
+        else:
+            return False                  # dropped inside its own group
+        if head:                          # not between a sheet and its fits
+            while place < len(rest) and self.tab_ticked(rest[place]):
+                place += 1
+        order = rest[:place] + block + rest[place:]
+        if order == list(range(count)):
+            return False
+        return self._apply_tab_order(order, record=record,
+                                     front=order.index(source))
+
+    def _apply_tab_order(self, order, record=True, front=None,
+                         label="moving the tab"):
+        """Put the sheets into the order `order` (their old places)."""
+        count = len(self.tables)
+        if sorted(order) != list(range(count)):
+            return False
         self.cancel_tab_rename()
         for table in self.tables:
             table._commit_edit()
-        order = list(range(count))
-        order.insert(target, order.pop(source))
         new_place = {old: new for new, old in enumerate(order)}
-        table = self.tables.pop(source)
-        self.tables.insert(target, table)
-        self.notebook.insert(target, table.master)   # the tab moves with it
+        tables = [self.tables[old] for old in order]
+        self.tables[:] = tables
+        for place, table in enumerate(tables):
+            self.notebook.insert(place, table.master)   # the tabs move along
         for window in self.open_windows():
             where = getattr(window, "source_tab", None)
             if where is not None and int(where) in new_place:
                 window.source_tab = new_place[int(where)]
         self._remap_sheet_steps(new_place)
-        self.notebook.select(target)
+        if front is not None:
+            self.notebook.select(int(front))
         self._follow_active_tab()
         if record and not self.undo.busy():
+            back = [new_place[old] for old in range(count)]
+            # undone, the sheet in front goes back to where it came from
+            before = {"order": back,
+                      "front": order[front] if front is not None else None}
+            after = {"order": list(order), "front": front}
             self.undo.push(UndoStep(
-                "moving the tab", {"from": target, "to": source},
-                {"from": source, "to": target},
-                lambda step: self.move_tab(step["from"], step["to"],
-                                           record=False)))
+                label, before, after,
+                lambda step: self._apply_tab_order(step["order"], record=False,
+                                                   front=step["front"])))
             self.refresh_edit_menus()
+        self._tabs_changed()
         self.root.after_idle(self.focus_sheet)
         return True
 
@@ -23906,7 +23962,8 @@ class App:
                     snapshot["index"] = new_place.get(old, old)
 
     def duplicate_tab(self, idx):
-        """A second sheet with the same contents, right after this one.
+        """A second sheet with the same contents, after this one and the
+        sheets glued to it.
 
         Everything the sheet holds is copied: the numbers, the formulas
         (the random ones draw the very same numbers), the column names,
@@ -23920,15 +23977,18 @@ class App:
         self.tables[idx]._commit_edit()
         snapshot = self.tab_document(idx)
         name = self.free_tab_name(f"{snapshot['name']} copy")
+        # after the sheets glued to this one, never between them: put right
+        # after it, the copy would take its fitted curves away from it
+        place = self.tab_group_end(idx) + 1
         self.undo.hold()           # building the copy is not an edit of it
         try:
-            table = self.add_tab(name, at=idx + 1)
-            snapshot.update(index=idx + 1, name=name,
+            table = self.add_tab(name, at=place)
+            snapshot.update(index=place, name=name,
                             plot_with_previous=False)
             self.apply_tab_document(snapshot)
         finally:
             self.undo.release()
-        table._undo_document = self.tab_document(idx + 1)
+        table._undo_document = self.tab_document(place)
         self.root.after_idle(self.focus_sheet)
         return table
 
@@ -24118,6 +24178,10 @@ class App:
             
         current_name = self.notebook.tab(idx, "text")
         if messagebox.askyesno("Delete Tab", f"Delete tab '{current_name}' with its data?", parent=self.root):
+            # the sheets glued to this one stay together, as a group of
+            # their own: they are not handed over to the sheet before it
+            if not self.tab_ticked(idx) and self.tab_ticked(idx + 1):
+                self.tables[idx + 1].plot_with_previous_var.set(False)
             table = self.tables.pop(idx)
             self.notebook.forget(idx)
             self.tab_images.pop(str(table.master), None)
