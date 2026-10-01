@@ -16735,22 +16735,38 @@ class PlotWindow(tk.Toplevel):
         except tk.TclError:
             return tkfont.Font(size=-pixels)
 
-    def _inline_geometry(self, artist, font, value):
-        """Where the little editor goes and how big it is, in widget pixels."""
+    def _inline_centre(self, artist):
+        """The middle of a text, in pixels of the canvas widget."""
         widget = self.canvas.get_tk_widget()
         widget.update_idletasks()
         width_px = max(1, widget.winfo_width())
         height_px = max(1, widget.winfo_height())
         try:
             box = artist.get_window_extent(self._renderer())
-            centre = (0.5 * (box.x0 + box.x1),
-                      height_px - 0.5 * (box.y0 + box.y1))
+            return (0.5 * (box.x0 + box.x1),
+                    height_px - 0.5 * (box.y0 + box.y1))
         except (RuntimeError, ValueError, AttributeError):
-            centre = (0.5 * width_px, 0.5 * height_px)
+            return (0.5 * width_px, 0.5 * height_px)
+
+    def _inline_geometry(self, artist, font, value, centre=None):
+        """Where the little editor goes and how big it is, in widget pixels.
+
+        It is as wide as the text it holds plus the width of one more
+        letter - room for the next one and for the cursor - and it stays
+        centred on the text it rewrites, the way the label itself grows
+        from its middle.
+        """
+        widget = self.canvas.get_tk_widget()
+        width_px = max(1, widget.winfo_width())
+        height_px = max(1, widget.winfo_height())
+        if centre is None:
+            centre = self._inline_centre(artist)
         lines = value.split("\n") or [""]
         text_w = max([font.measure(line) for line in lines] + [0])
         line_h = font.metrics("linespace")
-        width = max(INLINE_MIN_WIDTH, text_w + 2 * INLINE_PAD + 6)
+        width = max(INLINE_MIN_WIDTH,
+                    text_w + font.measure("M") + 2 * INLINE_PAD + 6)
+        width = min(width, width_px)
         height = len(lines) * line_h + 2 * INLINE_PAD + 4
         x = int(round(centre[0] - width / 2.0))
         y = int(round(centre[1] - height / 2.0))
@@ -16774,7 +16790,9 @@ class PlotWindow(tk.Toplevel):
         widget = self.canvas.get_tk_widget()
         value = self.text_value(kind, key)
         font = self._inline_font(artist)
-        left, top, width, height = self._inline_geometry(artist, font, value)
+        centre = self._inline_centre(artist)
+        left, top, width, height = self._inline_geometry(artist, font, value,
+                                                         centre)
         # the blinking cursor: its colour is set by hand, because the colour
         # the system gives it can be white - invisible on the white editor
         caret = max(2, int(round(font.metrics("linespace") / 9.0)))
@@ -16802,7 +16820,13 @@ class PlotWindow(tk.Toplevel):
         editor.bind("<FocusOut>", lambda _e: self.commit_inline_edit())
         editor.place(x=left, y=top, width=width, height=height)
         self._inline = {"kind": kind, "key": key, "editor": editor,
-                        "value": value, "artist": artist}
+                        "value": value, "artist": artist, "font": font,
+                        "centre": centre, "size": (width, height)}
+        # it grows (and shrinks) with what is written: every change of the
+        # text - a key, a paste, Undo - fits it to its new width
+        editor.edit_modified(False)
+        editor.bind("<<Modified>>", self._inline_changed)
+        editor.bind("<KeyRelease>", lambda _e: self.fit_inline_editor(), add="+")
         artist.set_visible(False)          # the editor takes its place
         self.draw()
         editor.focus_set()
@@ -16826,6 +16850,38 @@ class PlotWindow(tk.Toplevel):
         self.after(30, lambda box=editor: self._insist_inline_focus(box))
         self.flash("Write the text and press Enter - Escape keeps the old one")
         return editor
+
+    def _inline_changed(self, _event=None):
+        inline = self._inline
+        if inline is None:
+            return None
+        try:
+            inline["editor"].edit_modified(False)   # to hear the next one
+        except tk.TclError:
+            return None
+        self.fit_inline_editor()
+        return None
+
+    def fit_inline_editor(self):
+        """Make the open editor as wide (and as tall) as its text."""
+        inline = self._inline
+        if inline is None:
+            return None
+        editor = inline["editor"]
+        text = self.inline_text()
+        if text is None:
+            return None
+        left, top, width, height = self._inline_geometry(
+            inline["artist"], inline["font"], text, inline["centre"])
+        try:
+            editor.place_configure(x=left, y=top, width=width, height=height)
+            # whatever was scrolled out of the narrow box comes back
+            editor.xview_moveto(0.0)
+            editor.see("insert")
+        except tk.TclError:
+            return None
+        inline["size"] = (width, height)
+        return width, height
 
     def _insist_inline_focus(self, editor):
         """Keep the keyboard - and with it the blinking cursor - in the editor."""
@@ -18831,6 +18887,31 @@ class PlotWindow(tk.Toplevel):
                 return y_col, legend
         return None, None
 
+    def legend_sample_hit(self, column, x, y):
+        """True when (x, y) is on the legend box of `column` but not on its
+        text: on the sample of the curve, or the margin around it."""
+        legend = self.legends.get(column)
+        if legend is None or x is None or y is None:
+            return False
+        try:
+            box = legend.get_window_extent(self._renderer())
+        except (RuntimeError, ValueError, AttributeError):
+            return False
+        if not box.contains(x, y):
+            return False
+        # the text exactly (a long label must not reach over the sample)
+        renderer = self._renderer()
+        for text in legend.get_texts():
+            try:
+                area = text.get_window_extent(renderer)
+            except (RuntimeError, ValueError, AttributeError):
+                continue
+            pad = 2.0 * self.screen_ratio()
+            if (area.x0 - pad <= x <= area.x1 + pad
+                    and area.y0 - pad <= y <= area.y1 + pad):
+                return False
+        return True
+
     def _legend_text_hit(self, legend, x, y):
         renderer = self._renderer()
         for text in legend.get_texts():
@@ -19777,8 +19858,20 @@ class PlotWindow(tk.Toplevel):
         every property window is reached by clicking twice: a drawing, an
         arrow, a text box, a legend entry, a **curve**, the frame and the
         numbers of an axis alike.
+
+        A legend box has two parts: its **text** opens the legend editor,
+        and its **sample** - the little line, marker or patch in front of
+        the text - opens the properties of the curve it stands for.
         """
         kind, key = self.object_at(event.x, event.y)
+        if kind == "legend" and self.legend_sample_hit(key, event.x, event.y):
+            line = self.series.get(key)
+            if line is not None:
+                if self.selection is not None:
+                    self.select_object(None, None)
+                    self.draw()
+                self.open_series_dialog(line)
+                return True
         if kind is not None and kind != "frame":
             self.select_object(kind, key)
             self.draw()
@@ -21909,6 +22002,8 @@ another place (see `Moving the whole graph`).
 | Drag a curve, an axis line or the numbers of an axis | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
 | Drag on the empty background | Draws a **rectangle**: every legend box, text box, title, axis label, drawing and arrow it touches is chosen, and they then move together (see `Choosing several objects at once`).  `Shift` adds to what is already chosen. |
 | Click a curve twice | Curve properties: line and marker settings separately.  One click does not open it - it grabs the graph. |
+| Click twice on the **sample** of a legend box (the little line, marker or patch in front of its text) | The curve properties of that curve, the same window as clicking the curve itself twice. |
+| Click twice on the **text** of a legend box | The legend editor of that entry (its text, size, colour and frame).  Only the text opens it. |
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
@@ -22561,6 +22656,13 @@ exactly like renaming a file in the Finder of macOS or in a file manager:
 So nothing is lost: the property window - with the font size, the colour,
 the distance, the frame and the background - is still one double click
 away, and the fast way of fixing a typo or a unit is the slow second click.
+
+The editor **grows with the text** while it is being written: it is
+always as wide as what it holds plus one letter, centred on the text it
+replaces, so a one-letter label such as `X` can be rewritten into a long
+one with every letter in view.  It shrinks again when letters are taken
+away, gets taller with a second line, and never grows wider than the
+window.
 
 The cursor is a vertical line in the colour of the selection, as thick as
 the text is big, and it blinks - so it can be found at a glance even in a

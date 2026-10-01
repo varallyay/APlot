@@ -1314,6 +1314,8 @@ another place (see `Moving the whole graph`).
 | Drag a curve, an axis line or the numbers of an axis | **Moves the whole graph** to another place in the window (see `Moving the whole graph`). |
 | Drag on the empty background | Draws a **rectangle**: every legend box, text box, title, axis label, drawing and arrow it touches is chosen, and they then move together (see `Choosing several objects at once`).  `Shift` adds to what is already chosen. |
 | Click a curve twice | Curve properties: line and marker settings separately.  One click does not open it - it grabs the graph. |
+| Click twice on the **sample** of a legend box (the little line, marker or patch in front of its text) | The curve properties of that curve, the same window as clicking the curve itself twice. |
+| Click twice on the **text** of a legend box | The legend editor of that entry (its text, size, colour and frame).  Only the text opens it. |
 | Click the title, an axis label, a legend box, a text box, a drawing or an arrow | Selects it (a text turns blue, a drawing shows control points). |
 | Click the selected object again | Its property window: text, font, colours, distances - whatever belongs to that object. |
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
@@ -1966,6 +1968,13 @@ exactly like renaming a file in the Finder of macOS or in a file manager:
 So nothing is lost: the property window - with the font size, the colour,
 the distance, the frame and the background - is still one double click
 away, and the fast way of fixing a typo or a unit is the slow second click.
+
+The editor **grows with the text** while it is being written: it is
+always as wide as what it holds plus one letter, centred on the text it
+replaces, so a one-letter label such as `X` can be rewritten into a long
+one with every letter in view.  It shrinks again when letters are taken
+away, gets taller with a second line, and never grows wider than the
+window.
 
 The cursor is a vertical line in the colour of the selection, as thick as
 the text is big, and it blinks - so it can be found at a glance even in a
