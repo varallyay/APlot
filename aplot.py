@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.1.0 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
+1.1.2 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -172,7 +172,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.2"
 APP_VERSION_DATE = "2026-10-03"
 __version__ = APP_VERSION
 # who made it: the end of the description at the top, and the About window
@@ -439,7 +439,13 @@ ZOOM_STEP = 1.035
 # it is too slow to answer.
 ZOOM_WHEEL_UNIT = 4.0
 ZOOM_MAX_NOTCHES = 2.0      # no single push may zoom more than this
-ZOOM_SCROLL_LINES = 0.2     # lines the desk scrolls for one notch
+# how far the desk scrolls for one notch of the wheel (one push of a
+# trackpad), as a share of what the window shows: half of the tenth a
+# canvas moves by itself.  It is moved by the pixel, not by whole tenths.
+SCROLL_NOTCH = 0.05
+# a right click on a diagram that is behind a property window: the diagram
+# is brought to the front first, and its menu opens this much later
+MENU_WAKE_MS = 80
 # pushes that arrive within this many milliseconds are gathered up and
 # drawn once: the page then follows the fingers instead of stuttering.
 # The wait grows with what the last drawing really cost, up to the second
@@ -1051,6 +1057,10 @@ DEFAULTS = {
         "main_width": 950, "main_height": 520,
         "plot_width": 1200, "plot_height": 900,
         "dialogs_on_top": False,
+        # the text of the windows, in per cent of what the system gives:
+        # a Mac draws it larger for the size of its screen (13 points on a
+        # screen of 1512 x 982 points), so it is made a little smaller there
+        "ui_scale": 85 if sys.platform == "darwin" else 100,
     },
     # not shown in the settings window: what the program remembers by itself
     "macos": {
@@ -1134,6 +1144,7 @@ SETTINGS_SPEC = [
         ("plot_width", "Plot window width [px]", "int"),
         ("plot_height", "Plot window height [px]", "int"),
         ("dialogs_on_top", "Property windows always on top", "bool"),
+        ("ui_scale", "Text size of the windows [%]", "int"),
     ]),
     ("table", "Spreadsheet", [
         ("rows", "Number of rows at start", "int"),
@@ -4307,6 +4318,112 @@ def enable_file_drop(widget, handler):
     return True
 
 
+# --------------------------------------------------------------------------
+# the room on the screen
+# --------------------------------------------------------------------------
+# What the system keeps for itself at the top and the bottom of the screen
+# (screen points): the menu bar and the Dock of a Mac, the panel or the task
+# bar elsewhere.  A window is placed so that all of it - its title bar too -
+# stays clear of them.
+SCREEN_MARGINS = {"darwin": (40, 96), "default": (8, 56)}
+SCREEN_SIDE = 8             # air at the left and the right edge
+TITLE_BAR = 30              # the title bar the system puts on a window
+
+# the named fonts of Tk that the windows draw their text with
+UI_FONTS = ("TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont",
+            "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont",
+            "TkIconFont", "TkTooltipFont")
+UI_SCALE_RANGE = (60, 150)  # per cent
+
+
+def usable_screen(widget):
+    """(left, top, right, bottom) of the part of the screen a window may
+    cover, in the coordinates windows are placed with."""
+    width = int(widget.winfo_screenwidth())
+    height = int(widget.winfo_screenheight())
+    top, bottom = SCREEN_MARGINS.get(sys.platform, SCREEN_MARGINS["default"])
+    lowest = height - bottom
+    # a Mac also says how tall a window may be there: the screen without
+    # the menu bar and the Dock (elsewhere this is just the screen)
+    try:
+        _w, tallest = (int(v) for v in widget.winfo_toplevel().wm_maxsize())
+        if 200 < tallest < height:
+            lowest = min(lowest, top + tallest)
+    except (tk.TclError, TypeError, ValueError):
+        pass
+    return SCREEN_SIDE, top, width - SCREEN_SIDE, max(top + 200, lowest)
+
+
+def fit_on_screen(widget, x, y, width, height):
+    """`(x, y)` moved so that a window of `width` x `height` (its contents)
+    is on the usable part of the screen with its title bar - as far as it
+    can be: a window larger than the screen keeps its top left corner in."""
+    left, top, right, bottom = usable_screen(widget)
+    x = max(left, min(int(x), right - int(width)))
+    y = max(top, min(int(y), bottom - int(height) - TITLE_BAR))
+    return x, y
+
+
+def geometry_on_screen(widget, geometry):
+    """A geometry (`1200x900` or `1200x900+40+30`) made to fit the usable
+    part of the screen: no larger than it, and - with a place - on it."""
+    match = re.fullmatch(
+        r"\s*(\d+)x(\d+)(?:([+-])(-?\d+)([+-])(-?\d+))?\s*",
+        str(geometry or ""))
+    if match is None:
+        return geometry
+    left, top, right, bottom = usable_screen(widget)
+    width = min(int(match.group(1)), right - left)
+    height = min(int(match.group(2)), bottom - top - TITLE_BAR)
+    if match.group(3) is None:
+        return f"{width}x{height}"
+    # "+40" counts from the left (top) edge of the screen, and Tk writes a
+    # place left of it as "+-40"; "-40" counts from the right (bottom) one
+    x, y = int(match.group(4)), int(match.group(6))
+    if match.group(3) == "-":
+        x = int(widget.winfo_screenwidth()) - width - x
+    if match.group(5) == "-":
+        y = int(widget.winfo_screenheight()) - height - y
+    x, y = fit_on_screen(widget, x, y, width, height)
+    return f"{width}x{height}+{x}+{y}"
+
+
+def scale_interface_fonts(root, percent):
+    """The text of every window at `percent` of the size the system gives.
+
+    The sizes the system gave are remembered the first time, so the scale
+    can be changed again and again without drifting.  Returns the size of
+    the default font afterwards.
+    """
+    try:
+        percent = float(percent)
+    except (TypeError, ValueError):
+        percent = 100.0
+    percent = min(max(percent, UI_SCALE_RANGE[0]), UI_SCALE_RANGE[1])
+    original = getattr(root, "_aplot_font_sizes", None)
+    if original is None:
+        original = {}
+        for name in UI_FONTS:
+            try:
+                original[name] = int(tkfont.nametofont(name).cget("size"))
+            except (tk.TclError, ValueError):
+                continue
+        root._aplot_font_sizes = original
+    for name, size in original.items():
+        if not size:
+            continue
+        wanted = max(7, int(round(abs(size) * percent / 100.0)))
+        try:
+            tkfont.nametofont(name).configure(
+                size=wanted if size > 0 else -wanted)
+        except tk.TclError:
+            continue
+    try:
+        return int(tkfont.nametofont("TkDefaultFont").cget("size"))
+    except tk.TclError:
+        return None
+
+
 class ToolDialog(tk.Toplevel):
     """Base class of the small property windows.
 
@@ -4318,6 +4435,10 @@ class ToolDialog(tk.Toplevel):
 
     def __init__(self, master, title, on_close=None):
         super().__init__(master)
+        # kept off the screen until it is complete and has its place: the
+        # system would show it first wherever it likes (in the middle of
+        # the screen on a Mac), and it would then jump to its place
+        self.withdraw()
         self.title(title)
         self.resizable(False, False)
         self._on_close = on_close
@@ -4327,7 +4448,10 @@ class ToolDialog(tk.Toplevel):
         self.body.pack(fill="both", expand=True)
         self.bind("<Escape>", lambda _e: self.close())
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.after_idle(self.place_beside_parent)
+        # placed once it is complete: a timer, not "when idle" - a window
+        # that lays itself out while it is built (update_idletasks) would
+        # run an idle task half-way and be measured too small
+        self.after(1, self.place_beside_parent)
 
     @staticmethod
     def keep_on_top(master):
@@ -4338,24 +4462,68 @@ class ToolDialog(tk.Toplevel):
             return False
 
     def place_beside_parent(self):
-        """Open next to the parent window instead of on top of it."""
+        """Open next to the parent window instead of on top of it.
+
+        Beside it on the right when there is room for the whole window,
+        else on its left, else at the right edge of the screen; its top
+        level with the top of the parent.  Either way all of it stays on
+        the screen, clear of the menu bar and the Dock (or the panel).
+        The size is the one the window asks for: before the window is on
+        the screen it has no other yet (a Mac reports 1 x 1 then).  Only
+        then is the window shown, so it appears right there at once.
+        """
+        try:
+            self._place_beside_parent()
+        finally:
+            self.show_placed()
+        # once it is on the screen, a last look: a window that has grown
+        # meanwhile (or was put elsewhere) is pulled back inside
+        self.after(250, self.keep_on_screen)
+
+    def show_placed(self):
+        """Bring the window onto the screen, now that it has its place."""
+        try:
+            if self.winfo_exists() and self.state() == "withdrawn":
+                self.deiconify()
+        except tk.TclError:
+            pass
+
+    def _place_beside_parent(self):
         try:
             self.update_idletasks()
             parent = self.master.winfo_toplevel()
             px, py = parent.winfo_rootx(), parent.winfo_rooty()
-            width, height = self.winfo_width(), self.winfo_height()
-            screen_w = self.winfo_screenwidth()
-            screen_h = self.winfo_screenheight()
-
-            x = px + parent.winfo_width() + 12          # to the right
-            if x + width > screen_w - 8:
-                x = px - width - 12                     # or to the left
-            if x < 8:
-                x = max(8, screen_w - width - 8)
-            y = min(max(8, py + 24), max(8, screen_h - height - 48))
+            pw = parent.winfo_width()
+            width, height = self.winfo_reqwidth(), self.winfo_reqheight()
+            left, _top, right, _bottom = usable_screen(self)
+            gap = 12
+            if px + pw + gap + width <= right:
+                x = px + pw + gap                       # to the right
+            elif px - gap - width >= left:
+                x = px - gap - width                    # or to the left
+            else:
+                x = right - width                       # over the parent
+            y = py - TITLE_BAR                          # level with it
+            x, y = fit_on_screen(self, x, y, width, height)
             self.geometry(f"+{int(x)}+{int(y)}")
         except tk.TclError:
+            return
+
+    def keep_on_screen(self):
+        """Move the window back onto the screen where it sticks out."""
+        try:
+            if not self.winfo_exists() or not self.winfo_ismapped():
+                return False
+            x, y = self.winfo_rootx(), self.winfo_rooty() - TITLE_BAR
+            width = max(self.winfo_width(), self.winfo_reqwidth())
+            height = max(self.winfo_height(), self.winfo_reqheight())
+            nx, ny = fit_on_screen(self, x, y, width, height)
+            if (nx, ny) != (x, y):
+                self.geometry(f"+{int(nx)}+{int(ny)}")
+                return True
+        except tk.TclError:
             pass
+        return False
 
     def close(self):
         if self._on_close:
@@ -5214,7 +5382,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self._pair(box, 1,
                    "Opacity (0-1):",
                    ttk.Spinbox(box, from_=0, to=1, increment=0.05,
-                               width=SPIN_WIDTH, textvariable=self.bar_alpha_var,
+                               width=SPIN_WIDTH + 1, textvariable=self.bar_alpha_var,
                                command=self._apply),
                    "Edge colour:", self.bar_edge_color)
         self.bar_alpha_var.trace_add("write", self._apply)
@@ -5333,7 +5501,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                                                command=self._apply),
                    "Opacity (0-1):",
                    ttk.Spinbox(box, from_=0, to=1, increment=0.05,
-                               width=SPIN_WIDTH,
+                               width=SPIN_WIDTH + 1,
                                textvariable=self.stairs_alpha_var,
                                command=self._apply))
         self.stairs_alpha_var.trace_add("write", self._apply)
@@ -5387,7 +5555,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self._pair(box, 2,
                    "Opacity (0-1):",
                    ttk.Spinbox(box, from_=0, to=1, increment=0.05,
-                               width=SPIN_WIDTH, textvariable=self.h2_alpha_var,
+                               width=SPIN_WIDTH + 1, textvariable=self.h2_alpha_var,
                                command=self._apply),
                    "Colour bar:",
                    ttk.Checkbutton(box, variable=self.h2_bar_var,
@@ -5640,13 +5808,14 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                                    variable=self.fill_follow_var,
                                    command=self._apply), 0, pady=(0, 4))
         # the colour of the area and how transparent it is belong together
+        # (the opacity box is a character wider than the others: "0.35")
         self.fill_color = ColorSwatch(box, self._fill.get("color", line_color),
                                       command=lambda _c: self._apply())
         self._pair(box, 1,
                    "Fill colour:", self.fill_color,
                    "Opacity (0-1):",
                    ttk.Spinbox(box, from_=0, to=1, increment=0.05,
-                               width=SPIN_WIDTH,
+                               width=SPIN_WIDTH + 1,
                                textvariable=self.fill_alpha_var,
                                command=self._apply))
         self.fill_alpha_var.trace_add("write", self._apply)
@@ -11909,8 +12078,11 @@ class PlotWindow(tk.Toplevel):
         self.app = app          # gives this window the full application menu
         plot_cfg = config.section("plot")
         grid_cfg = config.section("grid")
-        self.geometry(f"{config.get('window', 'plot_width')}x"
-                      f"{config.get('window', 'plot_height')}")
+        # never larger than the screen leaves room for (a 1200 x 900 window
+        # does not fit on the 982 points of a MacBook with its Dock)
+        self.geometry(geometry_on_screen(
+            self, f"{config.get('window', 'plot_width')}x"
+                  f"{config.get('window', 'plot_height')}"))
 
         self.df = df
         self.plot_style = plot_style
@@ -12454,20 +12626,72 @@ class PlotWindow(tk.Toplevel):
         if control:
             self.zoom_by(ZOOM_STEP ** steps, event=event)
             return "break"
-        lines = -steps * ZOOM_SCROLL_LINES
-        # a small push must still move the desk by at least one line, or a
-        # slow scroll on a trackpad would do nothing at all
-        lines = int(lines) or (1 if lines > 0 else -1 if lines < 0 else 0)
-        if not lines:
-            return "break"
         try:
-            if sideways:
-                self.view.xview_scroll(lines, "units")
-            else:
-                self.view.yview_scroll(lines, "units")
+            shown = (self.view.winfo_width() if sideways
+                     else self.view.winfo_height())
         except tk.TclError:
             return None
+        self.scroll_view(-self._scroll_notches(event) * SCROLL_NOTCH
+                         * max(1, shown), sideways=sideways)
         return "break"
+
+    @staticmethod
+    def _scroll_notches(event):
+        """Notches of scrolling in one push of the wheel or the trackpad.
+
+        Every push is at least one notch - a Mac reports nearly every
+        push as 1 - and a fast spin (a larger number) counts for more, up
+        to `ZOOM_MAX_NOTCHES`; 120 is one click of a mouse on Windows.
+        """
+        number = getattr(event, "num", 0)
+        if number in (4, 6):
+            return 1.0
+        if number in (5, 7):
+            return -1.0
+        delta = float(getattr(event, "delta", 0) or 0)
+        if not delta:
+            return 0.0
+        size = (abs(delta) / 120.0 if abs(delta) >= 120
+                else max(1.0, abs(delta) / max(1e-6, ZOOM_WHEEL_UNIT)))
+        size = min(ZOOM_MAX_NOTCHES, size)
+        return size if delta > 0 else -size
+
+    def scroll_view(self, pixels, sideways=False):
+        """Move the desk by `pixels` (down or right when positive).
+
+        The desk moves by the pixel, not by tenths of the window as a
+        canvas does by itself; the fractions of small pushes are kept and
+        added to the next one.  Returns the whole pixels moved.
+        """
+        rests = getattr(self, "_scroll_rest", None)
+        if rests is None:
+            rests = self._scroll_rest = {"x": 0.0, "y": 0.0}
+        axis = "x" if sideways else "y"
+        total = rests[axis] + float(pixels)
+        whole = int(total)                  # towards zero
+        rests[axis] = total - whole
+        if not whole:
+            return 0
+        view = self.view
+        try:
+            first, last = view.xview() if sideways else view.yview()
+            shown = view.winfo_width() if sideways else view.winfo_height()
+        except tk.TclError:
+            return 0
+        span = float(last) - float(first)
+        if span <= 0 or span >= 1.0 or shown <= 1:
+            rests[axis] = 0.0
+            return 0                        # all of it is on the screen
+        desk = shown / span                 # the whole desk, in pixels
+        wanted = min(max(float(first) + whole / desk, 0.0), 1.0 - span)
+        if abs(wanted - float(first)) * desk < 0.5:
+            rests[axis] = 0.0               # at the end: nothing piles up
+            return 0
+        if sideways:
+            view.xview_moveto(wanted)
+        else:
+            view.yview_moveto(wanted)
+        return whole
 
     def zoom_ceiling(self):
         """As far in as the page may be zoomed on this screen.
@@ -12794,6 +13018,11 @@ class PlotWindow(tk.Toplevel):
         for sequence in ("<Button-1>", "<Button-2>", "<Button-3>"):
             # add="+" keeps matplotlib's own handlers of these events
             widget.bind(sequence, self.take_focus, add="+")
+        for sequence in ("<Button-2>", "<Button-3>"):
+            widget.bind(sequence, self._right_button, add="+")
+        # which window the system has in front (a Mac and Windows say so)
+        self.bind("<Activate>", lambda e: self._activated(e, True), add="+")
+        self.bind("<Deactivate>", lambda e: self._activated(e, False), add="+")
         if sys.platform == "darwin":
             # Control and the one button of a Mac trackpad is a right click
             widget.bind("<Control-Button-1>", self._menu_click, add="+")
@@ -12804,10 +13033,61 @@ class PlotWindow(tk.Toplevel):
     def _menu_click(self, event):
         """A Tk click that must open the menu of the right button."""
         widget = self.canvas.get_tk_widget()
-        self.show_object_menu(event.x, widget.winfo_height() - event.y,
+        self.open_object_menu(event.x, widget.winfo_height() - event.y,
                               getattr(event, "x_root", None),
                               getattr(event, "y_root", None))
         return "break"
+
+    def _right_button(self, event):
+        """The right button, as Tk itself reports it (after matplotlib).
+
+        matplotlib opens the menu for it (see `_on_button_press`); this one
+        only steps in when that did not happen for this very click."""
+        if getattr(event, "serial", None) == getattr(self, "_menu_serial", -1):
+            return None                     # matplotlib had it already
+        number = getattr(event, "num", None)
+        if sys.platform == "darwin":        # a Mac numbers them the other way
+            number = {2: 3, 3: 2}.get(number, number)
+        if number != 3:
+            return None
+        widget = self.canvas.get_tk_widget()
+        self._menu_serial = getattr(event, "serial", None)
+        self.open_object_menu(event.x, widget.winfo_height() - event.y,
+                              getattr(event, "x_root", None),
+                              getattr(event, "y_root", None))
+        return None
+
+    def _activated(self, event, active):
+        """Remember whether this window is the one the system has in front
+        (the `Activate` and `Deactivate` of a Mac and of Windows)."""
+        if getattr(event, "widget", self) is self:
+            self._active = bool(active)
+
+    def is_active(self):
+        """False when another window - a property window, say - is the
+        active one.  Where the system does not tell (X11), always True."""
+        return bool(getattr(self, "_active", True))
+
+    def open_object_menu(self, x, y, root_x=None, root_y=None):
+        """The menu of a right click - also while a property window is in
+        front of the diagram.
+
+        A Mac does not show the menu of a window that is not the active
+        one: the diagram is brought to the front first, and the menu opens
+        a moment later, when the system has made it the active window.
+        """
+        if self.is_active():
+            return self.show_object_menu(x, y, root_x, root_y)
+        try:
+            self.lift()
+            self.focus_force()
+            self.canvas.get_tk_widget().focus_set()
+        except tk.TclError:
+            pass
+        self._active = True
+        self.after(MENU_WAKE_MS,
+                   lambda: self.show_object_menu(x, y, root_x, root_y))
+        return None
 
     def _window_focused(self, _event=None):
         """This diagram window became the active one: it takes the keyboard.
@@ -15891,8 +16171,8 @@ class PlotWindow(tk.Toplevel):
 
         geometry = state.get("geometry")
         if geometry:
-            try:
-                self.geometry(geometry)
+            try:   # a file from a larger screen is fitted to this one
+                self.geometry(geometry_on_screen(self, geometry))
             except tk.TclError:
                 pass
         self.refresh_fills()
@@ -20257,7 +20537,8 @@ class PlotWindow(tk.Toplevel):
             self.commit_inline_edit()
         if event.button == 3:              # the right button opens the menu
             gui = getattr(event, "guiEvent", None)
-            self.show_object_menu(event.x, event.y,
+            self._menu_serial = getattr(gui, "serial", None)
+            self.open_object_menu(event.x, event.y,
                                   getattr(gui, "x_root", None),
                                   getattr(gui, "y_root", None))
             return
@@ -21066,7 +21347,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.1.0 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.1.2 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -21096,6 +21377,8 @@ exactly as it was.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
+| 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
 | 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
 | 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
 
@@ -22364,7 +22647,7 @@ the slow part.  Three things keep it from stuttering:
   repaint the diagram two or three times for a single push; now the asking
   is held back and one drawing is made at the end.
 
-Five constants at the top of `aplot.py` set the feel of it:
+These constants at the top of `aplot.py` set the feel of it:
 
 | Constant | What it sets |
 | --- | --- |
@@ -22374,7 +22657,7 @@ Five constants at the top of `aplot.py` set the feel of it:
 | `ZOOM_SETTLE_MS` (15) and `ZOOM_SETTLE_MAX_MS` (120) | the shortest and the longest wait before the gathered pushes are drawn. |
 | `ZOOM_MAX_PIXELS` (6 million) | the largest the page is ever drawn.  However far you zoom in, the page stops here - a page of tens of millions of pixels would crawl.  It is why `Ctrl/Cmd`+`+` stops at a different place for a large page than for a small one. |
 | `ZOOM_BUTTON_STEP` (1.25) | one press of `-` or `+` on the toolbar. |
-| `ZOOM_SCROLL_LINES` (0.2) | how far the desk **scrolls** for one notch, in scroll units (one unit is a tenth of what the window shows). |
+| `SCROLL_NOTCH` (0.05) | how far the desk **scrolls** for one notch of the wheel or one push of a trackpad: a twentieth of what the window shows - half of the tenth it moved before.  A fast spin counts for up to two notches. |
 | `ZOOM_PRESETS` | the percentages the zoom button's menu offers. |
 
 **Why there is no pinch gesture.**  macOS sends a pinch to **Cocoa**, and
@@ -22436,7 +22719,7 @@ another place (see `Moving the whole graph`).
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter.  On a **picture** the four **corner** points keep its proportions and the four **side** points squeeze or stretch it (see `Resizing with the control points`). |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`.  It works while a property window is in front of the diagram as well: the diagram comes to the front and its menu opens a moment later. |
 | Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view around the pointer; the toolbar's `-`, zoom and `+` do the same (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
 | `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
@@ -23215,7 +23498,17 @@ The dialogs (curve properties, axes properties, title and fonts, legend)
 are ordinary windows:
 
 * they open **next to** the diagram window, not on top of it (to the right
-  if there is room on the screen, otherwise to the left),
+  if there is room on the screen for the whole window, otherwise to the
+  left, and when there is room on neither side at the right edge of the
+  screen), their top level with the top of the diagram,
+* they appear **right at their place** - they are kept hidden until they
+  are complete and placed, so they no longer flash up in the middle of
+  the screen first,
+* they always open **fully on the screen**: never out past its edge, and
+  clear of the menu bar and the **Dock** of a Mac (or the panel of a Linux
+  desktop).  A diagram window is never made larger than the screen leaves
+  room for either - a file saved on a larger screen opens fitted to this
+  one,
 * the diagram can be **clicked in front of them** while they stay open, so
   a change can be looked at without a dialog covering the curves,
 * clicking the same curve, axis or legend twice again brings its window
@@ -23225,6 +23518,15 @@ are ordinary windows:
 
 If the old behaviour is preferred, `Property windows always on top` in the
 `Windows` tab of the settings keeps them above the diagram again.
+
+**The size of the text in the windows** is `Text size of the windows [%]`
+in the same tab.  A Mac draws its text larger for the size of its screen
+than Linux or Windows does - 13 points on a screen of 1512 x 982 points,
+which is what a MacBook with a 3024 x 1964 Retina display offers - so
+there it is **85 %** by default, the size macOS itself uses for small
+controls; elsewhere it is 100 %.  Every window, the property windows
+included, becomes that much smaller (or larger).  The change is applied as
+soon as the settings are saved.
 
 **An open window always says what the diagram says.**  The diagram and its
 windows can be used side by side: a title or an axis label written on the
@@ -23972,7 +24274,7 @@ less room than a title.
 
 | Tab | Contents |
 | --- | --- |
-| Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
+| Windows | Start size of the main window and of the diagram windows, whether the property windows stay above the diagram, and the size of the text in the windows (85 % on a Mac, 100 % elsewhere). |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
@@ -24097,6 +24399,9 @@ class App:
     def __init__(self, root, config: Config | None = None):
         self.root = root
         self.settings = config or Config()
+        # the text of the windows at the size of the settings (smaller on
+        # a Mac): before anything is built, so all of it is drawn so
+        scale_interface_fonts(self.root, self.settings.get("window", "ui_scale"))
         self.root.title(f"{APP_NAME} - Data Visualizer")
         self.root.geometry(f"{self.settings.get('window', 'main_width')}x"
                            f"{self.settings.get('window', 'main_height')}")
@@ -25299,6 +25604,7 @@ class App:
                               on_saved=self._settings_saved)
 
     def _settings_saved(self):
+        scale_interface_fonts(self.root, self.settings.get("window", "ui_scale"))
         for table in self.tables:
             table.apply_config()
         self.apply_font_setting()

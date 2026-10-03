@@ -21,7 +21,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.1.0 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.1.2 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -51,6 +51,8 @@ exactly as it was.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
+| 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
 | 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
 | 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
 
@@ -1319,7 +1321,7 @@ the slow part.  Three things keep it from stuttering:
   repaint the diagram two or three times for a single push; now the asking
   is held back and one drawing is made at the end.
 
-Five constants at the top of `aplot.py` set the feel of it:
+These constants at the top of `aplot.py` set the feel of it:
 
 | Constant | What it sets |
 | --- | --- |
@@ -1329,7 +1331,7 @@ Five constants at the top of `aplot.py` set the feel of it:
 | `ZOOM_SETTLE_MS` (15) and `ZOOM_SETTLE_MAX_MS` (120) | the shortest and the longest wait before the gathered pushes are drawn. |
 | `ZOOM_MAX_PIXELS` (6 million) | the largest the page is ever drawn.  However far you zoom in, the page stops here - a page of tens of millions of pixels would crawl.  It is why `Ctrl/Cmd`+`+` stops at a different place for a large page than for a small one. |
 | `ZOOM_BUTTON_STEP` (1.25) | one press of `-` or `+` on the toolbar. |
-| `ZOOM_SCROLL_LINES` (0.2) | how far the desk **scrolls** for one notch, in scroll units (one unit is a tenth of what the window shows). |
+| `SCROLL_NOTCH` (0.05) | how far the desk **scrolls** for one notch of the wheel or one push of a trackpad: a twentieth of what the window shows - half of the tenth it moved before.  A fast spin counts for up to two notches. |
 | `ZOOM_PRESETS` | the percentages the zoom button's menu offers. |
 
 **Why there is no pinch gesture.**  macOS sends a pinch to **Cocoa**, and
@@ -1391,7 +1393,7 @@ another place (see `Moving the whole graph`).
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter.  On a **picture** the four **corner** points keep its proportions and the four **side** points squeeze or stretch it (see `Resizing with the control points`). |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
 | Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
-| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`. |
+| Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`.  It works while a property window is in front of the diagram as well: the diagram comes to the front and its menu opens a moment later. |
 | Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view around the pointer; the toolbar's `-`, zoom and `+` do the same (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
 | `Ctrl/Cmd+D` | `Edit > Duplicate`: a second copy of the selected object at once, a little to the lower right, without touching the clipboard. |
@@ -2170,7 +2172,17 @@ The dialogs (curve properties, axes properties, title and fonts, legend)
 are ordinary windows:
 
 * they open **next to** the diagram window, not on top of it (to the right
-  if there is room on the screen, otherwise to the left),
+  if there is room on the screen for the whole window, otherwise to the
+  left, and when there is room on neither side at the right edge of the
+  screen), their top level with the top of the diagram,
+* they appear **right at their place** - they are kept hidden until they
+  are complete and placed, so they no longer flash up in the middle of
+  the screen first,
+* they always open **fully on the screen**: never out past its edge, and
+  clear of the menu bar and the **Dock** of a Mac (or the panel of a Linux
+  desktop).  A diagram window is never made larger than the screen leaves
+  room for either - a file saved on a larger screen opens fitted to this
+  one,
 * the diagram can be **clicked in front of them** while they stay open, so
   a change can be looked at without a dialog covering the curves,
 * clicking the same curve, axis or legend twice again brings its window
@@ -2180,6 +2192,15 @@ are ordinary windows:
 
 If the old behaviour is preferred, `Property windows always on top` in the
 `Windows` tab of the settings keeps them above the diagram again.
+
+**The size of the text in the windows** is `Text size of the windows [%]`
+in the same tab.  A Mac draws its text larger for the size of its screen
+than Linux or Windows does - 13 points on a screen of 1512 x 982 points,
+which is what a MacBook with a 3024 x 1964 Retina display offers - so
+there it is **85 %** by default, the size macOS itself uses for small
+controls; elsewhere it is 100 %.  Every window, the property windows
+included, becomes that much smaller (or larger).  The change is applied as
+soon as the settings are saved.
 
 **An open window always says what the diagram says.**  The diagram and its
 windows can be used side by side: a title or an axis label written on the
@@ -2927,7 +2948,7 @@ less room than a title.
 
 | Tab | Contents |
 | --- | --- |
-| Windows | Start size of the main window and of the diagram windows, and whether the property windows stay above the diagram. |
+| Windows | Start size of the main window and of the diagram windows, whether the property windows stay above the diagram, and the size of the text in the windows (85 % on a Mac, 100 % elsewhere). |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
 | Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
