@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.2.0 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.2.1 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -107,6 +107,7 @@ the version is the newest, nothing is said at all.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
 | 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
 | 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
 | 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
@@ -2952,10 +2953,19 @@ Besides the table, `document.json` stores for each open diagram:
 * every text box with its text, position, angle, font, frame and background,
 * every drawn object with its shape, position, size, angle, line and fill,
 * every arrow with its head type and size, tip, tail, line and colour,
-* the figure size, resolution and the window geometry.
+* the figure size, resolution and zoom, the size and the place of the
+  window, and which point of the page was in the **middle of the window**
+  (`view`).
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
-open, then reopens the saved ones exactly as they were saved.
+open, then reopens the saved ones exactly as they were saved: each window
+at its size and place (fitted to the screen if that is smaller), at the
+same zoom and **scrolled to the same point of the page**.  A window is only
+shown once it has all of that, so it appears right there instead of first
+somewhere else.  On a smaller window the same point of the page is put in
+its middle.  Moving, resizing or scrolling a window is not an edit of the
+graph - nothing asks to be saved for it - but it is written into the file
+with the next `Save`, and `Undo` never moves or scrolls a window.
 
 ### Data files with any separator
 

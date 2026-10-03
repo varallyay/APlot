@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.2.0 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
+1.2.1 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -172,7 +172,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 APP_VERSION_DATE = "2026-10-03"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -12937,6 +12937,106 @@ class PlotWindow(tk.Toplevel):
             return False
         return True
 
+    # -- the window and the view as they were saved ------------------------
+    def view_center(self):
+        """The point of the page in the middle of the window, as two
+        fractions of the page (0, 0 is its top left corner)."""
+        try:
+            self.view.update_idletasks()
+            room_w = max(1, self.view.winfo_width())
+            room_h = max(1, self.view.winfo_height())
+            x = self.view.canvasx(room_w / 2.0)
+            y = self.view.canvasy(room_h / 2.0)
+            page_w, page_h = self.page_pixels()
+            origin = self.page_origin()
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return None
+        if page_w <= 0 or page_h <= 0:
+            return None
+        return [round((x - origin[0]) / page_w, 5),
+                round((y - origin[1]) / page_h, 5)]
+
+    def show_view_center(self, point):
+        """Scroll so that this point of the page (two fractions) is in the
+        middle of the window - as far as the page reaches."""
+        try:
+            fx, fy = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError):
+            return False
+        try:
+            self.view.update_idletasks()
+            self._layout_page()
+            region = [float(one) for one in
+                      str(self.view.cget("scrollregion")).split()]
+            if len(region) != 4:
+                return False
+            page_w, page_h = self.page_pixels()
+            origin = self.page_origin()
+            room_w = max(1, self.view.winfo_width())
+            room_h = max(1, self.view.winfo_height())
+            desk_w = max(1.0, region[2] - region[0])
+            desk_h = max(1.0, region[3] - region[1])
+            want_x = origin[0] + fx * page_w - room_w / 2.0
+            want_y = origin[1] + fy * page_h - room_h / 2.0
+            self.view.xview_moveto(min(max(want_x / desk_w, 0.0), 1.0))
+            self.view.yview_moveto(min(max(want_y / desk_h, 0.0), 1.0))
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return False
+        return True
+
+    def restore_place(self, geometry=None, center=None):
+        """The window at its saved place and size, scrolled as it was.
+
+        The size and the place are given at once (and fitted to this
+        screen); once the window is on the screen they are looked at again
+        - a system may still change them as it shows the window - and the
+        page is scrolled to the point that was in the middle.
+        """
+        wanted = None
+        if geometry:
+            try:   # a file from a larger screen is fitted to this one
+                wanted = geometry_on_screen(self, geometry)
+                self.geometry(wanted)
+            except tk.TclError:
+                wanted = None
+        self._wanted_place = {"geometry": wanted, "center": center, "tries": 0}
+        if wanted or center:
+            self.after_idle(self._settle_place)
+        return wanted
+
+    def _settle_place(self):
+        """Once the window is shown: its size again, then the scrolling."""
+        wanted = getattr(self, "_wanted_place", None)
+        if not wanted:
+            return False
+        try:
+            if not self.winfo_exists():
+                return False
+            if not self.winfo_ismapped():
+                wanted["tries"] += 1
+                if wanted["tries"] < 40:            # up to two seconds
+                    self.after(50, self._settle_place)
+                return False
+            geometry = wanted.get("geometry")
+            match = re.fullmatch(r"(\d+)x(\d+).*", str(geometry or ""))
+            if match is not None:
+                self.update_idletasks()
+                if (abs(self.winfo_width() - int(match.group(1))) > 2
+                        or abs(self.winfo_height() - int(match.group(2))) > 2):
+                    self.geometry(geometry)         # the system changed it
+                    self.update_idletasks()
+            if wanted.get("center") is not None:
+                self.show_view_center(wanted["center"])
+        except tk.TclError:
+            return False
+        if wanted["tries"] >= 0:
+            # one more look a moment later, after the first drawing
+            wanted["tries"] = -1
+            self.after(300, self._settle_place)
+        else:
+            self._wanted_place = None
+        return True
+
     # -- the size of the page ---------------------------------------------
     def fit_position(self, page=None):
         """The place of the plot area that fills the page and still fits.
@@ -16020,6 +16120,9 @@ class PlotWindow(tk.Toplevel):
             })
         return {
             "geometry": self.geometry(),
+            # which point of the page is in the middle of the window: the
+            # graph opens again scrolled to it
+            "view": {"center": self.view_center()},
             "plot_style": self.plot_style,
             "font_family": self.font_family() or "",
             "figure": {"width": float(self.page_size[0]),
@@ -16072,8 +16175,13 @@ class PlotWindow(tk.Toplevel):
                                   in self.error_partner_low.items()},
         }
 
-    def apply_state(self, state):
-        """Rebuild the appearance stored by to_state()."""
+    def apply_state(self, state, place=True):
+        """Rebuild the appearance stored by to_state().
+
+        `place` puts the window back where it was, at its size, scrolled to
+        the same point of the page - for a graph that is opened.  Undo
+        leaves the window where the user has it now (place=False).
+        """
         figure = state.get("figure") or {}
         if figure:
             self.base_dpi = float(figure.get("dpi", self.base_dpi) or self.base_dpi)
@@ -16258,12 +16366,9 @@ class PlotWindow(tk.Toplevel):
                 "pos": (float(position[0]), float(position[1]))},
                 key=note.get("name"))
 
-        geometry = state.get("geometry")
-        if geometry:
-            try:   # a file from a larger screen is fitted to this one
-                self.geometry(geometry_on_screen(self, geometry))
-            except tk.TclError:
-                pass
+        if place:
+            self.restore_place(state.get("geometry"),
+                               (state.get("view") or {}).get("center"))
         self.refresh_fills()
         self.refresh_legend()
         self.apply_font_family()     # after everything has been drawn again
@@ -21030,7 +21135,8 @@ class PlotWindow(tk.Toplevel):
             return False
         if not np.isfinite(factor) or factor <= 0.0 or abs(factor - 1.0) < 1e-9:
             return False
-        self.apply_state(scale_style_document(self.to_state(), factor))
+        self.apply_state(scale_style_document(self.to_state(), factor),
+                         place=False)
         return True
 
     def move_plot_area(self, left, bottom, redraw=True):
@@ -21438,7 +21544,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.2.0 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.2.1 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -21522,6 +21628,7 @@ the version is the newest, nothing is said at all.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
 | 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
 | 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
 | 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
@@ -24367,10 +24474,19 @@ Besides the table, `document.json` stores for each open diagram:
 * every text box with its text, position, angle, font, frame and background,
 * every drawn object with its shape, position, size, angle, line and fill,
 * every arrow with its head type and size, tip, tail, line and colour,
-* the figure size, resolution and the window geometry.
+* the figure size, resolution and zoom, the size and the place of the
+  window, and which point of the page was in the **middle of the window**
+  (`view`).
 
 Loading an `.aplt` file replaces the table and closes the diagrams that are
-open, then reopens the saved ones exactly as they were saved.
+open, then reopens the saved ones exactly as they were saved: each window
+at its size and place (fitted to the screen if that is smaller), at the
+same zoom and **scrolled to the same point of the page**.  A window is only
+shown once it has all of that, so it appears right there instead of first
+somewhere else.  On a smaller window the same point of the page is put in
+its middle.  Moving, resizing or scrolling a window is not an edit of the
+graph - nothing asks to be saved for it - but it is written into the file
+with the next `Save`, and `Undo` never moves or scrolls a window.
 
 ### Data files with any separator
 
@@ -26114,9 +26230,11 @@ class App:
         except Exception:
             return None
         for state in document.get("plots") or []:
-            # moving or resizing a window is not an edit of the graph
+            # moving, resizing or scrolling a window is not an edit of
+            # the graph
             state.pop("geometry", None)
             state.pop("figure", None)
+            state.pop("view", None)
         try:
             return json.dumps(document, sort_keys=True, default=json_default)
         except (TypeError, ValueError):
@@ -26440,7 +26558,7 @@ class App:
             return False
         for window in self.open_windows():
             if id(window) == snapshot.get("window"):
-                window.apply_state(snapshot.get("state") or {})
+                window.apply_state(snapshot.get("state") or {}, place=False)
                 return True
         return False
 
@@ -26803,9 +26921,13 @@ class App:
                 plot_style=str(state.get("plot_style") or "line_symbol"))
             if not window.winfo_exists():
                 continue
+            # shown only once it has its size, its place and its zoom, so
+            # it does not appear somewhere else first and jump
+            window.withdraw()
             window.source_tab = index
             window.apply_state(state)
             self.plot_windows.append(window)
+            window.deiconify()
         self._remember_saved(path)
         self.undo.release()
         self.forget_undo()            # a fresh file, a fresh list of steps
