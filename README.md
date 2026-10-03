@@ -12,6 +12,8 @@ It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
     python3 aplot.py --version       which APlot this is
+    python3 aplot.py --check-update  is there a newer one on GitHub?
+    python3 aplot.py --update        download and install it
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
@@ -21,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.1.2 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.2.0 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -47,10 +49,65 @@ keeping the history of the code - commit and tag it:
 release changed, and `git checkout v1.0.0` brings back an older version
 exactly as it was.
 
+**Publishing a release** for everybody's `Check for updates` is pushing
+the new `aplot.py` and `README.md` to the `main` branch of
+<https://github.com/varallyay/APlot> - the updates read the version from
+the `aplot.py` there, and what is new from the version history of the
+`README.md` there.  When the Quick Look extensions of the Mac have changed,
+raise `QUICKLOOK_VERSION` (next to `APP_VERSION`) and push the new
+`APlotQuickLook.zip` too: an update then tells Mac users to build them
+again.
+
+### Updates
+
+APlot looks for a new version on GitHub by itself **once a week** - a few
+seconds after it has started, and only then: nothing of it runs while
+APlot does not, there is no background service and no scheduled job.
+Only the first lines of `aplot.py` on GitHub are read for that, and while
+the version is the newest, nothing is said at all.
+
+* **`Help > Check for updates...`** asks at any time and always answers:
+  *"APlot 1.2.0 is up to date"*, or that GitHub could not be reached.
+* **A newer version** is offered in a small window with **what is new** in
+  it (from the version history) and three buttons: **`Update now`**,
+  **`Later`** (asked again next week) and **`Skip this version`** (the
+  weekly look does not offer that one again; `Check for updates` still
+  does).
+* **`Update now`** first asks about an edited graph that is not saved, then
+  downloads the new `aplot.py` and **checks it** - it must compile, be
+  APlot and be the version that was announced - keeps a **copy of the old
+  version** in `~/.aplot/backups` (`aplot-1.2.0.py`, say), puts the new
+  one in place of the running file in one step, updates a `README.md`
+  lying beside it, and **starts APlot again**, with the graph that was
+  open.  On a Mac it stays the same program in the Dock.
+* **The first start of the new version** says what is new and brings up
+  to date what lies outside the program file: on **Linux** the desktop
+  files of `--install-desktop` (icons, thumbnails, previews, the Space bar
+  viewer; an install for every user is mentioned with the `sudo` command
+  that renews it), on a **Mac** the `APlot.app` in `~/Applications`.
+* **The Quick Look extensions of a Mac** are built with Xcode, so they
+  cannot simply be replaced: when an update brings new ones, it unpacks
+  the `APlotQuickLook` folder next to `aplot.py` and says exactly what to
+  type in Terminal (`cd .../APlotQuickLook`, `sh build.sh`,
+  `sh install.sh`).
+* When the program file **cannot be written** by the user (it was put in
+  a system folder), or it lies in a **git working copy**, nothing is
+  replaced: the new file is left in `~/.aplot/updates` and the message
+  says the one command that installs it (`sudo cp ...`) or to use
+  `git pull`.
+* **Going back**: copy the kept file from `~/.aplot/backups` over
+  `aplot.py`.
+* In a terminal, `python3 aplot.py --check-update` only looks, and
+  `python3 aplot.py --update` downloads and installs (the next start
+  finishes it, as above).
+* The weekly look can be switched off: `Settings > Updates > Look for a
+  new version once a week`.
+
 ### Version history
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
 | 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
 | 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
 | 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
@@ -2958,6 +3015,7 @@ less room than a title.
 | Drawings | The shape the drawing tool starts with, and the line style, thickness, colour, fill colour and opacity of new objects. |
 | Arrows | The head type the arrow tool starts with, the head size in pixels, and the line style, thickness and colour of new arrows. |
 | Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
+| Updates | Whether APlot looks for a new version on GitHub once a week, at the start (see `Updates`). |
 
 Window sizes and plot defaults are used by windows opened after saving;
 diagrams that are already open keep their settings.

@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.1.2 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
+1.2.0 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -172,9 +172,13 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.2.0"
 APP_VERSION_DATE = "2026-10-03"
 __version__ = APP_VERSION
+# The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
+# own number: it is raised only when that folder changes, so an update of
+# APlot knows whether they have to be built and installed again.
+QUICKLOOK_VERSION = "1.0.0"
 # who made it: the end of the description at the top, and the About window
 DEVELOPER = ("Zoltán Várallyay, PhD, Sept 2026, Budapest, Hungary\n"
              "with the help of AI technology (Antigravity, Claude)")
@@ -1070,6 +1074,16 @@ DEFAULTS = {
     "about": {
         "settings_version": 2,
     },
+    "updates": {
+        "auto_check": True,          # look on GitHub once a week, at start
+    },
+    # not shown: what the looking for new versions remembers
+    "update_state": {
+        "last_check": 0.0,           # when (seconds since 1970)
+        "skipped": "",               # a version the user does not want
+        "updated_from": "",          # set by an update, for the new start
+        "notes": "",                 # what the new start has to say
+    },
     "table": {
         "rows": 1000,
         "columns": "X,Y1,Y2,Y3,Y4,Y5,Y6,Y7,Y8,Y9",
@@ -1244,6 +1258,9 @@ SETTINGS_SPEC = [
     ("csv", "Data files", [
         ("separator", "Field separator (auto, comma, semicolon, tab, space)", "text"),
         ("decimal", "Decimal sign (auto, . or ,)", "text"),
+    ]),
+    ("updates", "Updates", [
+        ("auto_check", "Look for a new version once a week", "bool"),
     ]),
 ]
 
@@ -4812,6 +4829,78 @@ class ShapeDialog(DiagramMirror, ToolDialog):
 # --------------------------------------------------------------------------
 # settings (configuration file editor)
 # --------------------------------------------------------------------------
+
+class UpdateProgress(ToolDialog):
+    """A small window that says what the update is doing just now."""
+
+    def __init__(self, master, text):
+        super().__init__(master, "Updates")
+        ttk.Label(self.body, text=text).pack(anchor="w")
+        self.bar = ttk.Progressbar(self.body, mode="indeterminate", length=320)
+        self.bar.pack(fill="x", pady=(10, 0))
+        self.bar.start(12)
+
+
+class UpdateDialog(ToolDialog):
+    """A newer APlot is on GitHub: what is new, and install it now?"""
+
+    def __init__(self, master, facts, on_update, on_skip=None, on_close=None):
+        super().__init__(master, "A new version of APlot", on_close=on_close)
+        self.facts = facts
+        self.on_update = on_update
+        self.on_skip = on_skip
+        date = f" ({facts['date']})" if facts.get("date") else ""
+        ttk.Label(self.body, font=("TkDefaultFont", 0, "bold"),
+                  text=f"{APP_NAME} {facts['version']}{date} is available."
+                  ).pack(anchor="w")
+        ttk.Label(self.body, text=f"This is {APP_NAME} {APP_VERSION}."
+                  ).pack(anchor="w", pady=(2, 8))
+        history = facts.get("history") or []
+        if history:
+            ttk.Label(self.body, text="What is new:").pack(anchor="w")
+            frame = ttk.Frame(self.body)
+            frame.pack(fill="both", expand=True)
+            news = tk.Text(frame, width=60, height=min(12, 2 + 4 * len(history)),
+                           wrap="word", relief="solid", borderwidth=1,
+                           padx=6, pady=4, font="TkDefaultFont")
+            scroll = ttk.Scrollbar(frame, orient="vertical", command=news.yview)
+            news.configure(yscrollcommand=scroll.set)
+            scroll.pack(side="right", fill="y")
+            for version, when, what in history:
+                news.insert("end", f"{version} ({when})\n", "head")
+                news.insert("end", f"{what}\n\n")
+            news.tag_configure("head", font=("TkDefaultFont", 0, "bold"))
+            news.configure(state="disabled")
+            news.pack(side="left", fill="both", expand=True)
+            self.news = news
+        kept = str(UPDATE_BACKUPS).replace(str(Path.home()), "~", 1)
+        what = (f"Update now downloads it from {UPDATE_PAGE}, keeps a copy of "
+                f"this version in {kept} and starts {APP_NAME} again.")
+        if sys.platform == "darwin" and is_newer(facts.get("quicklook"),
+                                                 QUICKLOOK_VERSION):
+            what += ("  The Quick Look extensions (the pictures in the "
+                     "Finder) are new too: you will be told how to build "
+                     "them again.")
+        ttk.Label(self.body, text=what, wraplength=460, justify="left",
+                  foreground="#555").pack(anchor="w", pady=(8, 0))
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Update now", command=self._update).pack(side="left")
+        ttk.Button(bar, text="Later", command=self.close).pack(side="left",
+                                                               padx=(6, 0))
+        if on_skip is not None:
+            ttk.Button(bar, text="Skip this version",
+                       command=self._skip).pack(side="right")
+
+    def _update(self):
+        self.close()
+        self.on_update()
+
+    def _skip(self):
+        self.close()
+        if self.on_skip is not None:
+            self.on_skip()
+
 
 class SettingsDialog(ToolDialog):
     """Edits every default of the program and writes the configuration file."""
@@ -21338,6 +21427,8 @@ It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
     python3 aplot.py --version       which APlot this is
+    python3 aplot.py --check-update  is there a newer one on GitHub?
+    python3 aplot.py --update        download and install it
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
@@ -21347,7 +21438,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.1.2 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.2.0 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -21373,10 +21464,65 @@ keeping the history of the code - commit and tag it:
 release changed, and `git checkout v1.0.0` brings back an older version
 exactly as it was.
 
+**Publishing a release** for everybody's `Check for updates` is pushing
+the new `aplot.py` and `README.md` to the `main` branch of
+<https://github.com/varallyay/APlot> - the updates read the version from
+the `aplot.py` there, and what is new from the version history of the
+`README.md` there.  When the Quick Look extensions of the Mac have changed,
+raise `QUICKLOOK_VERSION` (next to `APP_VERSION`) and push the new
+`APlotQuickLook.zip` too: an update then tells Mac users to build them
+again.
+
+### Updates
+
+APlot looks for a new version on GitHub by itself **once a week** - a few
+seconds after it has started, and only then: nothing of it runs while
+APlot does not, there is no background service and no scheduled job.
+Only the first lines of `aplot.py` on GitHub are read for that, and while
+the version is the newest, nothing is said at all.
+
+* **`Help > Check for updates...`** asks at any time and always answers:
+  *"APlot 1.2.0 is up to date"*, or that GitHub could not be reached.
+* **A newer version** is offered in a small window with **what is new** in
+  it (from the version history) and three buttons: **`Update now`**,
+  **`Later`** (asked again next week) and **`Skip this version`** (the
+  weekly look does not offer that one again; `Check for updates` still
+  does).
+* **`Update now`** first asks about an edited graph that is not saved, then
+  downloads the new `aplot.py` and **checks it** - it must compile, be
+  APlot and be the version that was announced - keeps a **copy of the old
+  version** in `~/.aplot/backups` (`aplot-1.2.0.py`, say), puts the new
+  one in place of the running file in one step, updates a `README.md`
+  lying beside it, and **starts APlot again**, with the graph that was
+  open.  On a Mac it stays the same program in the Dock.
+* **The first start of the new version** says what is new and brings up
+  to date what lies outside the program file: on **Linux** the desktop
+  files of `--install-desktop` (icons, thumbnails, previews, the Space bar
+  viewer; an install for every user is mentioned with the `sudo` command
+  that renews it), on a **Mac** the `APlot.app` in `~/Applications`.
+* **The Quick Look extensions of a Mac** are built with Xcode, so they
+  cannot simply be replaced: when an update brings new ones, it unpacks
+  the `APlotQuickLook` folder next to `aplot.py` and says exactly what to
+  type in Terminal (`cd .../APlotQuickLook`, `sh build.sh`,
+  `sh install.sh`).
+* When the program file **cannot be written** by the user (it was put in
+  a system folder), or it lies in a **git working copy**, nothing is
+  replaced: the new file is left in `~/.aplot/updates` and the message
+  says the one command that installs it (`sudo cp ...`) or to use
+  `git pull`.
+* **Going back**: copy the kept file from `~/.aplot/backups` over
+  `aplot.py`.
+* In a terminal, `python3 aplot.py --check-update` only looks, and
+  `python3 aplot.py --update` downloads and installs (the next start
+  finishes it, as above).
+* The weekly look can be switched off: `Settings > Updates > Look for a
+  new version once a week`.
+
 ### Version history
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
 | 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
 | 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
 | 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
@@ -24284,6 +24430,7 @@ less room than a title.
 | Drawings | The shape the drawing tool starts with, and the line style, thickness, colour, fill colour and opacity of new objects. |
 | Arrows | The head type the arrow tool starts with, the head size in pixels, and the line style, thickness and colour of new arrows. |
 | Data files | Field separator and decimal sign of text data files (`auto` recognises them). |
+| Updates | Whether APlot looks for a new version on GitHub once a week, at the start (see `Updates`). |
 
 Window sizes and plot defaults are used by windows opened after saving;
 diagrams that are already open keep their settings.
@@ -24396,9 +24543,14 @@ class HelpWindow(tk.Toplevel):
 # --------------------------------------------------------------------------
 
 class App:
-    def __init__(self, root, config: Config | None = None):
+    def __init__(self, root, config: Config | None = None,
+                 check_updates=False):
         self.root = root
         self.settings = config or Config()
+        # looking for a new version: only the program itself does it (see
+        # `main`), never a window built by a test or by another program
+        self._update_busy = False
+        self._update_window = None
         # the text of the windows at the size of the settings (smaller on
         # a Mac): before anything is built, so all of it is drawn so
         scale_interface_fonts(self.root, self.settings.get("window", "ui_scale"))
@@ -24474,6 +24626,11 @@ class App:
         # macOS calls a plain script after its interpreter: asked once,
         # the program can build the little bundle that carries its own name
         self.root.after(600, self._offer_app_bundle)
+        if check_updates:
+            # the first start of a new version says what is new; then, once
+            # a week, GitHub is asked whether there is a newer one
+            self.root.after(1500, self._greet_new_version)
+            self.root.after(UPDATE_FIRST_DELAY_MS, self.auto_check_for_updates)
 
     # -- helpers -----------------------------------------------------------
     def _empty_frame(self):
@@ -25508,6 +25665,9 @@ class App:
 
         help_menu = tk.Menu(menubar, tearoff=0, name="help")
         help_menu.add_command(label="Documentation", command=self.show_documentation)
+        help_menu.add_command(label="Check for updates...",
+                              command=self.check_for_updates)
+        help_menu.add_separator()
         help_menu.add_command(label=f"About {APP_NAME}", command=self.show_about)
         menubar.add_cascade(label="Help", menu=help_menu)
         self.bind_shortcuts(window, plot)
@@ -25588,6 +25748,197 @@ class App:
             pass
         self.install_app_bundle(ask_first=True)
         return True
+
+    # -- new versions ------------------------------------------------------
+    def _in_background(self, work, done):
+        """`work()` in a thread of its own - the network must never freeze
+        the windows - and `done(result, error)` afterwards, back in the
+        thread of the windows."""
+        import queue
+        import threading
+        box = queue.Queue()
+
+        def run():
+            try:
+                box.put((work(), None))
+            except Exception as error:          # reported, never raised
+                box.put((None, error))
+
+        threading.Thread(target=run, daemon=True,
+                         name="aplot-update").start()
+
+        def poll():
+            try:
+                result, error = box.get_nowait()
+            except queue.Empty:
+                try:
+                    self.root.after(100, poll)
+                except tk.TclError:
+                    pass                        # the program has ended
+                return
+            done(result, error)
+
+        self.root.after(100, poll)
+
+    def _update_note(self, text=None):
+        """A small window that says what is being done (None closes it)."""
+        window = self._update_window
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+            self._update_window = None
+        if text is None:
+            return None
+        self._update_window = UpdateProgress(self.root, text)
+        return self._update_window
+
+    def auto_check_for_updates(self):
+        """At the start: GitHub is asked if it was not asked this week."""
+        if not self.settings.get("updates", "auto_check"):
+            return False
+        try:
+            last = float(self.settings.get("update_state", "last_check") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        if time.time() - last < UPDATE_EVERY_DAYS * 86400:
+            return False
+        return self.check_for_updates(manual=False)
+
+    def check_for_updates(self, manual=True, *_args):
+        """Is there a newer APlot on GitHub?  `Help > Check for updates...`
+        always answers; the weekly look at the start only speaks up when
+        there is one (and not the one the user chose to skip)."""
+        if self._update_busy:
+            return False
+        self._update_busy = True
+        if manual:
+            self._update_note("Looking for a new version of APlot on GitHub...")
+
+        def work():
+            facts = check_for_update()
+            facts["history"] = []
+            if facts["newer"]:
+                try:   # what is new: the version history of the README
+                    head = fetch_url(UPDATE_SOURCE + UPDATE_README,
+                                     first_bytes=UPDATE_HEAD_BYTES)
+                    facts["history"] = version_history(
+                        head.decode("utf-8", "replace"), APP_VERSION)
+                except UpdateError:
+                    pass
+            return facts
+
+        def done(facts, error):
+            self._update_busy = False
+            self._update_note(None)
+            if error is not None:
+                if manual:
+                    messagebox.showwarning(
+                        "Check for updates",
+                        f"GitHub could not be asked for a new version:\n\n"
+                        f"{error}\n\nThe newest {APP_NAME} is always on\n"
+                        f"{UPDATE_PAGE}", parent=self.root)
+                return
+            self.settings.set("update_state", "last_check", time.time())
+            try:
+                self.settings.save()
+            except OSError:
+                pass
+            if not facts["newer"]:
+                if manual:
+                    messagebox.showinfo(
+                        "Check for updates",
+                        f"{APP_NAME} {APP_VERSION} is up to date.\n\n"
+                        f"(The newest version on GitHub is {facts['version']}.)",
+                        parent=self.root)
+                return
+            if not manual and facts["version"] == str(
+                    self.settings.get("update_state", "skipped") or ""):
+                return                  # the user said: not this one
+            self.offer_update(facts)
+
+        self._in_background(work, done)
+        return True
+
+    def offer_update(self, facts):
+        """Ask whether the newer version is to be installed now."""
+        return UpdateDialog(self.root, facts,
+                            on_update=lambda: self.perform_update(facts),
+                            on_skip=lambda: self._skip_version(facts))
+
+    def _skip_version(self, facts):
+        self.settings.set("update_state", "skipped", str(facts["version"]))
+        try:
+            self.settings.save()
+        except OSError:
+            pass
+
+    def perform_update(self, facts):
+        """Download the new version, put it in place and start it."""
+        if self._update_busy:
+            return False
+        if not self._may_discard(f"Update {APP_NAME}"):
+            return False                 # Cancel: nothing happens
+        self._update_busy = True
+        self._update_note(f"Downloading {APP_NAME} {facts['version']}...")
+
+        def work():
+            program = download_update(facts)
+            return install_update(program, facts)
+
+        def done(result, error):
+            self._update_busy = False
+            self._update_note(None)
+            if error is not None:
+                messagebox.showerror(
+                    "Update", f"{APP_NAME} could not be updated:\n\n{error}\n\n"
+                    f"Nothing has been changed.  The newest version can also "
+                    f"be downloaded from\n{UPDATE_PAGE}", parent=self.root)
+                return
+            notes = "\n\n".join(result["notes"])
+            if not result["installed"]:
+                messagebox.showinfo("Update", notes, parent=self.root)
+                return
+            self.settings.set("update_state", "updated_from", APP_VERSION)
+            self.settings.set("update_state", "notes", notes)
+            self.settings.set("update_state", "skipped", "")
+            try:
+                self.settings.save()
+            except OSError:
+                pass
+            messagebox.showinfo(
+                "Update",
+                f"{APP_NAME} {facts['version']} has been installed.\n"
+                f"A copy of {APP_VERSION} is kept in {result['backup']}.\n\n"
+                + (notes + "\n\n" if notes else "")
+                + f"{APP_NAME} starts again now.", parent=self.root)
+            command = list(result["command"])
+            if self.project_path and Path(self.project_path).exists():
+                command.append(str(self.project_path))   # the graph again
+            restart_program(command, self.root)
+
+        self._in_background(work, done)
+        return True
+
+    def _greet_new_version(self):
+        """The first start after an update: what is new, what is left to do."""
+        try:
+            info = after_update(self.settings)
+        except Exception:                # never keep the program from starting
+            return None
+        if not info:
+            return None
+        rows = version_history(DOCUMENTATION, info["from"])
+        news = "\n".join(f"{version} ({date}): {what}"
+                         for version, date, what in rows[:6])
+        text = f"{APP_NAME} has been updated from {info['from']} to {APP_VERSION}."
+        if news:
+            text += "\n\nWhat is new:\n" + news
+        if info["notes"]:
+            text += "\n\n" + "\n\n".join(info["notes"])
+        messagebox.showinfo(f"{APP_NAME} {APP_VERSION}", text, parent=self.root)
+        return info
 
     def show_about(self):
         messagebox.showinfo(
@@ -26898,6 +27249,316 @@ class App:
         return int(index)
 
 
+# --------------------------------------------------------------------------
+# new versions: looked for on GitHub while APlot runs
+# --------------------------------------------------------------------------
+# APlot is one file, and the newest one is always on the `main` branch of
+# its GitHub repository.  At most once a week, a few seconds after the
+# program has started, the first part of that file is read to see which
+# version it is; `Help > Check for updates...` does the same at any time.
+# Nothing runs when APlot does not: there is no service, no scheduled job.
+# An update replaces this very file (a copy of the old one is kept) and
+# starts the program again.
+UPDATE_REPOSITORY = "varallyay/APlot"
+UPDATE_BRANCH = "main"
+UPDATE_SOURCE = (f"https://raw.githubusercontent.com/{UPDATE_REPOSITORY}/"
+                 f"{UPDATE_BRANCH}/")
+UPDATE_PAGE = f"https://github.com/{UPDATE_REPOSITORY}"
+UPDATE_PROGRAM = "aplot.py"             # the files of the repository
+UPDATE_README = "README.md"
+UPDATE_QUICKLOOK = "APlotQuickLook.zip"
+UPDATE_EVERY_DAYS = 7
+UPDATE_FIRST_DELAY_MS = 6000            # after the start, before looking
+UPDATE_TIMEOUT = 20                     # seconds for one download
+UPDATE_HEAD_BYTES = 32768               # the version is in the first lines
+UPDATE_FOLDER = CONFIG_FILE.parent / "updates"     # downloads
+UPDATE_BACKUPS = CONFIG_FILE.parent / "backups"    # the replaced versions
+UPDATE_SMALLEST = 200_000               # bytes: anything shorter is not APlot
+
+
+class UpdateError(Exception):
+    """Looking for, downloading or installing a new version failed."""
+
+
+def version_tuple(text):
+    """`"1.10.2"` -> (1, 10, 2); () for anything that is not a version."""
+    parts = str(text or "").strip().lstrip("vV").split(".")
+    try:
+        return tuple(int(part) for part in parts) if parts and parts[0] else ()
+    except ValueError:
+        return ()
+
+
+def is_newer(candidate, than):
+    """True when version `candidate` comes after version `than`."""
+    a, b = version_tuple(candidate), version_tuple(than)
+    return bool(a) and a > b
+
+
+def program_facts(text):
+    """The version, its date and the Quick Look version written in (the
+    beginning of) a program file: {"version", "date", "quicklook"}."""
+    facts = {}
+    for key, name in (("version", "APP_VERSION"), ("date", "APP_VERSION_DATE"),
+                      ("quicklook", "QUICKLOOK_VERSION")):
+        found = re.search(rf'^{name} = "([^"]*)"', text, re.M)
+        facts[key] = found.group(1) if found else ""
+    return facts
+
+
+def version_history(text, newer_than=None):
+    """[(version, date, what changed)] of the "Version history" table in
+    the documentation of a program file - only the versions after
+    `newer_than` when it is given, the newest first."""
+    rows = []
+    for found in re.finditer(r"^\| (\d+(?:\.\d+)+) \| (\d{4}-\d{2}-\d{2}) \| (.+?) \|\s*$",
+                             text, re.M):
+        version, date, what = found.groups()
+        # shown as plain text: without the marks of Markdown
+        what = re.sub(r"\*\*|`", "", what)
+        if newer_than is None or is_newer(version, newer_than):
+            if version not in [row[0] for row in rows]:
+                rows.append((version, date, what.strip()))
+    rows.sort(key=lambda row: version_tuple(row[0]), reverse=True)
+    return rows
+
+
+def _ssl_context():
+    """The certificates to trust: the system's - or certifi's, which a
+    Python from python.org on a Mac needs until its `Install Certificates`
+    has been run."""
+    import ssl
+    try:
+        import certifi                       # optional
+        return ssl.create_default_context(cafile=certifi.where())
+    except (ImportError, OSError):
+        return ssl.create_default_context()
+
+
+def fetch_url(url, first_bytes=None, timeout=UPDATE_TIMEOUT):
+    """The bytes at `url` (only the first `first_bytes` if given).
+
+    Python's own `urllib` is tried first; when it cannot (no certificates,
+    a proxy it does not know), the `curl` of the system is asked, which
+    uses the settings of the system.  Raises UpdateError.
+    """
+    import urllib.error
+    import urllib.request
+    headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION} (update check)",
+               "Cache-Control": "no-cache"}
+    if first_bytes:
+        headers["Range"] = f"bytes=0-{int(first_bytes) - 1}"
+    problem = None
+    try:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=timeout,
+                                    context=_ssl_context()) as answer:
+            data = answer.read() if not first_bytes else answer.read(int(first_bytes))
+        return data
+    except urllib.error.HTTPError as error:
+        problem = f"the server answered {error.code} ({error.reason})"
+        if error.code in (403, 404, 410):
+            raise UpdateError(f"{url}: {problem}") from error
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        problem = str(getattr(error, "reason", error))
+    curl = shutil.which("curl")
+    if curl:
+        command = [curl, "-fsSL", "--max-time", str(int(timeout)),
+                   "-A", headers["User-Agent"]]
+        if first_bytes:
+            command += ["-r", f"0-{int(first_bytes) - 1}"]
+        try:
+            done = subprocess.run(command + [url], capture_output=True,
+                                  timeout=timeout + 5)
+            if done.returncode == 0 and done.stdout:
+                return done.stdout[:int(first_bytes)] if first_bytes else done.stdout
+            problem = (done.stderr.decode("utf-8", "replace").strip()
+                       or problem or f"curl ended with {done.returncode}")
+        except (OSError, subprocess.SubprocessError) as error:
+            problem = problem or str(error)
+    raise UpdateError(f"{url} could not be read: {problem}")
+
+
+def check_for_update(source=None, current=None):
+    """What GitHub has: {"version", "date", "quicklook", "newer"}."""
+    source = source or UPDATE_SOURCE
+    current = current or APP_VERSION
+    head = fetch_url(source + UPDATE_PROGRAM, first_bytes=UPDATE_HEAD_BYTES)
+    facts = program_facts(head.decode("utf-8", "replace"))
+    if not version_tuple(facts["version"]):
+        raise UpdateError("The file on GitHub does not say which version "
+                          "it is.")
+    facts["newer"] = is_newer(facts["version"], current)
+    return facts
+
+
+def download_update(facts, source=None, folder=None):
+    """Download the new program and make sure it is one; its path.
+
+    The file has to be Python that compiles, has to be APlot and has to
+    be the version that was announced - anything else is refused before
+    it comes anywhere near the program that is running.
+    """
+    source = source or UPDATE_SOURCE
+    folder = Path(folder or UPDATE_FOLDER) / str(facts["version"])
+    data = fetch_url(source + UPDATE_PROGRAM)
+    if len(data) < UPDATE_SMALLEST:
+        raise UpdateError(f"The downloaded file is too short ({len(data)} "
+                          "bytes) to be APlot.")
+    text = data.decode("utf-8")
+    got = program_facts(text)
+    if got["version"] != facts["version"] or f'APP_NAME = "{APP_NAME}"' not in text:
+        raise UpdateError(f"The downloaded file is not {APP_NAME} "
+                          f"{facts['version']} (it says {got['version'] or '?'}).")
+    try:
+        compile(text, UPDATE_PROGRAM, "exec")
+    except SyntaxError as error:
+        raise UpdateError(f"The downloaded file is damaged: {error}") from error
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / UPDATE_PROGRAM
+    path.write_bytes(data)
+    return path
+
+
+def update_target():
+    """The program file that is running (where an update is written)."""
+    return Path(__file__).resolve()
+
+
+def install_update(new_program, facts, target=None, source=None,
+                   platform=None, fetch=None):
+    """Put the downloaded program in the place of the running one.
+
+    Returns {"installed", "backup", "notes", "command"}: `notes` are what
+    the user has to be told (or do), `command` starts the new version.
+    A program in a git working copy, or in a folder that cannot be
+    written to, is left alone: the notes say what to do instead.
+    """
+    target = Path(target or update_target())
+    platform = platform or sys.platform
+    fetch = fetch or fetch_url
+    source = source or UPDATE_SOURCE
+    new_program = Path(new_program)
+    result = {"installed": False, "backup": None, "notes": [],
+              "command": [sys.executable, str(target)]}
+    if (target.parent / ".git").exists():
+        result["notes"].append(
+            f"{target.parent} is a git working copy: it is brought up to date "
+            f"with `git pull` there, not by APlot.  The new version has been "
+            f"downloaded to {new_program}.")
+        return result
+    if not os.access(target, os.W_OK) or not os.access(target.parent, os.W_OK):
+        result["notes"].append(
+            f"{target} cannot be written to by this user.  The new version "
+            f"has been downloaded to {new_program}; it is installed with\n"
+            f"    sudo cp {shlex.quote(str(new_program))} "
+            f"{shlex.quote(str(target))}")
+        return result
+    old = program_facts(target.read_text(encoding="utf-8", errors="replace"))
+    UPDATE_BACKUPS.mkdir(parents=True, exist_ok=True)
+    backup = UPDATE_BACKUPS / f"aplot-{old['version'] or 'old'}.py"
+    shutil.copy2(target, backup)
+    result["backup"] = backup
+    # written next to the program first, then put in its place in one step:
+    # a failure half way never leaves half a program behind
+    mode = os.stat(target).st_mode & 0o7777
+    handle, temporary = tempfile.mkstemp(prefix=".aplot-update-",
+                                         dir=str(target.parent))
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(new_program.read_bytes())
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+    except OSError as error:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise UpdateError(f"{target} could not be replaced: {error}") from error
+    result["installed"] = True
+    # the documentation beside it, when there is one
+    readme = target.parent / UPDATE_README
+    if readme.exists() and os.access(readme, os.W_OK):
+        try:
+            readme.write_bytes(fetch(source + UPDATE_README))
+        except (UpdateError, OSError):
+            pass                       # the program carries it as well
+    # the Quick Look extensions of a Mac are built with Xcode: they are
+    # downloaded and unpacked, and the user is told how to build them
+    if (platform == "darwin"
+            and is_newer(facts.get("quicklook"), old.get("quicklook") or "0")):
+        try:
+            archive = target.parent / UPDATE_QUICKLOOK
+            archive.write_bytes(fetch(source + UPDATE_QUICKLOOK))
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(target.parent)
+            folder = target.parent / "APlotQuickLook"
+            result["notes"].append(
+                "The Quick Look extensions (the pictures of the graphs in the "
+                f"Finder) are new as well.  They are in {folder}; build and "
+                "install them in Terminal with\n"
+                f"    cd {shlex.quote(str(folder))}\n"
+                "    sh build.sh\n    sh install.sh")
+        except (UpdateError, OSError, zipfile.BadZipFile) as error:
+            result["notes"].append(
+                "The Quick Look extensions are new as well, but they could "
+                f"not be downloaded ({error}).  Get {UPDATE_QUICKLOOK} from "
+                f"{UPDATE_PAGE} and build them with build.sh and install.sh.")
+    return result
+
+
+def restart_program(command, root=None):
+    """Start the program again, as `command`, in place of this one."""
+    if root is not None:
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
+    if sys.platform.startswith("win"):
+        subprocess.Popen(command, close_fds=True)
+        os._exit(0)
+    # the same process (and on a Mac the same place in the Dock) goes on
+    # with the new program
+    os.execv(command[0], command)
+
+
+def after_update(settings, platform=None):
+    """What a new version does when it starts for the first time: the
+    files written outside the program are written again with the new code
+    (the desktop files of Linux, APlot.app on a Mac).  The notes to show."""
+    platform = platform or sys.platform
+    state = settings.section("update_state")
+    old = str(state.get("updated_from") or "")
+    if not old:
+        return None
+    notes = [one for one in str(state.get("notes") or "").split("\n\n") if one]
+    if platform.startswith("linux"):
+        paths = linux_desktop_paths()
+        if paths["desktop"].exists():
+            try:
+                install_linux_desktop()
+                notes.append("The desktop integration (icons, thumbnails, "
+                             "previews) has been brought up to date.")
+            except OSError:
+                pass
+        system = linux_desktop_paths(system=True)
+        if system["desktop"].exists():
+            notes.append("APlot is also known to the desktop of every user; "
+                         "that is brought up to date with\n"
+                         "    sudo python3 aplot.py --install-desktop --system")
+    elif platform == "darwin":
+        bundle = Path.home() / "Applications" / f"{APP_NAME}.app"
+        if bundle.exists() and make_macos_app() is not None:
+            notes.append(f"{bundle} has been brought up to date.")
+    settings.set("update_state", "updated_from", "")
+    settings.set("update_state", "notes", "")
+    try:
+        settings.save()
+    except OSError:
+        pass
+    return {"from": old, "notes": notes}
+
+
 USAGE = f"""{APP_NAME} {APP_VERSION} - plotting and editing tabular data
 
   python3 aplot.py                 start the program
@@ -26912,8 +27573,48 @@ USAGE = f"""{APP_NAME} {APP_VERSION} - plotting and editing tabular data
   python3 aplot.py --uninstall-desktop [--system]
                                    take that away again
   python3 aplot.py --version       the version of this APlot
+  python3 aplot.py --check-update  is there a newer version on GitHub?
+  python3 aplot.py --update        download and install it
   python3 aplot.py --help          this text
 """
+
+
+def command_line_update(install=False, out=print):
+    """`--check-update` and `--update`: the same as the Help menu, in a
+    terminal (and without starting the program again)."""
+    try:
+        facts = check_for_update()
+    except UpdateError as error:
+        out(f"GitHub could not be asked: {error}")
+        return 1
+    if not facts["newer"]:
+        out(f"{APP_NAME} {APP_VERSION} is up to date "
+            f"(the newest on GitHub is {facts['version']}).")
+        return 0
+    out(f"{APP_NAME} {facts['version']} ({facts['date']}) is available; "
+        f"this is {APP_VERSION}.")
+    if not install:
+        out(f"Install it with:  python3 {shlex.quote(str(update_target()))} --update")
+        return 0
+    try:
+        result = install_update(download_update(facts), facts)
+    except UpdateError as error:
+        out(f"It could not be updated: {error}")
+        return 1
+    for note in result["notes"]:
+        out(note)
+    if not result["installed"]:
+        return 1
+    out(f"{APP_NAME} {facts['version']} has been installed in "
+        f"{update_target()}; the old version is kept in {result['backup']}.")
+    try:     # the next start finishes the update (desktop files, APlot.app)
+        settings = Config()
+        settings.set("update_state", "updated_from", APP_VERSION)
+        settings.set("update_state", "notes", "\n\n".join(result["notes"]))
+        settings.save()
+    except OSError:
+        pass
+    return 0
 
 
 def run_command(argv):
@@ -26927,6 +27628,8 @@ def run_command(argv):
     if first in ("-V", "--version"):
         print(f"{APP_NAME} {APP_VERSION} ({APP_VERSION_DATE})")
         return 0
+    if first in ("--check-update", "--update"):
+        return command_line_update(install=(first == "--update"))
     if first == "--icon":
         path = argv[1] if len(argv) > 1 else f"{APP_NAME.lower()}_icon.png"
         written = write_icon_file(path)
@@ -27021,7 +27724,7 @@ def main(argv=None):
         return done
     set_macos_app_name(APP_NAME)  # must run before the first Tk window
     root = tk.Tk()
-    app = App(root)
+    app = App(root, check_updates=True)
     graphs = startup_graphs(argv)
     if graphs:                    # once the window stands
         root.after(200, lambda: app.open_documents(*graphs))
