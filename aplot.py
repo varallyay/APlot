@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.0.0 (2026-10-01) - see `APP_VERSION` below and "Version history" in the
+1.1.0 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -172,8 +172,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.0.0"
-APP_VERSION_DATE = "2026-10-01"
+APP_VERSION = "1.1.0"
+APP_VERSION_DATE = "2026-10-03"
 __version__ = APP_VERSION
 # who made it: the end of the description at the top, and the About window
 DEVELOPER = ("Zoltán Várallyay, PhD, Sept 2026, Budapest, Hungary\n"
@@ -479,6 +479,15 @@ AUTO_SCROLL_MS = 55         # how often the table scrolls on during a drag
 # sideways a table scrolls in pixels, not in columns: one step of a drag
 # held past the edge moves this many of them (a row is one step upright)
 AUTO_SCROLL_PIXELS = 24
+# The fill handle pulled past the edge of the table: the further the pointer
+# goes past it, the faster the sheet scrolls - and once the last row (or the
+# last column) is reached, the sheet grows for as long as the button is
+# held.  One more row (column) per step for every FILL_SPEED_PIXELS the
+# pointer is past the edge, up to the most below.
+FILL_SPEED_PIXELS = 12
+FILL_MOST_ROWS = 40          # rows scrolled or added in one step at most
+FILL_MOST_COLUMNS = 3        # columns are wide: one comes every
+FILL_COLUMN_PAUSE_MS = 300   # ...this many ms at the edge, up to 3x as often
 CHECK_BAR_HEIGHT = 46       # the strip of "plot this column" check buttons and column letters
 ROW_HEADER_WIDTH = 48       # width of the line numbers column on the left side of the table
 # the two check buttons above every column of the table: they say which axis
@@ -1047,8 +1056,12 @@ DEFAULTS = {
     "macos": {
         "ask_app_bundle": True,      # offer to build APlot.app in the Dock
     },
+    # not shown either: which edition of these settings the file holds
+    "about": {
+        "settings_version": 2,
+    },
     "table": {
-        "rows": 40,
+        "rows": 1000,
         "columns": "X,Y1,Y2,Y3,Y4,Y5,Y6,Y7,Y8,Y9",
         "column_width": 110,
         "font_size": 10,
@@ -1238,12 +1251,38 @@ class Config:
                 stored = json.load(handle)
         except (OSError, ValueError):
             return False
-        for section, values in (stored or {}).items():
+        stored = stored if isinstance(stored, dict) else {}
+        edition = (stored.get("about") or {}).get("settings_version", 1)
+        for section, values in stored.items():
+            if section == "about":
+                continue                 # always the edition of this program
             if section in self.data and isinstance(values, dict):
                 for key, value in values.items():
-                    if key in self.data[section]:
-                        self.data[section][key] = value
+                    if key not in self.data[section]:
+                        continue
+                    if self._outdated(edition, section, key, value):
+                        continue         # an old default: the new one counts
+                    self.data[section][key] = value
         return True
+
+    # defaults that changed: a settings file written before that edition
+    # holding exactly the old default gets the new one (a settings file
+    # keeps every value, so the old default would otherwise stay for ever)
+    OLD_DEFAULTS = {
+        2: {("table", "rows"): 40},          # 1.1.0: 1000 rows instead of 40
+    }
+
+    @classmethod
+    def _outdated(cls, edition, section, key, value):
+        try:
+            edition = int(edition)
+        except (TypeError, ValueError):
+            edition = 1
+        for since, old in cls.OLD_DEFAULTS.items():
+            if edition < since and (section, key) in old \
+                    and value == old[(section, key)]:
+                return True
+        return False
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -9219,7 +9258,10 @@ class DataTable(ttk.Frame):
             frame.place_forget()
         if hasattr(self, "_fill_handle") and self._fill_handle is not None:
             self._fill_handle.place_forget()
-        self._hide_fill_feedback()
+        # while the handle is being pulled, the outline of what it will fill
+        # stays - even when the selection it started from has scrolled away
+        if not getattr(self, "_fill_dragging", False):
+            self._hide_fill_feedback()
 
     def _layout_changed(self):
         self._refresh_outline()
@@ -9406,6 +9448,9 @@ class DataTable(ttk.Frame):
         self._fill_target_col = bounds[3]
         self._fill_direction = None        # nothing from an earlier pull
         self._fill_point = None
+        # the size of the sheet before the pull: what it adds and does not
+        # fill is taken away again when the button is let go
+        self._fill_size = (len(self.df), len(self.df.columns))
         try:
             self._fill_press = (event.x_root - self.tree.winfo_rootx(),
                                 event.y_root - self.tree.winfo_rooty())
@@ -9565,10 +9610,18 @@ class DataTable(ttk.Frame):
         rows = target_r - r1
         step = self.series_step(r0, r1, column)
         anchor = self.cell_number(r1, column)
+        # the rows the pull has added below the old end of the sheet
+        before = (getattr(self, "_fill_size", None) or (len(self.df),))[0]
+        added = max(0, len(self.df) - before)
+        grows = (f"  - the sheet grows by {added} row{'s' if added != 1 else ''}"
+                 if added else "")
         if step is None or anchor is None:
+            what = ("the formula is carried on"
+                    if (r1, column) in self.cell_formulas
+                    else "the value is copied")
             self.status_label.configure(
-                text=f"Fill down: the value is copied into {rows} more "
-                     f"row{'s' if rows != 1 else ''}")
+                text=f"Fill down: {what} into {rows} more "
+                     f"row{'s' if rows != 1 else ''}{grows}")
             return
         preview = ", ".join(
             self._number_text(self.series_value(anchor, step, one))
@@ -9577,7 +9630,7 @@ class DataTable(ttk.Frame):
             preview += ", ..."
         self.status_label.configure(
             text=f"Series, step {self._number_text(step)}:  {preview}"
-                 f"   ({rows} row{'s' if rows != 1 else ''})")
+                 f"   ({rows} row{'s' if rows != 1 else ''}){grows}")
 
     def _on_fill_release(self, _event=None):
         if not getattr(self, "_fill_dragging", False):
@@ -9591,6 +9644,13 @@ class DataTable(ttk.Frame):
         target_r = getattr(self, "_fill_target_row", r1)
         target_c = getattr(self, "_fill_target_col", c1)
         
+        # what the pull added and did not reach goes again
+        rows, columns = getattr(self, "_fill_size", (None, None))
+        if rows is not None:
+            self.shrink_to(
+                rows=max(rows, target_r + 1 if direction == "down" else 0),
+                columns=max(columns, target_c + 1
+                            if direction == "right" else 0))
         if direction:
             self._execute_fill(r0, c0, r1, c1, target_r, target_c, direction)
             if direction == "down":
@@ -9810,28 +9870,106 @@ class DataTable(ttk.Frame):
                 pass
             self._fill_auto_scroll_timer = None
 
+    def _fill_overshoot(self, point):
+        """How far (pixels) the pointer is past the bottom and the right
+        edge of the table - counted from where the scrolling starts."""
+        try:
+            height = self.tree.winfo_height()
+            width = self.tree.winfo_width()
+        except tk.TclError:
+            return 0.0, 0.0
+        return (max(0.0, point[1] - (height - AUTO_SCROLL_EDGE)),
+                max(0.0, point[0] - (width - AUTO_SCROLL_EDGE)))
+
+    @staticmethod
+    def _fill_speed(overshoot, most):
+        """Rows (columns) per step: more, the further past the edge."""
+        return max(1, min(int(most), 1 + int(overshoot) // FILL_SPEED_PIXELS))
+
+    def _fill_pulls(self, direction, point):
+        """True when the handle is pulled down (or to the right).
+
+        Once the fill has a direction that is the answer; before it has
+        one - the selection already ends in the last row of the sheet, so
+        there is no row below it to point at - the way the pointer went
+        since the button went down decides.
+        """
+        current = getattr(self, "_fill_direction", None)
+        if current is not None:
+            return current == direction
+        press = getattr(self, "_fill_press", None)
+        if press is None or point is None:
+            return False
+        dx, dy = point[0] - press[0], point[1] - press[1]
+        if direction == "down":
+            return dy >= FILL_DRAG_START and dy >= abs(dx)
+        if direction == "right":
+            return dx >= FILL_DRAG_START and dx >= abs(dy)
+        return False
+
     def _fill_auto_scroll_step(self):
-        """One row of scrolling while the handle is held against an edge."""
+        """One step while the handle is held against (or past) an edge.
+
+        The table scrolls on - faster, the further past the edge the
+        pointer is.  Once the last row is on the screen and the handle is
+        still pulled downwards, new rows appear below it, step by step, as
+        long as the button is held; past the right edge new columns appear
+        the same way.  Letting go fills what was reached.
+        """
         self._fill_auto_scroll_timer = None
         if not getattr(self, "_fill_dragging", False):
             return
         point = getattr(self, "_fill_point", None)
-        step = self._fill_edge_step(point[1]) if point else 0
-        sideways = self._fill_side_step(point[0]) if point else 0
+        if not point:
+            return
+        step = self._fill_edge_step(point[1])
+        sideways = self._fill_side_step(point[0])
+        below, beside = self._fill_overshoot(point)
         first, last = self.tree.yview()
+        left, right = self.tree.xview()
+        grew = False
         if step > 0 and last >= 1.0:
             step = 0            # the last row of the sheet is on the screen
+            if self._fill_pulls("down", point):
+                grew = self.grow_rows(
+                    self._fill_speed(below, FILL_MOST_ROWS)) is not None
         if step < 0 and first <= 0.0:
             step = 0            # the first one is
-        left, right = self.tree.xview()
-        if (sideways > 0 and right >= 1.0) or (sideways < 0 and left <= 0.0):
+        if sideways > 0 and right >= 1.0:
             sideways = 0
-        if not (step or sideways):
+            # a column is wide: they come one at a time, a little apart
+            # (more often, the further past the edge the pointer is)
+            pause = FILL_COLUMN_PAUSE_MS / 1000.0 / self._fill_speed(
+                beside, FILL_MOST_COLUMNS)
+            now = time.monotonic()
+            if self._fill_pulls("right", point) and \
+                    now - getattr(self, "_fill_column_time", 0.0) >= pause:
+                self._fill_column_time = now
+                grew = bool(self.grow_columns(1)) or grew
+            elif self._fill_pulls("right", point):
+                self._start_fill_auto_scroll()      # wait for the next one
+        if sideways < 0 and left <= 0.0:
+            sideways = 0
+        if not (step or sideways or grew):
             return
         if step:
-            self._yview("scroll", step, "units")
+            units = self._fill_speed(below if step > 0 else
+                                     max(0.0, self._header_height()
+                                         + AUTO_SCROLL_EDGE - point[1]),
+                                     FILL_MOST_ROWS)
+            self._yview("scroll", step * units, "units")
         if sideways:
             self.tree.xview_scroll(sideways * AUTO_SCROLL_PIXELS, "units")
+        if grew:                # what has just been added comes into view
+            try:
+                self.tree.update_idletasks()
+            except tk.TclError:
+                return
+            if self._fill_pulls("down", point):
+                self._yview("moveto", 1.0)
+            if self._fill_pulls("right", point):
+                self.tree.xview_moveto(1.0)
+                self.after(1, self._layout_changed)
         try:
             self.tree.update_idletasks()
         except tk.TclError:
@@ -10330,6 +10468,20 @@ class DataTable(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         if hasattr(self, "row_tree"):
             self.row_tree.delete(*self.row_tree.get_children())
+        self._configure_columns()
+        self.update_idletasks()
+        for index, row in enumerate(self.df.itertuples(index=False, name=None)):
+            self.tree.insert("", "end", iid=str(index),
+                             values=["" if pd.isna(v) else str(v) for v in row])
+            if hasattr(self, "row_tree"):
+                self.row_tree.insert("", "end", iid=str(index),
+                                     values=[str(index + 1)])
+        self._build_checks(check_all=check_all)
+        self._refresh_block()
+        self._changed()
+
+    def _configure_columns(self):
+        """The columns of the table widget: names, headings and widths."""
         columns = list(self.df.columns)
         self.tree["columns"] = columns
         # a column that is gone takes its width with it
@@ -10347,16 +10499,104 @@ class DataTable(ttk.Frame):
             self.tree.column(col, width=self.column_width(col),
                              minwidth=MIN_COLUMN_WIDTH,
                              anchor="center", stretch=not sized)
-        self.update_idletasks()
-        for index, row in enumerate(self.df.itertuples(index=False, name=None)):
-            self.tree.insert("", "end", iid=str(index),
-                             values=["" if pd.isna(v) else str(v) for v in row])
+
+    # -- the sheet made larger while the fill handle is pulled -------------
+    def grow_rows(self, count, quiet=True):
+        """Put `count` empty rows below the last one; the first new index.
+
+        Only the new rows are added to the table on the screen - nothing
+        is rebuilt - so the sheet can grow step by step while the fill
+        handle is held past its bottom.  `quiet` leaves the change
+        unannounced: the fill that follows is the one step Undo takes back.
+        """
+        count = int(count)
+        if count <= 0 or not len(self.df.columns):
+            return None
+        start = len(self.df)
+        width = len(self.df.columns)
+        blank = pd.DataFrame([[""] * width for _ in range(count)],
+                             columns=self.df.columns)
+        self.df = pd.concat([self.df, blank], ignore_index=True)
+        empty = [""] * width
+        for index in range(start, start + count):
+            self.tree.insert("", "end", iid=str(index), values=empty)
             if hasattr(self, "row_tree"):
                 self.row_tree.insert("", "end", iid=str(index),
                                      values=[str(index + 1)])
-        self._build_checks(check_all=check_all)
+        if not quiet:
+            self._changed()
+        return start
+
+    def grow_columns(self, count, quiet=True):
+        """Put `count` empty columns after the last one; their names.
+
+        They are named as every new column is (`Y10`, `Y11`, ...) and go on
+        the first Y axis.  The rows of the table are not rebuilt: a new
+        column is simply empty in every one of them.
+        """
+        count = int(count)
+        if count <= 0:
+            return []
+        self._commit_edit()
+        names = []
+        for _ in range(count):
+            name = self.next_column_name()
+            self.df[name] = ["" for _ in range(len(self.df))]
+            names.append(name)
+        self._configure_columns()
+        self._build_checks(check_all=False)
         self._refresh_block()
-        self._changed()
+        if not quiet:
+            self._changed()
+        return names
+
+    def shrink_to(self, rows=None, columns=None):
+        """Take empty rows and columns from the end, back to `rows` x
+        `columns` (what a pull added and did not use).  Only cells with
+        nothing in them - no value and no formula - are ever taken away."""
+        taken = False
+        if rows is not None and len(self.df) > rows >= 0:
+            keep = len(self.df)
+            while keep > rows and self._row_is_empty(keep - 1):
+                keep -= 1
+            if keep < len(self.df):
+                for index in range(keep, len(self.df)):
+                    for widget in (self.tree, getattr(self, "row_tree", None)):
+                        if widget is not None and widget.exists(str(index)):
+                            widget.delete(str(index))
+                self.df = self.df.iloc[:keep].reset_index(drop=True)
+                taken = True
+        if columns is not None and len(self.df.columns) > columns >= 1:
+            names = list(self.df.columns)
+            keep = len(names)
+            while keep > columns and self._column_is_empty(keep - 1):
+                keep -= 1
+            if keep < len(names):
+                self.df = self.df[names[:keep]]
+                self._configure_columns()
+                self._build_checks(check_all=False)
+                taken = True
+        if taken:
+            self._refresh_block()
+        return taken
+
+    @staticmethod
+    def _blank(value):
+        if value is None:
+            return True
+        if isinstance(value, float) and pd.isna(value):
+            return True
+        return not str(value).strip()
+
+    def _row_is_empty(self, row):
+        if any(r == row for (r, _c) in self.cell_formulas):
+            return False
+        return all(self._blank(value) for value in self.df.iloc[row])
+
+    def _column_is_empty(self, column):
+        if any(c == column for (_r, c) in self.cell_formulas):
+            return False
+        return all(self._blank(value) for value in self.df.iloc[:, column])
 
     def _changed(self):
         if self.on_change:
@@ -20826,7 +21066,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.0.0 (2026-10-01)**.  The number is written in one place
+This is **APlot 1.1.0 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -20856,6 +21096,7 @@ exactly as it was.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
 | 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
 
 
@@ -21143,8 +21384,9 @@ columns, its own values, its own formulas and its own check buttons.  The
 sheet in front is the one every command of the toolbar and of the menus
 works on.
 
-* **A new sheet**: click `+`.  It opens empty and is called `Data 2`,
-  `Data 3`, and so on.
+* **A new sheet**: click `+`.  It opens empty, with **1000 rows**
+  (`Settings > Spreadsheet > Number of rows at start`), and is called
+  `Data 2`, `Data 3`, and so on.
 * **Renaming**: click the tab of the sheet that is **already in front** a
   second time - exactly as a title or an axis label of a diagram is renamed
   - and the name can be written **on the tab itself**; `Enter` keeps it,
@@ -21541,13 +21783,30 @@ the handle is pulled over.
   `=A3*10`, ...).
 * While the handle is being pulled, the **status bar** at the bottom says
   what will be written: *"Series, step 2:  5, 7, 9, ...   (7 rows)"* or
-  *"Fill down: the value is copied into 3 more rows"*.
+  *"Fill down: the value is copied into 3 more rows"* (or *"the formula is
+  carried on into ..."*), and while the sheet is growing *"- the sheet
+  grows by 25 rows"*.
 * **Held against the bottom edge of the sheet, the table scrolls on by
-  itself**, one row at a time, and the fill follows it down - so a series
-  can be pulled far past the rows that happen to be on the screen without
-  letting go of the button.  The top edge does the same upwards.  Bringing
-  the pointer back inside the table stops it at once, and the scrolling
-  ends at the last (or the first) row of the sheet.
+  itself**, and the fill follows it down - so a series can be pulled far
+  past the rows that happen to be on the screen without letting go of the
+  button.  The further past the edge the pointer is, the **faster** it
+  goes: one row per step at the edge, one more for every 12 pixels beyond
+  it (40 at most).  The top edge does the same upwards.  Bringing the
+  pointer back inside the table stops it at once.
+* **Past the last row the sheet grows.**  When the last row of the sheet
+  is on the screen and the handle is still held below it, **new rows
+  appear** under the last one, step by step - faster the further down the
+  pointer is - for as long as the button is held, and the fill goes on
+  into them.  Letting go fills every row that was reached.  Pulled to the
+  **right**, past the last column, the sheet gains **new columns** the
+  same way (`Y10`, `Y11`, ...; they go on the first Y axis).  Rows and
+  columns that were added but not reached in the end - the pointer was
+  brought back before letting go - are taken away again, so the sheet
+  only grows by what was filled.  The fill and the new rows are one step
+  that `Undo` takes back.
+* A **double click** on the black square never adds rows: it fills down to
+  the end of the data in the neighbouring column, or to the last row the
+  sheet already has.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
@@ -21899,7 +22158,8 @@ rest are added as `Y2`, `Y3`, ... until the width of the window is used up.
   scroll bar take over, so nothing can be lost by making the window small.
 * As soon as **one value is typed** into the sheet - or a data file is
   loaded - the columns stop appearing by themselves: from then on the table
-  is your data and only `Add column` changes its shape.
+  is your data and only `Add column` (or the fill handle pulled past the
+  last column) changes its shape.
 * A sheet that is emptied again (a fresh start) fills the window again.
 
 `Add column` and `Delete column` work at any time, and a column that is

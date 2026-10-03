@@ -21,7 +21,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.0.0 (2026-10-01)**.  The number is written in one place
+This is **APlot 1.1.0 (2026-10-03)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -51,6 +51,7 @@ exactly as it was.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
 | 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
 
 
@@ -338,8 +339,9 @@ columns, its own values, its own formulas and its own check buttons.  The
 sheet in front is the one every command of the toolbar and of the menus
 works on.
 
-* **A new sheet**: click `+`.  It opens empty and is called `Data 2`,
-  `Data 3`, and so on.
+* **A new sheet**: click `+`.  It opens empty, with **1000 rows**
+  (`Settings > Spreadsheet > Number of rows at start`), and is called
+  `Data 2`, `Data 3`, and so on.
 * **Renaming**: click the tab of the sheet that is **already in front** a
   second time - exactly as a title or an axis label of a diagram is renamed
   - and the name can be written **on the tab itself**; `Enter` keeps it,
@@ -736,13 +738,30 @@ the handle is pulled over.
   `=A3*10`, ...).
 * While the handle is being pulled, the **status bar** at the bottom says
   what will be written: *"Series, step 2:  5, 7, 9, ...   (7 rows)"* or
-  *"Fill down: the value is copied into 3 more rows"*.
+  *"Fill down: the value is copied into 3 more rows"* (or *"the formula is
+  carried on into ..."*), and while the sheet is growing *"- the sheet
+  grows by 25 rows"*.
 * **Held against the bottom edge of the sheet, the table scrolls on by
-  itself**, one row at a time, and the fill follows it down - so a series
-  can be pulled far past the rows that happen to be on the screen without
-  letting go of the button.  The top edge does the same upwards.  Bringing
-  the pointer back inside the table stops it at once, and the scrolling
-  ends at the last (or the first) row of the sheet.
+  itself**, and the fill follows it down - so a series can be pulled far
+  past the rows that happen to be on the screen without letting go of the
+  button.  The further past the edge the pointer is, the **faster** it
+  goes: one row per step at the edge, one more for every 12 pixels beyond
+  it (40 at most).  The top edge does the same upwards.  Bringing the
+  pointer back inside the table stops it at once.
+* **Past the last row the sheet grows.**  When the last row of the sheet
+  is on the screen and the handle is still held below it, **new rows
+  appear** under the last one, step by step - faster the further down the
+  pointer is - for as long as the button is held, and the fill goes on
+  into them.  Letting go fills every row that was reached.  Pulled to the
+  **right**, past the last column, the sheet gains **new columns** the
+  same way (`Y10`, `Y11`, ...; they go on the first Y axis).  Rows and
+  columns that were added but not reached in the end - the pointer was
+  brought back before letting go - are taken away again, so the sheet
+  only grows by what was filled.  The fill and the new rows are one step
+  that `Undo` takes back.
+* A **double click** on the black square never adds rows: it fills down to
+  the end of the data in the neighbouring column, or to the last row the
+  sheet already has.
 * **Column Letters (A, B, C, ..., AA, AB, ...)**:
   * Displayed directly below the axis selection checkboxes in the axis check bar.
   * Also displayed in the column table headers (e.g. `A  (Time)`, `B  (Voltage)`).
@@ -1094,7 +1113,8 @@ rest are added as `Y2`, `Y3`, ... until the width of the window is used up.
   scroll bar take over, so nothing can be lost by making the window small.
 * As soon as **one value is typed** into the sheet - or a data file is
   loaded - the columns stop appearing by themselves: from then on the table
-  is your data and only `Add column` changes its shape.
+  is your data and only `Add column` (or the fill handle pulled past the
+  last column) changes its shape.
 * A sheet that is emptied again (a fresh start) fills the window again.
 
 `Add column` and `Delete column` work at any time, and a column that is

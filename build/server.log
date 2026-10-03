@@ -1,0 +1,25 @@
+{"timestamp":"2026-10-02T02:42:41.224909Z","level":"INFO","fields":{"message":"watching","path":"/Users/zoli/Insync/z.varallyay@gmail.com/Google Drive/Work/My Softwares/APlot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-02T02:42:41.225068Z","level":"INFO","fields":{"message":"nyanlib scheduler started","path":"/Users/zoli/Insync/z.varallyay@gmail.com/Google Drive/Work/My Softwares/APlot/build/models.nyanlib"},"target":"gfp::serve::tasks::nyanlib"}
+{"timestamp":"2026-10-02T02:42:41.225094Z","level":"INFO","fields":{"message":"nyanlib scheduler stage","stage":"WaitingForIndex"},"target":"gfp::serve::tasks::nyanlib"}
+{"timestamp":"2026-10-02T02:42:47.424755Z","level":"INFO","fields":{"message":"indexed files","count":1},"target":"gfp::factory::indexing::indexer"}
+{"timestamp":"2026-10-02T02:42:47.427930Z","level":"INFO","fields":{"message":"prepared completed-index PDK runtime specs","pdk_count":0,"dschematic_pdk_count":0,"elapsed_ms":1},"target":"gfp::serve::tasks::indexer_bridge"}
+{"timestamp":"2026-10-02T02:42:47.427977Z","level":"INFO","fields":{"message":"nyanlib scheduler stage","stage":"Dschematic"},"target":"gfp::serve::tasks::nyanlib"}
+{"timestamp":"2026-10-02T02:42:47.427994Z","level":"INFO","fields":{"message":"bulk dschematic pass complete","pdk_count":0,"elapsed_ms":0},"target":"gfp::serve::tasks::nyanlib"}
+{"timestamp":"2026-10-02T02:42:47.428004Z","level":"INFO","fields":{"message":"nyanlib scheduler stage","stage":"Finished"},"target":"gfp::serve::tasks::nyanlib"}
+{"timestamp":"2026-10-02T02:42:47.428042Z","level":"INFO","fields":{"message":"nyanlib generated","path":"/Users/zoli/Insync/z.varallyay@gmail.com/Google Drive/Work/My Softwares/APlot/build/models.nyanlib"},"target":"gfp::serve::tasks::nyanlib"}
+{"timestamp":"2026-10-02T02:42:51.226326Z","level":"INFO","fields":{"message":"identity verification result","api_host":"https://api.gdsfactory.com/","phase":"verify_api_key","status":"offline"},"target":"gfp::identity::service"}
+{"timestamp":"2026-10-03T10:51:03.588694Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-03T10:51:03.591474Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-03T10:51:22.177426Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":2,"name":"apply_changes"},"spans":[{"n_events":2,"name":"apply_changes"}]}
+{"timestamp":"2026-10-03T10:51:22.183772Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-03T10:51:22.185292Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-03T10:51:22.203865Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-03T10:51:28.144306Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
+{"timestamp":"2026-10-03T10:51:28.148589Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-03T10:51:28.148630Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-03T10:51:28.150246Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-03T10:51:34.144944Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
+{"timestamp":"2026-10-03T10:51:34.150155Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-03T10:51:34.150221Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-03T11:02:49.336677Z","level":"DEBUG","fields":{"message":"settings watcher: debounced events","count":2},"target":"gfp::identity::watcher"}
+{"timestamp":"2026-10-03T11:02:49.943223Z","level":"INFO","fields":{"message":"identity verification result","api_host":"https://api.gdsfactory.com/","phase":"verify_api_key","status":"verified","pdk_count":10,"pdk_info_count":10,"org_role":"Some(User)","features_projects":true,"features_hub":false,"features_drc":true,"features_llm":true,"features_simulation":true},"target":"gfp::identity::service"}
