@@ -73,3 +73,20 @@
 {"timestamp":"2026-10-03T15:40:10.825864Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
 {"timestamp":"2026-10-03T15:40:10.830303Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
 {"timestamp":"2026-10-03T15:40:10.830351Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:12:18.051158Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:12:18.054686Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:12:39.114440Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":2,"name":"apply_changes"},"spans":[{"n_events":2,"name":"apply_changes"}]}
+{"timestamp":"2026-10-05T05:12:39.121363Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:12:39.122514Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:12:39.130117Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:12:47.286456Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
+{"timestamp":"2026-10-05T05:12:47.294951Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:12:47.295026Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:12:47.298531Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:12:54.248238Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
+{"timestamp":"2026-10-05T05:12:54.252762Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:12:54.252801Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:12:54.254054Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:13:01.122461Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
+{"timestamp":"2026-10-05T05:13:01.127459Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:13:01.127508Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}

@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.2.1 (2026-10-03) - see `APP_VERSION` below and "Version history" in the
+1.3.0 (2026-10-05) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -172,8 +172,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.2.1"
-APP_VERSION_DATE = "2026-10-03"
+APP_VERSION = "1.3.0"
+APP_VERSION_DATE = "2026-10-05"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -1597,24 +1597,86 @@ def app_plist(name=APP_NAME, icon=None, document_icon=None):
                             version=APP_VERSION)
 
 
-def make_macos_app(folder=None, name=APP_NAME):
-    """Build `APlot.app` around this very file; returns the path, or None.
+INSTALLED_PROGRAM = "aplot.py"   # the name of the installed copy
+
+MACOS_LAUNCHER = """#!/bin/sh
+# Written by aplot.py (--make-app): starts the copy of APlot in this bundle.
+export {mark}=1
+contents="$(cd "$(dirname "$0")/.." && pwd)"
+python={python}
+[ -x "$python" ] || python="$(command -v python3)"
+exec "$python" "$contents/Resources/{program}" "$@"
+"""
+
+
+def copy_program(program, target):
+    """Put a copy of the program file `program` at `target`.
+
+    It is written beside the target first and put in its place in one step,
+    so that a failure half way never leaves half a program behind.  Nothing
+    is done when the two are one and the same file.  True when copied.
+    """
+    program, target = Path(program), Path(target)
+    try:
+        if target.exists() and os.path.samefile(program, target):
+            return False
+    except OSError:
+        pass
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(prefix=".aplot-copy-",
+                                         dir=str(target.parent))
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(program.read_bytes())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, target)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def app_bundle_of(program=None):
+    """The `APlot.app` that holds the program file `program` (this file by
+    default) as its own copy - or None, when it is not inside a bundle."""
+    try:
+        path = Path(program or __file__).resolve()
+    except (OSError, ValueError):
+        return None
+    for parent in path.parents:
+        if parent.name.endswith(".app"):
+            return parent if path.parent == parent / "Contents" / "Resources" else None
+    return None
+
+
+def make_macos_app(folder=None, name=APP_NAME, program=None, platform=None):
+    """Install `APlot.app`, with a copy of this program; its path, or None.
 
     A program started as `python3 aplot.py` belongs to the interpreter as
     far as macOS is concerned: the Dock shows the icon and the name of
     Python.  A tiny application bundle - a folder with the right shape -
-    gives it its own icon and its own name for good.  Nothing is compiled
-    and nothing is copied: the bundle starts this same file.
+    gives it its own icon and its own name for good.  Nothing is compiled.
+
+    The bundle carries a copy of the program (`Contents/Resources/aplot.py`)
+    and starts that copy, so it is an installed program of its own: the
+    aplot.py it was made from can be edited, moved or deleted afterwards
+    without changing it, and an update replaces the copy in the bundle.
+    `program` is the file copied (this one by default); a bundle made from
+    its own copy keeps it and only renews the rest.
     """
-    if sys.platform != "darwin":
+    if (platform or sys.platform) != "darwin":
         return None
     home = Path(folder).expanduser() if folder else Path.home() / "Applications"
     bundle = home / f"{name}.app"
     macos, resources = bundle / "Contents" / "MacOS", bundle / "Contents" / "Resources"
-    script = Path(__file__).resolve()
+    program = Path(program or __file__).resolve()
     try:
         macos.mkdir(parents=True, exist_ok=True)
         resources.mkdir(parents=True, exist_ok=True)
+        copy_program(program, resources / INSTALLED_PROGRAM)
         icon = write_icns(resources, name)
         # the graph files get an icon of their own: a sheet with the curve
         document_icon = write_icns(resources, DOCUMENT_ICON_NAME,
@@ -1625,11 +1687,10 @@ def make_macos_app(folder=None, name=APP_NAME):
                                      else None)),
             encoding="utf-8")
         launcher = macos / name
-        launcher.write_text(
-            "#!/bin/sh\n"
-            f"export {BUNDLE_MARK}=1\n"     # the program knows it is in a bundle
-            f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"\n',
-            encoding="utf-8")
+        launcher.write_text(MACOS_LAUNCHER.format(
+            mark=BUNDLE_MARK,           # the program knows it is in a bundle
+            python=shlex.quote(sys.executable or "python3"),
+            program=INSTALLED_PROGRAM), encoding="utf-8")
         launcher.chmod(0o755)
         # macOS keeps what it knows about a bundle: it is told to look again
         subprocess.run(["touch", str(bundle)], capture_output=True, timeout=30)
@@ -1662,8 +1723,9 @@ def register_with_launch_services(bundle):
 # --------------------------------------------------------------------------
 # the graph files on a Linux desktop: kind of file, icon, thumbnail
 # --------------------------------------------------------------------------
-# `python3 aplot.py --install-desktop` writes the few small files the
-# freedesktop.org standards ask for, so that the file managers of Linux
+# `python3 aplot.py --install-desktop` installs a copy of the program (the
+# one the menu entry starts, and the updates replace) and writes the few
+# small files the freedesktop.org standards ask for, so that the file managers of Linux
 # (GNOME Files, Nemo, Caja, Thunar, PCManFM...) know an .aplt file: its
 # name, its icon, the picture of the graph as its thumbnail, and APlot as
 # the program that opens it.  Nothing is compiled; `--uninstall-desktop`
@@ -1708,6 +1770,11 @@ Terminal=false
 StartupNotify=true
 Categories=Science;DataVisualization;
 MimeType={mime};
+"""
+
+LINUX_LAUNCHER = """#!/bin/sh
+# Written by aplot.py (--install-desktop): starts the installed APlot.
+exec {python} {program} "$@"
 """
 
 THUMBNAILER_SCRIPT = '''#!/usr/bin/env python3
@@ -2020,6 +2087,11 @@ def linux_desktop_paths(system=False, prefix=None):
     share = root / "share"
     paths = {
         "root": root, "share": share,
+        # APlot itself: the installed copy the menu entry starts, and the
+        # `aplot` command that starts it from a terminal
+        "program": share / DESKTOP_ID / INSTALLED_PROGRAM,
+        "program_folder": share / DESKTOP_ID,
+        "launcher": root / "bin" / DESKTOP_ID,
         "mime": share / "mime" / "packages" / f"{DESKTOP_ID}.xml",
         "mime_db": share / "mime",
         "script": root / "bin" / THUMBNAILER_NAME,
@@ -2057,14 +2129,20 @@ def _run_quietly(command):
 
 def install_linux_desktop(system=False, prefix=None, program=None,
                           python=None, refresh=True):
-    """Write the kind of file, its icon, the thumbnailer and APlot's entry.
+    """Install APlot: a copy of the program, the kind of file, its icon,
+    the thumbnailer and APlot's entry in the menu.
 
-    `program` is the aplot.py that the double click starts (this file by
-    default) and `python` the interpreter that runs it (the one running
-    now).  Returns the list of the files written.
+    `program` is the aplot.py that is installed (this file by default): a
+    copy of it goes to share/aplot/aplot.py, and the menu entry, the double
+    click on a graph and the `aplot` command start that copy - an installed
+    program of its own, which the aplot.py it came from can be edited,
+    moved or deleted without changing, and which an update replaces.
+    `python` is the interpreter that runs it (the one running now).
+    Returns the list of the files written.
     """
     paths = linux_desktop_paths(system, prefix)
-    program = Path(program or __file__).resolve()
+    source = Path(program or __file__).resolve()
+    program = paths["program"]
     python = python or sys.executable or "python3"
     written = []
 
@@ -2086,6 +2164,11 @@ def install_linux_desktop(system=False, prefix=None, program=None,
                     pass
         written.append(target)
 
+    copy_program(source, program)        # nothing to do when it runs from there
+    written.append(program)
+    write("launcher", LINUX_LAUNCHER.format(
+        python=shlex.quote(python), program=shlex.quote(str(program))),
+        mode=0o755)
     write("mime", DESKTOP_MIME_XML.format(
         mime=PROJECT_MIMETYPE, name=APP_NAME, icon=DESKTOP_MIME_ICON,
         suffix=PROJECT_SUFFIX))
@@ -2131,9 +2214,9 @@ def install_linux_desktop(system=False, prefix=None, program=None,
 def uninstall_linux_desktop(system=False, prefix=None, refresh=True):
     """Take away everything `install_linux_desktop` wrote; the files removed."""
     paths = linux_desktop_paths(system, prefix)
-    keys = ["mime", "script", "thumbnailer", "desktop", "preview",
-            "preview_desktop", "service_menu", "service_menu_5", "nautilus",
-            "sushi"]
+    keys = ["program", "launcher", "mime", "script", "thumbnailer", "desktop",
+            "preview", "preview_desktop", "service_menu", "service_menu_5",
+            "nautilus", "sushi"]
     keys += [f"{kind}_icon_{size}" for size in DESKTOP_ICON_SIZES
              for kind in ("mime", "app")]
     removed = []
@@ -2147,6 +2230,10 @@ def uninstall_linux_desktop(system=False, prefix=None, refresh=True):
                 removed.append(target)
         except OSError:
             continue
+    try:                                  # the folder of the installed copy
+        paths["program_folder"].rmdir()
+    except OSError:
+        pass
     if refresh:
         _run_quietly(["update-mime-database", str(paths["mime_db"])])
         _run_quietly(["update-desktop-database", str(paths["applications"])])
@@ -2164,6 +2251,108 @@ def running_from_bundle():
         return f"/{APP_NAME}.app/Contents/" in str(Path(sys.argv[0]).resolve())
     except (OSError, ValueError):
         return False
+
+
+def short_path(path):
+    """A path as people write it: the home folder as `~`."""
+    text, home = str(path), str(Path.home())
+    if home not in ("", "/") and (text == home or text.startswith(home + os.sep)):
+        return "~" + text[len(home):]
+    return text
+
+
+def installed_copy(platform=None):
+    """Where the installed APlot of this user lives (Linux: the copy under
+    ~/.local/share/aplot, macOS: the one inside ~/Applications/APlot.app);
+    None on other systems."""
+    platform = platform or sys.platform
+    if platform == "darwin":
+        return (Path.home() / "Applications" / f"{APP_NAME}.app" / "Contents"
+                / "Resources" / INSTALLED_PROGRAM)
+    if platform.startswith("linux"):
+        return linux_desktop_paths()["program"]
+    return None
+
+
+def is_installed_copy(program=None, platform=None):
+    """True when `program` (this file by default) is an installed APlot -
+    the copy in an APlot.app or in share/aplot - and not a file of one's
+    own, such as the one that is being edited."""
+    platform = platform or sys.platform
+    try:
+        program = Path(program or __file__).resolve()
+    except (OSError, ValueError):
+        return False
+    if platform == "darwin":
+        return app_bundle_of(program) is not None
+    if platform.startswith("linux"):
+        for system in (False, True):
+            if program == linux_desktop_paths(system)["program"]:
+                return True
+    return False
+
+
+def program_place(program=None, platform=None):
+    """Where the running APlot is, as the user would name it: the bundle,
+    or the program file (`~` for the home folder)."""
+    program = Path(program or __file__).resolve()
+    bundle = app_bundle_of(program) if (platform or sys.platform) == "darwin" else None
+    return short_path(bundle or program)
+
+
+def separate_installation(program=None, platform=None):
+    """Give an APlot.app or a menu entry of an older APlot a copy of its own.
+
+    Up to version 1.2.1 they started the very aplot.py they had been made
+    from - the file being edited, say - so the "installed" program was
+    that file.  Started from such a file, the installation is made again,
+    with a copy (see `make_macos_app` and `install_linux_desktop`): from
+    then on the installed APlot and the file are two programs.  Returns
+    what is to be told (an empty list when there was nothing to do).
+    """
+    platform = platform or sys.platform
+    try:
+        program = Path(program or __file__).resolve()
+        text = str(program)
+    except (OSError, ValueError):
+        return []
+    if is_installed_copy(program, platform):
+        return []
+    notes = []
+    if platform == "darwin":
+        for home in (Path.home() / "Applications", Path("/Applications")):
+            bundle = home / f"{APP_NAME}.app"
+            try:
+                launcher = (bundle / "Contents" / "MacOS" / APP_NAME).read_text(
+                    encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if text not in launcher:
+                continue
+            made = make_macos_app(home, program=program, platform=platform)
+            if made is not None:
+                notes.append(
+                    f"{short_path(made)} has a copy of its own now: it is "
+                    f"{APP_NAME} {APP_VERSION}, installed.  It no longer starts "
+                    f"{short_path(program)}, which can be edited freely; the "
+                    f"updates from GitHub replace the copy inside the app.")
+    elif platform.startswith("linux"):
+        entry = linux_desktop_paths()["desktop"]
+        try:
+            lines = entry.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        starts = [line for line in lines if line.startswith("Exec=")]
+        if starts and text in starts[0].replace("\\\\", "\\"):
+            install_linux_desktop(program=program)
+            notes.append(
+                f"{APP_NAME} is installed on its own now: the applications "
+                f"menu and the graph files start the copy "
+                f"{short_path(linux_desktop_paths()['program'])} "
+                f"({APP_NAME} {APP_VERSION}), no longer {short_path(program)}, "
+                f"which can be edited freely.  The updates from GitHub replace "
+                f"the installed copy.")
+    return notes
 
 
 # --------------------------------------------------------------------------
@@ -4853,7 +5042,8 @@ class UpdateDialog(ToolDialog):
         ttk.Label(self.body, font=("TkDefaultFont", 0, "bold"),
                   text=f"{APP_NAME} {facts['version']}{date} is available."
                   ).pack(anchor="w")
-        ttk.Label(self.body, text=f"This is {APP_NAME} {APP_VERSION}."
+        ttk.Label(self.body, text=f"This is {APP_NAME} {APP_VERSION}, in "
+                                  f"{program_place()}."
                   ).pack(anchor="w", pady=(2, 8))
         history = facts.get("history") or []
         if history:
@@ -4875,7 +5065,8 @@ class UpdateDialog(ToolDialog):
             self.news = news
         kept = str(UPDATE_BACKUPS).replace(str(Path.home()), "~", 1)
         what = (f"Update now downloads it from {UPDATE_PAGE}, keeps a copy of "
-                f"this version in {kept} and starts {APP_NAME} again.")
+                f"this version in {kept}, puts the new one in its place and "
+                f"starts {APP_NAME} again.")
         if sys.platform == "darwin" and is_newer(facts.get("quicklook"),
                                                  QUICKLOOK_VERSION):
             what += ("  The Quick Look extensions (the pictures in the "
@@ -21544,7 +21735,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.2.1 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.3.0 (2026-10-05)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -21588,7 +21779,8 @@ Only the first lines of `aplot.py` on GitHub are read for that, and while
 the version is the newest, nothing is said at all.
 
 * **`Help > Check for updates...`** asks at any time and always answers:
-  *"APlot 1.2.0 is up to date"*, or that GitHub could not be reached.
+  *"APlot 1.3.0 is up to date"* (with the place of the program that
+  asked), or that GitHub could not be reached.
 * **A newer version** is offered in a small window with **what is new** in
   it (from the version history) and three buttons: **`Update now`**,
   **`Later`** (asked again next week) and **`Skip this version`** (the
@@ -21600,24 +21792,68 @@ the version is the newest, nothing is said at all.
   version** in `~/.aplot/backups` (`aplot-1.2.0.py`, say), puts the new
   one in place of the running file in one step, updates a `README.md`
   lying beside it, and **starts APlot again**, with the graph that was
-  open.  On a Mac it stays the same program in the Dock.
+  open.  On a Mac it stays the same program in the Dock.  Nothing is left
+  for the user to do - wherever the running file lies:
+  * **the installed APlot** (`APlot.app`, or the copy the Linux menu
+    starts, see below) and any file the user may write: replaced as
+    above;
+  * **a git working copy** is never written over: a clean copy of the
+    `main` branch of GitHub (nothing uncommitted) is brought up to date
+    with `git pull`;
+  * **a file only an administrator may write** (one put in a system
+    folder with `sudo`): the system asks for the password in a window of
+    its own (`pkexec` on Linux, the usual dialog on a Mac) and the file is
+    replaced;
+  * when none of these can be done - a working copy with changes of its
+    own, a password that was not given - that file is **left as it is**,
+    and the new version is **installed for the user** instead (on Linux
+    under `~/.local/share/aplot` with its menu entry, on a Mac as
+    `~/Applications/APlot.app`) and started from there.  The message says
+    so, and where to start it from in the future.
 * **The first start of the new version** says what is new and brings up
   to date what lies outside the program file: on **Linux** the desktop
   files of `--install-desktop` (icons, thumbnails, previews, the Space bar
   viewer; an install for every user is mentioned with the `sudo` command
-  that renews it), on a **Mac** the `APlot.app` in `~/Applications`.
+  that renews it), on a **Mac** the `APlot.app` the program runs in.
 * **The Quick Look extensions of a Mac** are built with Xcode, so they
   cannot simply be replaced: when an update brings new ones, it unpacks
-  the `APlotQuickLook` folder next to `aplot.py` and says exactly what to
-  type in Terminal (`cd .../APlotQuickLook`, `sh build.sh`,
-  `sh install.sh`).
-* When the program file **cannot be written** by the user (it was put in
-  a system folder), or it lies in a **git working copy**, nothing is
-  replaced: the new file is left in `~/.aplot/updates` and the message
-  says the one command that installs it (`sudo cp ...`) or to use
-  `git pull`.
-* **Going back**: copy the kept file from `~/.aplot/backups` over
-  `aplot.py`.
+  the `APlotQuickLook` folder beside the download, in
+  `~/.aplot/updates/<version>`, and says exactly what to type in Terminal
+  (`cd .../APlotQuickLook`, `sh build.sh`, `sh install.sh`).
+* **Going back**: copy the kept file from `~/.aplot/backups` over the
+  program file (`Help > About APlot` says which file that is).
+
+#### The installed APlot and the aplot.py you edit
+
+`APlot.app` on a Mac (`--make-app`) and the menu entry on Linux
+(`--install-desktop`) hold **a copy of their own** of the program - inside
+the bundle, `APlot.app/Contents/Resources/aplot.py`, and
+`~/.local/share/aplot/aplot.py` on Linux - and start that copy.  The
+installed APlot and the `aplot.py` it was made from are therefore **two
+programs**: the file can be edited (in VS Code, say), moved or deleted,
+and the installed APlot does not change; an update replaces only the copy
+of the program that asked for it.  `Help > About APlot` names the file
+that runs, and the update window says it too.
+
+* **Installing a version by hand** - the one being worked on, say - is
+  running the same command with it: `python3 aplot.py --make-app` or
+  `python3 aplot.py --install-desktop` copies *that* file into the
+  installed APlot.
+* **Trying the updates out**: install an older `aplot.py` that way (any
+  version from 1.3.0 on), start the installed APlot and use `Help > Check
+  for updates...`: it finds the version on GitHub, whatever the file in
+  the editor is.
+* Up to 1.2.1, the bundle and the menu entry started the very `aplot.py`
+  they were made from.  The first time such a file is started at 1.3.0
+  or later (from the old `APlot.app` or menu entry, or directly), the
+  installation is made again with a copy, and a message says so.
+* A version before 1.3.0 that could not replace its file left the new one
+  in `~/.aplot/updates/<version>/aplot.py`.  Install that once by hand,
+  and every later update installs itself:
+
+        python3 ~/.aplot/updates/1.3.0/aplot.py --install-desktop    # Linux
+        python3 ~/.aplot/updates/1.3.0/aplot.py --make-app           # Mac
+
 * In a terminal, `python3 aplot.py --check-update` only looks, and
   `python3 aplot.py --update` downloads and installs (the next start
   finishes it, as above).
@@ -21628,6 +21864,7 @@ the version is the newest, nothing is said at all.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
 | 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
 | 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
 | 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
@@ -21685,7 +21922,10 @@ that is.
 ### The one file
 
 Beside `aplot.py` the program writes `~/.aplot/config.json` the first time
-the settings are saved, and nothing else.  No `icons` folder, no data
+the settings are saved, and for the updates the downloads and the kept old
+versions in `~/.aplot/updates` and `~/.aplot/backups` - nothing else (an
+install with `--make-app` or `--install-desktop` puts its copy where
+`The installed APlot and the aplot.py you edit` says).  No `icons` folder, no data
 directory: the toolbar icons are drawn by the program itself, and a graph
 carries its data, its formulas and even its pictures inside its own `.aplt`
 file.
@@ -21736,17 +21976,20 @@ time:
 
         python3 aplot.py --make-app
 
-Either way `~/Applications/APlot.app` is written.  It is a folder, not a
-copy: it holds the icon, the name and a three-line launcher that starts
-**this same `aplot.py`**, wherever it lies - nothing is compiled and
-nothing is duplicated.  Start APlot from there (and keep it in the Dock)
-and the label says `APlot`.  Give the command a folder of your own to put
-the bundle somewhere else:
+Either way `~/Applications/APlot.app` is written.  It is a folder that
+holds the icon, the name, **a copy of `aplot.py`**
+(`Contents/Resources/aplot.py`) and a short launcher that starts that
+copy - nothing is compiled.  Start APlot from there (and keep it in the
+Dock) and the label says `APlot`.  The app is an **installed program of
+its own**: the `aplot.py` it was made from can be edited, moved or
+deleted, and the app does not change; the updates replace the copy inside
+it (see `The installed APlot and the aplot.py you edit`).  Running the
+command again installs the `aplot.py` it is run with.  Give the command a
+folder of your own to put the bundle somewhere else:
 
     python3 aplot.py --make-app /Applications
 
-Run it again after moving `aplot.py`, so that the launcher points at the
-new place.
+The app itself may be moved as well; it finds its copy wherever it is.
 
 With `pyobjc-framework-Cocoa` installed the program also tells macOS its
 name and its bundle directly, which is what the **bold application menu**
@@ -21797,11 +22040,16 @@ On Linux one command does it all - nothing is compiled:
 
     python3 aplot.py --install-desktop
 
-It writes the few small files the freedesktop.org standards ask for, under
-`~/.local` for the user who runs it:
+It **installs APlot** - a copy of the `aplot.py` it is run with, which the
+menu entry and the `aplot` command start (so the file it came from can be
+edited, moved or deleted afterwards, and the updates replace the copy) -
+and writes the few small files the freedesktop.org standards ask for, all
+under `~/.local` for the user who runs it:
 
 | File | What it does |
 | --- | --- |
+| `share/aplot/aplot.py` | the installed APlot: the copy of the program that is started |
+| `bin/aplot` | the command `aplot`, which starts it from a terminal (`~/.local/bin` is on the `PATH` of most systems) |
 | `share/mime/packages/aplot.xml` | names the kind of file `application/x-aplot` - by the `.aplt` extension, and by the first bytes of the file, so a graph without its extension is known too |
 | `share/icons/hicolor/.../application-x-aplot.png` | the icon of the graph files (the sheet with the spectrum), in eight sizes, and APlot's own icon beside it |
 | `bin/aplot-thumbnailer` | a tiny program that copies the picture stored in a graph out of it, at the size the file manager asks for |
@@ -21830,7 +22078,9 @@ instead:
 
     sudo python3 aplot.py --install-desktop --system
 
-which writes the same files under `/usr/local`.  KDE's Dolphin has a
+which writes the same files under `/usr/local` - the installed APlot is
+then `/usr/local/share/aplot/aplot.py`, and an update asks for the
+administrator's password to replace it.  KDE's Dolphin has a
 thumbnail system of its own and may need a plugin of its own.
 
 **Every diagram of a graph.**  The icon is the first diagram of the file.
@@ -21860,8 +22110,8 @@ picture exactly the size asked for, without it the file manager scales the
 stored picture itself.
 
 `python3 aplot.py --uninstall-desktop` (with `--system` for the other
-kind) takes every one of these files away again.  Run the install again
-after moving `aplot.py`, so that the menu entry points at the new place.
+kind) takes every one of these files away again, the installed copy too.
+Running the install again installs the `aplot.py` it is run with.
 
 
 ## 0. The name
@@ -24743,8 +24993,11 @@ class App:
         # the program can build the little bundle that carries its own name
         self.root.after(600, self._offer_app_bundle)
         if check_updates:
-            # the first start of a new version says what is new; then, once
-            # a week, GitHub is asked whether there is a newer one
+            # an APlot.app or menu entry of an older APlot that starts this
+            # very file gets a copy of its own; the first start of a new
+            # version says what is new; then, once a week, GitHub is asked
+            # whether there is a newer one
+            self.root.after(1200, self._separate_installation)
             self.root.after(1500, self._greet_new_version)
             self.root.after(UPDATE_FIRST_DELAY_MS, self.auto_check_for_updates)
 
@@ -25806,9 +26059,9 @@ class App:
         A program started as `python3 aplot.py` belongs to the interpreter
         as far as macOS is concerned, and the label under its Dock icon is
         the interpreter's name.  The only thing that changes that is a real
-        application bundle - a folder holding the name, the icon and a
-        two-line launcher that starts this same file.  Nothing is copied
-        and nothing is compiled.
+        application bundle - a folder holding the name, the icon, a copy of
+        this program and a short launcher that starts the copy.  Nothing is
+        compiled; the bundle is an installed APlot of its own.
         """
         if sys.platform != "darwin":
             messagebox.showinfo(
@@ -25821,9 +26074,12 @@ class App:
                 f"{APP_NAME} in the Dock",
                 f"macOS is calling this program {Path(sys.executable).name}, "
                 f"because it was started as a plain script.\n\n"
-                f"Shall I build {APP_NAME}.app in your Applications folder?  "
-                f"It is a small folder that starts this same aplot.py and "
-                f"gives it its own name and icon in the Dock.",
+                f"Shall I install {APP_NAME}.app in your Applications "
+                f"folder?  It holds a copy of this {APP_NAME} "
+                f"({APP_VERSION}) and gives it its own name and icon in the "
+                f"Dock.  It is a program of its own: this aplot.py can be "
+                f"edited, moved or deleted without changing it, and the "
+                f"updates from GitHub replace the copy inside the app.",
                 parent=self.root):
             return None
         bundle = make_macos_app()
@@ -25966,7 +26222,8 @@ class App:
                     messagebox.showinfo(
                         "Check for updates",
                         f"{APP_NAME} {APP_VERSION} is up to date.\n\n"
-                        f"(The newest version on GitHub is {facts['version']}.)",
+                        f"(The newest version on GitHub is {facts['version']}.)"
+                        f"\n\nThis {APP_NAME}: {program_place()}",
                         parent=self.root)
                 return
             if not manual and facts["version"] == str(
@@ -26023,10 +26280,14 @@ class App:
                 self.settings.save()
             except OSError:
                 pass
+            kept = (f"A copy of {APP_VERSION} is kept in "
+                    f"{short_path(result['backup'])}.\n"
+                    if result.get("backup") else "")
             messagebox.showinfo(
                 "Update",
-                f"{APP_NAME} {facts['version']} has been installed.\n"
-                f"A copy of {APP_VERSION} is kept in {result['backup']}.\n\n"
+                f"{APP_NAME} {facts['version']} has been installed in "
+                f"{short_path(result.get('where') or update_target())}.\n"
+                + kept + "\n"
                 + (notes + "\n\n" if notes else "")
                 + f"{APP_NAME} starts again now.", parent=self.root)
             command = list(result["command"])
@@ -26036,6 +26297,18 @@ class App:
 
         self._in_background(work, done)
         return True
+
+    def _separate_installation(self):
+        """APlot.app (or the menu entry) of an older APlot started this very
+        file: it gets a copy of its own, once, and the user is told."""
+        try:
+            notes = separate_installation()
+        except Exception:                # never keep the program from starting
+            return []
+        if notes:
+            messagebox.showinfo(f"{APP_NAME} is installed on its own",
+                                "\n\n".join(notes), parent=self.root)
+        return notes
 
     def _greet_new_version(self):
         """The first start after an update: what is new, what is left to do."""
@@ -26063,7 +26336,9 @@ class App:
             f"Version {APP_VERSION} ({APP_VERSION_DATE})\n\n"
             "Spreadsheet editor and interactive Matplotlib plots.\n\n"
             f"Developer\n{DEVELOPER}\n\n"
-            f"Settings file: {self.settings.path}", parent=self.root)
+            f"Program: {program_place()}"
+            + (" (installed)" if is_installed_copy() else "") + "\n"
+            f"Settings file: {short_path(self.settings.path)}", parent=self.root)
 
     def open_settings(self):
         """The settings editor; the window itself is handed back."""
@@ -27380,7 +27655,9 @@ class App:
 # version it is; `Help > Check for updates...` does the same at any time.
 # Nothing runs when APlot does not: there is no service, no scheduled job.
 # An update replaces this very file (a copy of the old one is kept) and
-# starts the program again.
+# starts the program again - or, where that may not be done (a git working
+# copy with work of its own, a system folder without the password), it
+# installs the new version for the user and starts that (`install_update`).
 UPDATE_REPOSITORY = "varallyay/APlot"
 UPDATE_BRANCH = "main"
 UPDATE_SOURCE = (f"https://raw.githubusercontent.com/{UPDATE_REPOSITORY}/"
@@ -27547,78 +27824,254 @@ def update_target():
     return Path(__file__).resolve()
 
 
+def git_update(folder, timeout=120):
+    """`git pull --ff-only` in a git working copy of APlot.
+
+    Only a clean copy of the branch on GitHub is pulled - nothing that is
+    not committed, no other branch, no other repository - so that nobody's
+    own work is ever touched.  (True, "") or (False, why not).
+    """
+    git = shutil.which("git")
+    if git is None:
+        return False, "git is not installed"
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", LC_ALL="C",
+               GIT_SSH_COMMAND="ssh -o BatchMode=yes")
+
+    def run(*args, seconds=30):
+        done = subprocess.run([git, "-C", str(folder), *args],
+                              capture_output=True, text=True,
+                              timeout=seconds, env=env)
+        return done.returncode, done.stdout.strip(), done.stderr.strip()
+
+    try:
+        code, branch, _ = run("symbolic-ref", "--short", "-q", "HEAD")
+        if code or branch != UPDATE_BRANCH:
+            return False, (f"it is on the branch {branch}, not {UPDATE_BRANCH}"
+                           if branch else "it is not on a branch")
+        code, remote, _ = run("config", f"branch.{branch}.remote")
+        code, url, _ = run("remote", "get-url", remote or "origin")
+        if code or UPDATE_REPOSITORY.lower() not in url.lower():
+            return False, f"it is not a copy of {UPDATE_PAGE}"
+        code, changes, _ = run("status", "--porcelain", "--untracked-files=no")
+        if code or changes:
+            return False, "it has changes that are not committed"
+        code, _, problem = run("pull", "--ff-only", "--quiet", seconds=timeout)
+        if code:
+            last = (problem.splitlines() or ["git pull did not succeed"])[-1]
+            return False, f"git pull did not succeed ({last})"
+    except (OSError, subprocess.SubprocessError) as error:
+        return False, f"git could not be run ({error})"
+    return True, ""
+
+
+ADMIN_COPY = ('cp "$1" "$2.aplot-new" && chmod {mode} "$2.aplot-new" '
+              '&& mv -f "$2.aplot-new" "$2"')
+
+
+def copy_as_administrator(new_program, target, platform=None, timeout=600):
+    """Copy the new program over a file this user may not write.
+
+    The system itself asks for the password of an administrator, in a
+    window of its own: `pkexec` on Linux, the usual dialog on a Mac.
+    (True, "") or (False, why not).
+    """
+    platform = platform or sys.platform
+    try:
+        mode = format(os.stat(target).st_mode & 0o7777, "o")
+    except OSError:
+        mode = "644"
+    script = ADMIN_COPY.format(mode=mode)
+    if platform.startswith("linux"):
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            return False, "pkexec, which asks for the password, is not installed"
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return False, "there is no desktop to ask for the password on"
+        command = [pkexec, "/bin/sh", "-c", script, "sh",
+                   str(new_program), str(target)]
+    elif platform == "darwin":
+        command = ["/usr/bin/osascript",
+                   "-e", "on run argv",
+                   "-e", 'do shell script "/bin/sh -c " & quoted form of item 1 '
+                         'of argv & " sh " & quoted form of item 2 of argv & " " '
+                         '& quoted form of item 3 of argv with administrator '
+                         'privileges',
+                   "-e", "end run", script, str(new_program), str(target)]
+    else:
+        return False, "the file may only be written by an administrator"
+    try:
+        done = subprocess.run(command, capture_output=True, text=True,
+                              timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as error:
+        return False, f"the password could not be asked for ({error})"
+    if done.returncode != 0:
+        return False, "the password of an administrator was not given"
+    return True, ""
+
+
+def install_own_copy(new_program, platform=None):
+    """Install the new program for this user, as an APlot of its own: on
+    Linux under ~/.local/share/aplot (with the menu entry), on a Mac as
+    ~/Applications/APlot.app.  {"program", "where", "command", "start"}, or
+    None where there is no such place (or it could not be written)."""
+    platform = platform or sys.platform
+    if platform == "darwin":
+        bundle = make_macos_app(program=new_program, platform=platform)
+        if bundle is None:
+            return None
+        return {"program": bundle / "Contents" / "Resources" / INSTALLED_PROGRAM,
+                "where": bundle,
+                # opened as an application, so that the Dock says APlot
+                "command": ["/usr/bin/open", "-n", "-a", str(bundle), "--args"],
+                "start": f"{APP_NAME}.app in your Applications folder (keep "
+                         f"it in the Dock)"}
+    if platform.startswith("linux"):
+        try:
+            install_linux_desktop(program=new_program)
+        except OSError:
+            return None
+        program = linux_desktop_paths()["program"]
+        return {"program": program, "where": program,
+                "command": [sys.executable, str(program)],
+                "start": f"the applications menu, by a double click on a "
+                         f"graph, or with the command {DESKTOP_ID}"}
+    return None
+
+
+def _keep_old(program):
+    """A copy of the program file `program` in the backups; its path."""
+    old = program_facts(Path(program).read_text(encoding="utf-8", errors="replace"))
+    UPDATE_BACKUPS.mkdir(parents=True, exist_ok=True)
+    backup = UPDATE_BACKUPS / f"aplot-{old['version'] or 'old'}.py"
+    shutil.copy2(program, backup)
+    return backup
+
+
 def install_update(new_program, facts, target=None, source=None,
-                   platform=None, fetch=None):
+                   platform=None, fetch=None, git=None, administrator=None,
+                   own_copy=None):
     """Put the downloaded program in the place of the running one.
 
-    Returns {"installed", "backup", "notes", "command"}: `notes` are what
-    the user has to be told (or do), `command` starts the new version.
-    A program in a git working copy, or in a folder that cannot be
-    written to, is left alone: the notes say what to do instead.
+    * The usual case - the installed APlot, or any file this user may
+      write: the file is replaced in one step, a copy of the old one kept.
+    * A git working copy is never written over: a clean copy of the branch
+      on GitHub is brought up to date with `git pull`.
+    * A file only an administrator may write: the system asks for the
+      password and copies it.
+    * When none of that can be done, the running file is left as it is and
+      the new version is installed for this user instead (`install_own_copy`)
+      - and that is the one started.
+
+    Returns {"installed", "backup", "notes", "command", "where"}: `notes`
+    are what the user has to be told, `command` starts the new version and
+    `where` is what was updated.  `git`, `administrator` and `own_copy`
+    stand in for `git_update`, `copy_as_administrator` and
+    `install_own_copy` (the tests use them).
     """
     target = Path(target or update_target())
     platform = platform or sys.platform
     fetch = fetch or fetch_url
     source = source or UPDATE_SOURCE
+    git = git or git_update
+    administrator = administrator or copy_as_administrator
+    own_copy = own_copy or install_own_copy
     new_program = Path(new_program)
     result = {"installed": False, "backup": None, "notes": [],
-              "command": [sys.executable, str(target)]}
-    if (target.parent / ".git").exists():
-        result["notes"].append(
-            f"{target.parent} is a git working copy: it is brought up to date "
-            f"with `git pull` there, not by APlot.  The new version has been "
-            f"downloaded to {new_program}.")
-        return result
-    if not os.access(target, os.W_OK) or not os.access(target.parent, os.W_OK):
-        result["notes"].append(
-            f"{target} cannot be written to by this user.  The new version "
-            f"has been downloaded to {new_program}; it is installed with\n"
-            f"    sudo cp {shlex.quote(str(new_program))} "
-            f"{shlex.quote(str(target))}")
-        return result
-    old = program_facts(target.read_text(encoding="utf-8", errors="replace"))
-    UPDATE_BACKUPS.mkdir(parents=True, exist_ok=True)
-    backup = UPDATE_BACKUPS / f"aplot-{old['version'] or 'old'}.py"
-    shutil.copy2(target, backup)
-    result["backup"] = backup
-    # written next to the program first, then put in its place in one step:
-    # a failure half way never leaves half a program behind
-    mode = os.stat(target).st_mode & 0o7777
-    handle, temporary = tempfile.mkstemp(prefix=".aplot-update-",
-                                         dir=str(target.parent))
+              "command": [sys.executable, str(target)], "where": target}
     try:
-        with os.fdopen(handle, "wb") as out:
-            out.write(new_program.read_bytes())
-        os.chmod(temporary, mode)
-        os.replace(temporary, target)
-    except OSError as error:
+        old = program_facts(target.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        old = {"version": "", "date": "", "quicklook": ""}
+    why = ""
+    if (target.parent / ".git").exists():
+        pulled, why = git(target.parent)
         try:
-            os.unlink(temporary)
+            now = program_facts(target.read_text(encoding="utf-8",
+                                                 errors="replace"))["version"]
         except OSError:
-            pass
-        raise UpdateError(f"{target} could not be replaced: {error}") from error
-    result["installed"] = True
-    # the documentation beside it, when there is one
-    readme = target.parent / UPDATE_README
-    if readme.exists() and os.access(readme, os.W_OK):
+            now = ""
+        if pulled and version_tuple(now) >= version_tuple(facts["version"]):
+            result["installed"] = True
+            result["where"] = target.parent
+            result["notes"].append(
+                f"{short_path(target.parent)} is a git working copy: it has been "
+                f"brought up to date with git pull (git keeps the old version).")
+        elif pulled:
+            why = f"after git pull it is still version {now or '?'}"
+        why = why and f"it is a git working copy, and {why}"
+    elif not os.access(target, os.W_OK) or not os.access(target.parent, os.W_OK):
         try:
-            readme.write_bytes(fetch(source + UPDATE_README))
-        except (UpdateError, OSError):
-            pass                       # the program carries it as well
+            backup = _keep_old(target)       # it can still be read
+        except OSError:
+            backup = None
+        copied, why = administrator(new_program, target, platform)
+        if copied:
+            result.update(installed=True, backup=backup)
+        why = why and f"only an administrator may write it, and {why}"
+    else:
+        result["backup"] = _keep_old(target)
+        # written next to the program first, then put in its place in one
+        # step: a failure half way never leaves half a program behind
+        mode = os.stat(target).st_mode & 0o7777
+        handle, temporary = tempfile.mkstemp(prefix=".aplot-update-",
+                                             dir=str(target.parent))
+        try:
+            with os.fdopen(handle, "wb") as out:
+                out.write(new_program.read_bytes())
+            os.chmod(temporary, mode)
+            os.replace(temporary, target)
+        except OSError as error:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise UpdateError(f"{target} could not be replaced: {error}") from error
+        result["installed"] = True
+        # the documentation beside it, when there is one
+        readme = target.parent / UPDATE_README
+        if readme.exists() and os.access(readme, os.W_OK):
+            try:
+                readme.write_bytes(fetch(source + UPDATE_README))
+            except (UpdateError, OSError):
+                pass                       # the program carries it as well
+    if not result["installed"]:
+        # the running file stays as it is: the new version is installed for
+        # this user, and that one is started
+        place = installed_copy(platform)
+        try:
+            backup = (_keep_old(place) if place is not None and place.is_file()
+                      else None)
+        except OSError:
+            backup = None
+        own = own_copy(new_program, platform)
+        if own is None:
+            result["notes"].append(
+                f"{short_path(target)} was not replaced: {why or 'it cannot be written'}.  "
+                f"The new version has been downloaded to {new_program}; it is "
+                f"installed by copying it over that file.")
+            return result
+        result.update(installed=True, backup=backup, command=list(own["command"]),
+                      where=own["where"])
+        result["notes"].append(
+            f"{short_path(target)} has been left as it is, because "
+            f"{why or 'it cannot be written'}.  {APP_NAME} {facts['version']} "
+            f"has been installed for you in {short_path(own['where'])} instead: "
+            f"start it from {own['start']}.  That copy updates itself.")
     # the Quick Look extensions of a Mac are built with Xcode: they are
-    # downloaded and unpacked, and the user is told how to build them
+    # downloaded and unpacked beside the new program, and the user is told
+    # how to build them
     if (platform == "darwin"
             and is_newer(facts.get("quicklook"), old.get("quicklook") or "0")):
         try:
-            archive = target.parent / UPDATE_QUICKLOOK
+            archive = new_program.parent / UPDATE_QUICKLOOK
             archive.write_bytes(fetch(source + UPDATE_QUICKLOOK))
             with zipfile.ZipFile(archive) as bundle:
-                bundle.extractall(target.parent)
-            folder = target.parent / "APlotQuickLook"
+                bundle.extractall(new_program.parent)
+            folder = new_program.parent / "APlotQuickLook"
             result["notes"].append(
                 "The Quick Look extensions (the pictures of the graphs in the "
-                f"Finder) are new as well.  They are in {folder}; build and "
-                "install them in Terminal with\n"
+                f"Finder) are new as well.  They are in {short_path(folder)}; "
+                "build and install them in Terminal with\n"
                 f"    cd {shlex.quote(str(folder))}\n"
                 "    sh build.sh\n    sh install.sh")
         except (UpdateError, OSError, zipfile.BadZipFile) as error:
@@ -27651,27 +28104,39 @@ def after_update(settings, platform=None):
     platform = platform or sys.platform
     state = settings.section("update_state")
     old = str(state.get("updated_from") or "")
-    if not old:
-        return None
+    if not old or not is_newer(APP_VERSION, old):
+        return None          # (an older copy leaves it to the new version)
     notes = [one for one in str(state.get("notes") or "").split("\n\n") if one]
+    program = update_target()
     if platform.startswith("linux"):
         paths = linux_desktop_paths()
         if paths["desktop"].exists():
+            # the installed copy is this one (or becomes it, when an older
+            # installed copy is behind it), and its files are written again
             try:
-                install_linux_desktop()
+                installed = paths["program"]
+                newer = (installed.is_file() and is_newer(program_facts(
+                    installed.read_text(encoding="utf-8", errors="replace")
+                )["version"], APP_VERSION))
+                install_linux_desktop(program=installed if newer else program)
                 notes.append("The desktop integration (icons, thumbnails, "
                              "previews) has been brought up to date.")
             except OSError:
                 pass
         system = linux_desktop_paths(system=True)
-        if system["desktop"].exists():
-            notes.append("APlot is also known to the desktop of every user; "
-                         "that is brought up to date with\n"
-                         "    sudo python3 aplot.py --install-desktop --system")
+        if system["desktop"].exists() and program != system["program"]:
+            notes.append("APlot is also installed for every user; that copy "
+                         "is brought up to date with\n"
+                         f"    sudo python3 {shlex.quote(str(program))} "
+                         "--install-desktop --system")
     elif platform == "darwin":
-        bundle = Path.home() / "Applications" / f"{APP_NAME}.app"
-        if bundle.exists() and make_macos_app() is not None:
-            notes.append(f"{bundle} has been brought up to date.")
+        # only the bundle that holds this program: an APlot.app is an
+        # installed program of its own, and updates itself
+        bundle = app_bundle_of(program)
+        if bundle is not None and make_macos_app(
+                bundle.parent, name=bundle.name[:-len(".app")],
+                program=program, platform=platform) is not None:
+            notes.append(f"{short_path(bundle)} has been brought up to date.")
     settings.set("update_state", "updated_from", "")
     settings.set("update_state", "notes", "")
     try:
@@ -27685,13 +28150,15 @@ USAGE = f"""{APP_NAME} {APP_VERSION} - plotting and editing tabular data
 
   python3 aplot.py                 start the program
   python3 aplot.py FILE.aplt       start the program with that graph
-  python3 aplot.py --make-app      build {APP_NAME}.app (macOS), so that the Dock
-                                   shows this program's own icon and name
+  python3 aplot.py --make-app      install {APP_NAME}.app (macOS) with a copy of
+                                   this file: its own icon and name in the
+                                   Dock, and it updates itself
   python3 aplot.py --icon FILE     write the icon into a PNG file
   python3 aplot.py --install-desktop [--system]
-                                   Linux: icon, thumbnails and "open with"
-                                   for .aplt files (--system: every user,
-                                   run with sudo)
+                                   Linux: install a copy of this file, with
+                                   the menu entry, icon, thumbnails and
+                                   "open with" for .aplt files (--system:
+                                   every user, run with sudo)
   python3 aplot.py --uninstall-desktop [--system]
                                    take that away again
   python3 aplot.py --version       the version of this APlot
@@ -27728,7 +28195,9 @@ def command_line_update(install=False, out=print):
     if not result["installed"]:
         return 1
     out(f"{APP_NAME} {facts['version']} has been installed in "
-        f"{update_target()}; the old version is kept in {result['backup']}.")
+        f"{short_path(result['where'])}."
+        + (f"  The old version is kept in {short_path(result['backup'])}."
+           if result["backup"] else ""))
     try:     # the next start finishes the update (desktop files, APlot.app)
         settings = Config()
         settings.set("update_state", "updated_from", APP_VERSION)
@@ -27781,8 +28250,13 @@ def run_command(argv):
         if first == "--uninstall-desktop":
             print(f"{len(files)} files of {APP_NAME} were taken away from {where}.")
             return 0
-        print(f"{APP_NAME} is known to the desktop now - {len(files)} files "
+        installed = linux_desktop_paths(system=system)["program"]
+        print(f"{APP_NAME} {APP_VERSION} is installed - {len(files)} files "
               f"written under {where}:\n"
+              f"  * {APP_NAME} itself, a copy of this file: {installed},\n"
+              "    started by the applications menu and by the command\n"
+              f"    {DESKTOP_ID}; this aplot.py can be edited, moved or deleted\n"
+              "    without changing it, and the updates replace that copy,\n"
               "  * .aplt files have their own icon and open in APlot,\n"
               "  * the file managers show the first diagram of every graph\n"
               "    saved by this APlot as its thumbnail,\n"
@@ -27821,9 +28295,12 @@ def run_command(argv):
         if bundle is None:
             print("The application bundle could not be built.")
             return 1
-        print(f"{bundle} is ready.\n"
+        print(f"{bundle} is ready, with {APP_NAME} {APP_VERSION} inside it.\n"
               "Open it once from the Finder (or drag it onto the Dock): the "
-              f"Dock then shows the {APP_NAME} icon and the name {APP_NAME}.")
+              f"Dock then shows the {APP_NAME} icon and the name {APP_NAME}.\n"
+              "The app runs its own copy of the program: this aplot.py can be "
+              "edited, moved or deleted without changing it, and the updates "
+              "from GitHub replace the copy inside the app.")
         return 0
     return None
 

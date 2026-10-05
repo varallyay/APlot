@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.2.1 (2026-10-03)**.  The number is written in one place
+This is **APlot 1.3.0 (2026-10-05)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -67,7 +67,8 @@ Only the first lines of `aplot.py` on GitHub are read for that, and while
 the version is the newest, nothing is said at all.
 
 * **`Help > Check for updates...`** asks at any time and always answers:
-  *"APlot 1.2.0 is up to date"*, or that GitHub could not be reached.
+  *"APlot 1.3.0 is up to date"* (with the place of the program that
+  asked), or that GitHub could not be reached.
 * **A newer version** is offered in a small window with **what is new** in
   it (from the version history) and three buttons: **`Update now`**,
   **`Later`** (asked again next week) and **`Skip this version`** (the
@@ -79,24 +80,68 @@ the version is the newest, nothing is said at all.
   version** in `~/.aplot/backups` (`aplot-1.2.0.py`, say), puts the new
   one in place of the running file in one step, updates a `README.md`
   lying beside it, and **starts APlot again**, with the graph that was
-  open.  On a Mac it stays the same program in the Dock.
+  open.  On a Mac it stays the same program in the Dock.  Nothing is left
+  for the user to do - wherever the running file lies:
+  * **the installed APlot** (`APlot.app`, or the copy the Linux menu
+    starts, see below) and any file the user may write: replaced as
+    above;
+  * **a git working copy** is never written over: a clean copy of the
+    `main` branch of GitHub (nothing uncommitted) is brought up to date
+    with `git pull`;
+  * **a file only an administrator may write** (one put in a system
+    folder with `sudo`): the system asks for the password in a window of
+    its own (`pkexec` on Linux, the usual dialog on a Mac) and the file is
+    replaced;
+  * when none of these can be done - a working copy with changes of its
+    own, a password that was not given - that file is **left as it is**,
+    and the new version is **installed for the user** instead (on Linux
+    under `~/.local/share/aplot` with its menu entry, on a Mac as
+    `~/Applications/APlot.app`) and started from there.  The message says
+    so, and where to start it from in the future.
 * **The first start of the new version** says what is new and brings up
   to date what lies outside the program file: on **Linux** the desktop
   files of `--install-desktop` (icons, thumbnails, previews, the Space bar
   viewer; an install for every user is mentioned with the `sudo` command
-  that renews it), on a **Mac** the `APlot.app` in `~/Applications`.
+  that renews it), on a **Mac** the `APlot.app` the program runs in.
 * **The Quick Look extensions of a Mac** are built with Xcode, so they
   cannot simply be replaced: when an update brings new ones, it unpacks
-  the `APlotQuickLook` folder next to `aplot.py` and says exactly what to
-  type in Terminal (`cd .../APlotQuickLook`, `sh build.sh`,
-  `sh install.sh`).
-* When the program file **cannot be written** by the user (it was put in
-  a system folder), or it lies in a **git working copy**, nothing is
-  replaced: the new file is left in `~/.aplot/updates` and the message
-  says the one command that installs it (`sudo cp ...`) or to use
-  `git pull`.
-* **Going back**: copy the kept file from `~/.aplot/backups` over
-  `aplot.py`.
+  the `APlotQuickLook` folder beside the download, in
+  `~/.aplot/updates/<version>`, and says exactly what to type in Terminal
+  (`cd .../APlotQuickLook`, `sh build.sh`, `sh install.sh`).
+* **Going back**: copy the kept file from `~/.aplot/backups` over the
+  program file (`Help > About APlot` says which file that is).
+
+#### The installed APlot and the aplot.py you edit
+
+`APlot.app` on a Mac (`--make-app`) and the menu entry on Linux
+(`--install-desktop`) hold **a copy of their own** of the program - inside
+the bundle, `APlot.app/Contents/Resources/aplot.py`, and
+`~/.local/share/aplot/aplot.py` on Linux - and start that copy.  The
+installed APlot and the `aplot.py` it was made from are therefore **two
+programs**: the file can be edited (in VS Code, say), moved or deleted,
+and the installed APlot does not change; an update replaces only the copy
+of the program that asked for it.  `Help > About APlot` names the file
+that runs, and the update window says it too.
+
+* **Installing a version by hand** - the one being worked on, say - is
+  running the same command with it: `python3 aplot.py --make-app` or
+  `python3 aplot.py --install-desktop` copies *that* file into the
+  installed APlot.
+* **Trying the updates out**: install an older `aplot.py` that way (any
+  version from 1.3.0 on), start the installed APlot and use `Help > Check
+  for updates...`: it finds the version on GitHub, whatever the file in
+  the editor is.
+* Up to 1.2.1, the bundle and the menu entry started the very `aplot.py`
+  they were made from.  The first time such a file is started at 1.3.0
+  or later (from the old `APlot.app` or menu entry, or directly), the
+  installation is made again with a copy, and a message says so.
+* A version before 1.3.0 that could not replace its file left the new one
+  in `~/.aplot/updates/<version>/aplot.py`.  Install that once by hand,
+  and every later update installs itself:
+
+        python3 ~/.aplot/updates/1.3.0/aplot.py --install-desktop    # Linux
+        python3 ~/.aplot/updates/1.3.0/aplot.py --make-app           # Mac
+
 * In a terminal, `python3 aplot.py --check-update` only looks, and
   `python3 aplot.py --update` downloads and installs (the next start
   finishes it, as above).
@@ -107,6 +152,7 @@ the version is the newest, nothing is said at all.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
 | 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
 | 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
 | 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
@@ -164,7 +210,10 @@ that is.
 ### The one file
 
 Beside `aplot.py` the program writes `~/.aplot/config.json` the first time
-the settings are saved, and nothing else.  No `icons` folder, no data
+the settings are saved, and for the updates the downloads and the kept old
+versions in `~/.aplot/updates` and `~/.aplot/backups` - nothing else (an
+install with `--make-app` or `--install-desktop` puts its copy where
+`The installed APlot and the aplot.py you edit` says).  No `icons` folder, no data
 directory: the toolbar icons are drawn by the program itself, and a graph
 carries its data, its formulas and even its pictures inside its own `.aplt`
 file.
@@ -215,17 +264,20 @@ time:
 
         python3 aplot.py --make-app
 
-Either way `~/Applications/APlot.app` is written.  It is a folder, not a
-copy: it holds the icon, the name and a three-line launcher that starts
-**this same `aplot.py`**, wherever it lies - nothing is compiled and
-nothing is duplicated.  Start APlot from there (and keep it in the Dock)
-and the label says `APlot`.  Give the command a folder of your own to put
-the bundle somewhere else:
+Either way `~/Applications/APlot.app` is written.  It is a folder that
+holds the icon, the name, **a copy of `aplot.py`**
+(`Contents/Resources/aplot.py`) and a short launcher that starts that
+copy - nothing is compiled.  Start APlot from there (and keep it in the
+Dock) and the label says `APlot`.  The app is an **installed program of
+its own**: the `aplot.py` it was made from can be edited, moved or
+deleted, and the app does not change; the updates replace the copy inside
+it (see `The installed APlot and the aplot.py you edit`).  Running the
+command again installs the `aplot.py` it is run with.  Give the command a
+folder of your own to put the bundle somewhere else:
 
     python3 aplot.py --make-app /Applications
 
-Run it again after moving `aplot.py`, so that the launcher points at the
-new place.
+The app itself may be moved as well; it finds its copy wherever it is.
 
 With `pyobjc-framework-Cocoa` installed the program also tells macOS its
 name and its bundle directly, which is what the **bold application menu**
@@ -276,11 +328,16 @@ On Linux one command does it all - nothing is compiled:
 
     python3 aplot.py --install-desktop
 
-It writes the few small files the freedesktop.org standards ask for, under
-`~/.local` for the user who runs it:
+It **installs APlot** - a copy of the `aplot.py` it is run with, which the
+menu entry and the `aplot` command start (so the file it came from can be
+edited, moved or deleted afterwards, and the updates replace the copy) -
+and writes the few small files the freedesktop.org standards ask for, all
+under `~/.local` for the user who runs it:
 
 | File | What it does |
 | --- | --- |
+| `share/aplot/aplot.py` | the installed APlot: the copy of the program that is started |
+| `bin/aplot` | the command `aplot`, which starts it from a terminal (`~/.local/bin` is on the `PATH` of most systems) |
 | `share/mime/packages/aplot.xml` | names the kind of file `application/x-aplot` - by the `.aplt` extension, and by the first bytes of the file, so a graph without its extension is known too |
 | `share/icons/hicolor/.../application-x-aplot.png` | the icon of the graph files (the sheet with the spectrum), in eight sizes, and APlot's own icon beside it |
 | `bin/aplot-thumbnailer` | a tiny program that copies the picture stored in a graph out of it, at the size the file manager asks for |
@@ -309,7 +366,9 @@ instead:
 
     sudo python3 aplot.py --install-desktop --system
 
-which writes the same files under `/usr/local`.  KDE's Dolphin has a
+which writes the same files under `/usr/local` - the installed APlot is
+then `/usr/local/share/aplot/aplot.py`, and an update asks for the
+administrator's password to replace it.  KDE's Dolphin has a
 thumbnail system of its own and may need a plugin of its own.
 
 **Every diagram of a graph.**  The icon is the first diagram of the file.
@@ -339,8 +398,8 @@ picture exactly the size asked for, without it the file manager scales the
 stored picture itself.
 
 `python3 aplot.py --uninstall-desktop` (with `--system` for the other
-kind) takes every one of these files away again.  Run the install again
-after moving `aplot.py`, so that the menu entry points at the new place.
+kind) takes every one of these files away again, the installed copy too.
+Running the install again installs the `aplot.py` it is run with.
 
 
 ## 0. The name
