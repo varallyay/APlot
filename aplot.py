@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.0 (2026-10-05) - see `APP_VERSION` below and "Version history" in the
+1.3.1 (2026-10-05) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -172,7 +172,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 APP_VERSION_DATE = "2026-10-05"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -484,7 +484,13 @@ TYPING_COMMAND_KEYS = 0x0004 | 0x0008 | 0x20000 | 0x40000
 SELECT_COLOR = "#1a5fb4"    # the blue of the selection
 BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
 BLOCK_LINE = 2              # thickness of the outline around the block
-AUTO_SCROLL_EDGE = 14       # pixels: how close to the border scrolling starts
+# the light grey net between the cells of a sheet: one pixel wide, a shade
+# darker than the paper of the table (lighter on a dark one), or the colour
+# given here ("#d9d9d9", say); SHEET_GRID = False leaves the sheet plain
+SHEET_GRID = True
+SHEET_GRID_COLOR = None
+SHEET_GRID_SHADE = 0.16     # how far from the paper the automatic grey is
+AUTO_SCROLL_EDGE = 14      # pixels: how close to the border scrolling starts
 AUTO_SCROLL_MS = 55         # how often the table scrolls on during a drag
 # sideways a table scrolls in pixels, not in columns: one step of a drag
 # held past the edge moves this many of them (a row is one step upright)
@@ -9728,54 +9734,152 @@ class DataTable(ttk.Frame):
         self._grow_timer = None
         self.grow_columns_to_fit()
 
-    def _draw_gridlines(self):
-        if not hasattr(self, "_grid_lines"):
-            self._grid_lines = []
-            
+    # -- the light grey net between the cells -----------------------------
+    # A Treeview draws no lines between its cells, so the net is laid over
+    # it: one-pixel frames along the last pixel of every visible row and
+    # column (the row numbers get the lines of their rows too).  A Treeview
+    # scrolls by whole rows, so the lines of the rows stay where they are
+    # while the sheet scrolls up and down; only a new width, height, row
+    # height or sideways scrolling moves them.  A click, a drag or the wheel
+    # on a line is handed to the table under it - the lines are only seen.
+    def grid_color(self):
+        """The colour of the net: SHEET_GRID_COLOR, or a light grey made
+        from the paper of the table (a slightly lighter one on a dark
+        theme, so that it stays a quiet line there as well)."""
+        if SHEET_GRID_COLOR:
+            return SHEET_GRID_COLOR
         try:
-            first_frac, last_frac = self.tree.yview()
-        except Exception:
-            return
-            
-        children = self.tree.get_children()
-        num_items = len(children)
-        if num_items == 0: 
-            return
-            
-        first_idx = max(0, int(first_frac * num_items) - 2)
-        last_idx = min(num_items - 1, int(last_frac * num_items) + 2)
-        
-        needed = (last_idx - first_idx + 1) + len(self.tree["displaycolumns"])
-        while len(self._grid_lines) < needed:
-            self._grid_lines.append(tk.Frame(self.tree, background="#e8e8e8"))
-            
-        for f in self._grid_lines:
-            f.place_forget()
-            
-        f_idx = 0
-        tree_h = self.tree.winfo_height()
-        
-        # Draw vertical lines
+            red, green, blue = (one / 65535.0 for one in
+                                self.winfo_rgb(self.table_background()))
+        except (tk.TclError, ValueError):
+            return "#d6d6d6"
+        light = 0.299 * red + 0.587 * green + 0.114 * blue >= 0.5
+        shade = SHEET_GRID_SHADE
+
+        def mix(value):
+            value = value * (1.0 - shade) if light else value + (1.0 - value) * shade
+            return max(0, min(255, int(round(value * 255))))
+        return "#{:02x}{:02x}{:02x}".format(mix(red), mix(green), mix(blue))
+
+    def _grid_line(self, owner):
+        """One line of the net, lying on `owner` (the table or the row
+        numbers), under the blue outline and the fill handle."""
+        line = tk.Frame(owner, background=self._grid_colour_now,
+                        borderwidth=0, highlightthickness=0)
         try:
-            for col in self.tree["displaycolumns"]:
-                bbox = self.tree.bbox(children[0], col)
-                if bbox:
-                    x = bbox[0] + bbox[2]
-                    self._grid_lines[f_idx].place(x=x-1, y=0, width=1, height=tree_h)
-                    f_idx += 1
+            line.configure(cursor=owner.cget("cursor"))
         except tk.TclError:
             pass
-                
-        # Draw horizontal lines
+        line.lower()
+        for sequence in ("<ButtonPress>", "<ButtonRelease>", "<Motion>",
+                         "<MouseWheel>"):
+            line.bind(sequence, lambda event, o=owner, w=line, s=sequence:
+                      self._pass_to_table(event, o, w, s))
+        return line
+
+    @staticmethod
+    def _pass_to_table(event, owner, line, sequence):
+        """A click, drag or wheel turn on a grid line belongs to the table
+        under it: it is handed on there, at the same place."""
+        if sequence in ("<ButtonPress>", "<ButtonRelease>"):
+            pattern = f"<{sequence[1:-1]}-{event.num}>"
+        else:
+            pattern = sequence
+        state = event.state if isinstance(event.state, int) else 0
+        options = {"x": event.x + line.winfo_x(), "y": event.y + line.winfo_y(),
+                   "rootx": event.x_root, "rooty": event.y_root, "state": state}
+        if sequence == "<MouseWheel>":
+            options["delta"] = event.delta
         try:
-            for i in range(first_idx, last_idx + 1):
-                bbox = self.tree.bbox(children[i], self.tree["displaycolumns"][0])
-                if bbox:
-                    y = bbox[1] + bbox[3]
-                    self._grid_lines[f_idx].place(x=0, y=y-1, relwidth=1, height=1)
-                    f_idx += 1
-        except (tk.TclError, IndexError):
+            owner.event_generate(pattern, **options)
+        except tk.TclError:
             pass
+        return "break"
+
+    def _grid_shape(self):
+        """Where the lines go now: {"tree": [(x, y, width, height)...],
+        "rows": [...]} - empty when there is nothing to divide."""
+        shape = {"tree": [], "rows": []}
+        tree = self.tree
+        rows = len(self.df.index)
+        columns = len(tree["columns"])
+        if not SHEET_GRID or not rows or not columns:
+            return shape
+        try:
+            first = min(rows - 1, max(0, int(round(tree.yview()[0] * rows))))
+            box = tree.bbox(str(first), "#1")
+            width, height = tree.winfo_width(), tree.winfo_height()
+        except tk.TclError:
+            return shape
+        if not box or box[3] <= 0:
+            return shape
+        top, step = int(box[1]), int(box[3])
+        shown = min(rows - first, max(0, (height - top + step - 1) // step))
+        bottom = min(height, top + shown * step)
+        if shown <= 0 or bottom <= top:
+            return shape
+        rights = []
+        for index in range(1, columns + 1):
+            try:
+                cell = tree.bbox(str(first), f"#{index}")
+            except tk.TclError:
+                cell = None
+            if cell:
+                right = int(cell[0]) + int(cell[2]) - 1
+                if 0 <= right < width:
+                    rights.append(right)
+                elif right >= width:
+                    break
+        try:
+            last = tree.bbox(str(first), f"#{columns}")
+            span = min(width, int(last[0]) + int(last[2])) if last else width
+        except tk.TclError:
+            span = width
+        lines = [(0, top + k * step - 1, span, 1) for k in range(1, shown + 1)
+                 if top + k * step - 1 < height]
+        lines += [(x, top, 1, bottom - top) for x in rights]
+        shape["tree"] = lines
+        row_tree = getattr(self, "row_tree", None)
+        if row_tree is not None:
+            try:
+                numbers = row_tree.bbox(str(first), "#1")
+                side, tall = row_tree.winfo_width(), row_tree.winfo_height()
+            except tk.TclError:
+                numbers = None
+            if numbers:
+                ytop, ystep = int(numbers[1]), int(numbers[3]) or step
+                shape["rows"] = [(0, ytop + k * ystep - 1, side, 1)
+                                 for k in range(1, shown + 1)
+                                 if ytop + k * ystep - 1 < tall]
+        return shape
+
+    def _draw_gridlines(self, force=False):
+        """Lay the net over the visible cells (nothing is done while it
+        lies right already).  Returns the number of lines shown."""
+        try:
+            shape = self._grid_shape()
+        except tk.TclError:
+            return 0
+        if not force and shape == getattr(self, "_grid_drawn", None):
+            return sum(len(one) for one in shape.values())
+        if not hasattr(self, "_grid_lines"):
+            self._grid_lines = {"tree": [], "rows": []}
+        self._grid_colour_now = self.grid_color()
+        owners = {"tree": self.tree, "rows": getattr(self, "row_tree", None)}
+        for key, places in shape.items():
+            owner, pool = owners[key], self._grid_lines[key]
+            if owner is None:
+                continue
+            while len(pool) < len(places):
+                pool.append(self._grid_line(owner))
+            for line, (x, y, width, height) in zip(pool, places):
+                line.place(x=x, y=y, width=width, height=height)
+                if force:
+                    line.configure(background=self._grid_colour_now)
+            for line in pool[len(places):]:
+                line.place_forget()
+        self._grid_drawn = shape
+        return sum(len(one) for one in shape.values())
 
     def _refresh_outline(self):
         """Draw the blue rectangle around the visible part of the block and the fill handle."""
@@ -10738,6 +10842,8 @@ class DataTable(ttk.Frame):
                              minwidth=MIN_COLUMN_WIDTH,
                              stretch=str(column) not in self.column_widths)
         self.after(1, self._place_checks)
+        # a new row height (font size) or theme: the net is laid again
+        self.after(30, lambda: self._draw_gridlines(force=True))
 
     def table_background(self):
         """The colour the table itself is painted with, whatever the theme."""
@@ -11313,6 +11419,10 @@ class DataTable(ttk.Frame):
         button went down), so both the text selection of the cell editor and
         the automatic scrolling have to be driven from here.
         """
+        if self._resizing is not None:
+            # the edge of a heading is pulled: the net follows the column
+            # (after Tk itself has made it wider)
+            self.after_idle(self._draw_gridlines)
         if not self._selecting:
             return None
         self._drag_point = (event.x, event.y)
@@ -21735,7 +21845,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.0 (2026-10-05)**.  The number is written in one place
+This is **APlot 1.3.1 (2026-10-05)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -21864,6 +21974,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.1 | 2026-10-05 | The cells of the sheet are divided by a light grey net, one pixel wide, beside the row numbers too; it lies under the blue outline, and a click, a drag or the wheel on a line reaches the cell under it (`SHEET_GRID`, `SHEET_GRID_COLOR` at the top of `aplot.py`). |
 | 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
 | 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
 | 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
@@ -22132,6 +22243,15 @@ the only filled one** draws that column against the **row numbers**.
 
 The table is not one sheet but as many as are needed: the **tabs** along its
 bottom edge each hold a table of their own (section 1.1).
+
+A **light grey net** divides the cells, the way a sheet of squared paper
+does: a one-pixel line along every row (beside the row numbers as well)
+and every column.  It is only there to be seen - a click, a drag or the
+wheel on a line reaches the cell under it - and it lies under the blue
+outline of the selection.  Its grey is taken from the paper of the table
+(a slightly lighter line on a dark theme); `SHEET_GRID_COLOR` near the
+top of `aplot.py` sets a colour of its own (`"#d9d9d9"`, say), and
+`SHEET_GRID = False` leaves the sheet plain.
 
 ### Toolbar
 

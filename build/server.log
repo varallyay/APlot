@@ -90,3 +90,13 @@
 {"timestamp":"2026-10-05T05:13:01.122461Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
 {"timestamp":"2026-10-05T05:13:01.127459Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
 {"timestamp":"2026-10-05T05:13:01.127508Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:40:01.357824Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:40:01.358051Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:40:01.358107Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:40:29.697812Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":3,"name":"apply_changes"},"spans":[{"n_events":3,"name":"apply_changes"}]}
+{"timestamp":"2026-10-05T05:40:29.702563Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:40:29.702640Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:40:29.707457Z","level":"INFO","fields":{"message":"watcher changed","module":"aplot"},"target":"gfp::serve::tasks::file_watcher"}
+{"timestamp":"2026-10-05T05:40:37.612785Z","level":"INFO","fields":{"message":"apply_changes complete","n_changes":0},"target":"gfp::factory::indexing::incremental","span":{"n_events":1,"name":"apply_changes"},"spans":[{"n_events":1,"name":"apply_changes"}]}
+{"timestamp":"2026-10-05T05:40:37.617926Z","level":"WARN","fields":{"message":"unresolved invalidation module","module":"aplot"},"target":"gfp::factory::build"}
+{"timestamp":"2026-10-05T05:40:37.618012Z","level":"DEBUG","fields":{"message":"enqueue_all received requests","n":0},"target":"gfp::factory::build"}

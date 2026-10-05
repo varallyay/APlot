@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.0 (2026-10-05)**.  The number is written in one place
+This is **APlot 1.3.1 (2026-10-05)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -152,6 +152,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.1 | 2026-10-05 | The cells of the sheet are divided by a light grey net, one pixel wide, beside the row numbers too; it lies under the blue outline, and a click, a drag or the wheel on a line reaches the cell under it (`SHEET_GRID`, `SHEET_GRID_COLOR` at the top of `aplot.py`). |
 | 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
 | 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
 | 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
@@ -420,6 +421,15 @@ the only filled one** draws that column against the **row numbers**.
 
 The table is not one sheet but as many as are needed: the **tabs** along its
 bottom edge each hold a table of their own (section 1.1).
+
+A **light grey net** divides the cells, the way a sheet of squared paper
+does: a one-pixel line along every row (beside the row numbers as well)
+and every column.  It is only there to be seen - a click, a drag or the
+wheel on a line reaches the cell under it - and it lies under the blue
+outline of the selection.  Its grey is taken from the paper of the table
+(a slightly lighter line on a dark theme); `SHEET_GRID_COLOR` near the
+top of `aplot.py` sets a colour of its own (`"#d9d9d9"`, say), and
+`SHEET_GRID = False` leaves the sheet plain.
 
 ### Toolbar
 
