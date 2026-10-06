@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.1 (2026-10-05)**.  The number is written in one place
+This is **APlot 1.3.2 (2026-10-06)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -152,6 +152,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.2 | 2026-10-06 | Works with pandas 3, which a fresh `pip install pandas` brings (a number calculated by Column Math into an empty column was refused); opening an Excel file no longer reports an error after reading it; a missing package is named with the command that installs it; new section `Installing Python and the packages` (why `pip` is "command not found", python.org Python on a Mac, apt on Linux, a virtual environment anywhere). |
 | 1.3.1 | 2026-10-05 | The cells of the sheet are divided by a light grey net, one pixel wide, beside the row numbers too; it lies under the blue outline, and a click, a drag or the wheel on a line reaches the cell under it (`SHEET_GRID`, `SHEET_GRID_COLOR` at the top of `aplot.py`). |
 | 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
 | 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
@@ -164,18 +165,86 @@ that runs, and the update window says it too.
 
 ## What it needs
 
-Four packages have to be there; everything else is part of Python itself.
+Python 3 (3.10 or newer) and four packages; everything else is part of
+Python itself.
 
-| Package | Used for | Install |
+| Package | Used for | Where it comes from |
 | --- | --- | --- |
-| `tkinter` | the whole user interface: windows, menus, the table | comes with Python (on some Linux systems as the separate `python3-tk` package) |
-| `numpy` | every calculation: the curves, the histograms, the fitting | `pip install numpy` |
-| `pandas` | the sheets themselves and the reading of data files | `pip install pandas` |
-| `matplotlib` | the diagrams, and the pictures that are exported | `pip install matplotlib` |
+| `tkinter` | the whole user interface: windows, menus, the table | comes with Python (on Linux the separate `python3-tk` package) |
+| `numpy` | every calculation: the curves, the histograms, the fitting | `python3 -m pip install numpy` |
+| `pandas` | the sheets themselves and the reading of data files (2.x or 3.x) | `python3 -m pip install pandas` |
+| `matplotlib` | the diagrams, and the pictures that are exported | `python3 -m pip install matplotlib` |
 
-All four at once:
+All three at once, into the Python that runs APlot:
 
-    pip install numpy pandas matplotlib
+    python3 -m pip install numpy pandas matplotlib
+
+When one of them is missing, APlot says which, and the exact command for
+the Python it was started with, instead of stopping with a traceback.
+
+### Installing Python and the packages
+
+**Why `pip` alone is "command not found".**  A fresh Mac or Linux has no
+command called `pip`: there is `python3` (on a Mac only Apple's stand-in,
+see below) and, once a Python is installed, `pip3` at most.  The form that
+always reaches the right Python is **`python3 -m pip`** - pip run *by* the
+`python3` that also starts APlot.  Newer systems add a second hurdle: the
+Python of Homebrew and of Ubuntu/Debian refuse `pip install` outside a
+virtual environment and answer `error: externally-managed-environment`
+(PEP 668), so that pip cannot spoil the packages of the system.  The ways
+below avoid both.
+
+**macOS** - the Python of python.org:
+
+1. Download the macOS installer of the newest Python 3 from
+   <https://www.python.org/downloads/macos/> (the *universal2* `.pkg`)
+   and run it.  It brings `python3`, `pip3` and a Tk of its own, and it
+   lets `python3 -m pip install` work as it is.
+2. In `Applications > Python 3.x`, double-click **`Install Certificates.command`**
+   once (Python then trusts https sites - the update check of APlot needs
+   it, though it falls back on `curl`).
+3. Open a **new** Terminal window and install the packages (the second
+   line is optional, see below):
+
+        python3 -m pip install numpy pandas matplotlib
+        python3 -m pip install pillow openpyxl tkinterdnd2 pyobjc-framework-Cocoa
+
+4. Start APlot once with `python3 aplot.py`, or install it at once with
+   `python3 aplot.py --make-app` (see `The name under the icon on macOS`).
+
+Leave Apple's own `/usr/bin/python3` alone: on a fresh Mac it only offers
+to install the Command Line Tools, whose Python is old and comes with an
+old Tk that macOS itself calls deprecated.  `which python3` should answer
+`/usr/local/bin/python3` (or `/Library/Frameworks/...`) after step 1.
+
+**Ubuntu, Debian and the like** - the packages of the system, no pip:
+
+    sudo apt install python3-tk python3-numpy python3-pandas python3-matplotlib
+    sudo apt install python3-pil python3-pil.imagetk python3-openpyxl    # optional
+
+then `python3 aplot.py`, or `python3 aplot.py --install-desktop` to install
+it with its menu entry.
+
+**Any system - a Python of APlot's own (a virtual environment).**  For a
+Homebrew Python (`brew install python python-tk`), for `tkinterdnd2` on
+Linux (it has no system package), or to keep APlot's packages apart from
+everything else:
+
+    python3 -m venv ~/.aplot/python
+    ~/.aplot/python/bin/python -m pip install numpy pandas matplotlib pillow openpyxl tkinterdnd2
+    ~/.aplot/python/bin/python aplot.py --make-app            # macOS
+    ~/.aplot/python/bin/python aplot.py --install-desktop     # Linux
+
+On Ubuntu the first line needs `sudo apt install python3-venv python3-tk`
+before it, and `python3 -m venv --system-site-packages ~/.aplot/python`
+lets the environment use the apt packages above as well.  The installed
+APlot (APlot.app, or the menu entry) remembers the Python it was installed
+with and always starts with that one, so nothing has to be activated.
+
+**Checking it.**  This prints the Python, the Tk and the three packages -
+or the name of the one that is missing:
+
+    python3 -c "import sys, tkinter, numpy, pandas, matplotlib; print(sys.executable, tkinter.TkVersion, numpy.__version__, pandas.__version__, matplotlib.__version__)"
 
 ### Optional packages
 
@@ -187,11 +256,11 @@ quietly or simply leaves that one thing out.
 | --- | --- | --- |
 | **`tkinterdnd2`** | **dropping a picture** from the Finder onto a diagram (it brings the `tkdnd` extension of Tk, which Tk itself has no drop support without) | pictures still arrive by pasting (`Ctrl/Cmd+V`), through the picture button of the toolbar and through `Plot > Insert picture...` |
 | `pillow` (`PIL`) | the drawn **toolbar icons**, reading a **picture** that is pasted or dropped, and the clipboard of the system | the buttons carry their names in words and pictures cannot be inserted |
-| `openpyxl` | opening and saving **Excel** (`.xlsx`) files, one sheet per tab | CSV, TXT, DAT and the program's own `.aplt` files work as usual |
+| `openpyxl` | opening and saving **Excel** (`.xlsx`) files, one sheet per tab | CSV, TXT, DAT and the program's own `.aplt` files work as usual; opening an `.xlsx` says the command that installs it |
 | `pyobjc-framework-Cocoa` | the bold application menu on **macOS** is called `APlot` | that menu keeps the name of the Python interpreter (the Dock label is settled by `--make-app` either way) |
 
-    pip install tkinterdnd2 pillow openpyxl
-    pip install pyobjc-framework-Cocoa        # macOS only
+    python3 -m pip install tkinterdnd2 pillow openpyxl
+    python3 -m pip install pyobjc-framework-Cocoa        # macOS only
 
 An optional package is always imported inside a `try`, so a missing one is
 never an error.  An editor that checks the imports (VS Code with Pylance,
@@ -199,14 +268,13 @@ for instance) may still mark such a line as unresolved - that is the editor
 saying the package is not installed in the interpreter **it** has selected,
 not a fault in the program.
 
-**Install into the interpreter that really runs APlot.**  A bare `pip` often
-belongs to another Python than the `python3` that starts the program; this
-always lands in the right place:
-
-    python3 -m pip install tkinterdnd2
-
-and `python3 -c "import sys; print(sys.executable)"` says which interpreter
-that is.
+**Install into the interpreter that really runs APlot.**  A bare `pip` or
+`pip3` often belongs to another Python than the `python3` that starts the
+program; `python3 -m pip` always lands in the right place, and
+`python3 -c "import sys; print(sys.executable)"` says which interpreter
+that is.  `Help > About APlot` names the program file; an installed APlot
+runs with the Python it was installed with (`--make-app`,
+`--install-desktop`), so a package for it goes into that Python.
 
 ### The one file
 
@@ -2044,7 +2112,7 @@ files a sensible size and is still sharper than any screen.
 
 **Dropping needs one extra package.**  Tk itself cannot take a drop; the
 `tkdnd` extension does it, and it comes with `tkinterdnd2`
-(`pip install tkinterdnd2`).  Without it everything else works as usual and
+(`python3 -m pip install tkinterdnd2`).  Without it everything else works as usual and
 pictures arrive by pasting or through the button.
 
 ### Choosing several objects at once
@@ -3144,7 +3212,7 @@ that are **already open** as well, so the effect can be seen at once.
 
 * On macOS the first (bold) menu is named after the running program.  APlot
   renames it to "APlot" through the Cocoa bundle information, which needs
-  pyobjc: `pip install pyobjc-framework-Cocoa`.  Without it the menu keeps
+  pyobjc: `python3 -m pip install pyobjc-framework-Cocoa`.  Without it the menu keeps
   the name of the Python interpreter; everything else works the same way.
 * Every empty cell (or a cell that is not a number) breaks the curve at
   that point - an empty Y cell, an empty X cell and an empty row alike.
