@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.2 (2026-10-06)**.  The number is written in one place
+This is **APlot 1.3.4 (2026-10-07)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -152,6 +152,8 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
+| 1.3.3 | 2026-10-07 | APlot opened and closed again without anything done to it closes without asking about saving: the empty columns the blank sheet grows to fill a wider window are no edit any more, and a cell that was only clicked into (its editor opened and left with the same text) stays exactly as it was - before, it could come back as another type and count as a change. |
 | 1.3.2 | 2026-10-06 | Works with pandas 3, which a fresh `pip install pandas` brings (a number calculated by Column Math into an empty column was refused); opening an Excel file no longer reports an error after reading it; a missing package is named with the command that installs it; new section `Installing Python and the packages` (why `pip` is "command not found", python.org Python on a Mac, apt on Linux, a virtual environment anywhere). |
 | 1.3.1 | 2026-10-05 | The cells of the sheet are divided by a light grey net, one pixel wide, beside the row numbers too; it lies under the blue outline, and a click, a drag or the wheel on a line reaches the cell under it (`SHEET_GRID`, `SHEET_GRID_COLOR` at the top of `aplot.py`). |
 | 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
@@ -179,6 +181,9 @@ All three at once, into the Python that runs APlot:
 
     python3 -m pip install numpy pandas matplotlib
 
+On a Mac the recommended Python is **conda** (Anaconda), which brings all
+of them already - see `Installing Python and the packages` below.
+
 When one of them is missing, APlot says which, and the exact command for
 the Python it was started with, instead of stopping with a traceback.
 
@@ -194,7 +199,52 @@ virtual environment and answer `error: externally-managed-environment`
 (PEP 668), so that pip cannot spoil the packages of the system.  The ways
 below avoid both.
 
-**macOS** - the Python of python.org:
+**macOS - recommended: conda (Anaconda).**  The Python of conda is the
+one recommended for APlot on a Mac: the Anaconda Distribution brings
+Python together with numpy, pandas, matplotlib, pillow, openpyxl and a Tk
+of its own - everything APlot needs is there at once, and conda keeps it
+up to date and in step.
+
+1. Install the Anaconda Distribution from
+   <https://www.anaconda.com/download> (the graphical installer for macOS).
+   It goes into `/opt/anaconda3` and sets up the Terminal for conda.
+2. Make conda's Python the **default Python of the Terminal**: open a new
+   Terminal window and type
+
+        conda activate base
+        conda config --set auto_activate_base true
+
+   The first line switches the window to conda's Python at once, the
+   second makes every new Terminal window start with it.  The prompt then
+   begins with `(base)`, and `python3` is no longer the Mac's own
+   `/usr/bin/python3` but conda's **`/opt/anaconda3/bin/python3`**, which
+   is much better prepared for APlot:
+
+        which python3            # /opt/anaconda3/bin/python3
+
+   (Newer conda versions call the setting `auto_activate` -
+   `conda config --set auto_activate true` - and accept the old name with
+   a warning.  If `conda` itself is "command not found", run
+   `/opt/anaconda3/bin/conda init zsh` once and open a new Terminal window.)
+3. The packages APlot needs are already there; the optional ones that
+   Anaconda does not bring come with pip, into conda's Python:
+
+        python3 -m pip install tkinterdnd2 pyobjc-framework-Cocoa
+
+4. Start APlot with `python3 aplot.py`, and install it with
+   `python3 aplot.py --make-app` **from such a `(base)` window**:
+   APlot.app then always starts with conda's Python, even without the
+   Terminal (an APlot.app made earlier with another Python is switched
+   over by running `--make-app` once more).
+
+With the smaller **Miniconda**, or with **Miniforge** (conda-forge, free
+for everyone), the same commands work after
+`conda install numpy pandas matplotlib pillow openpyxl` (their Python lies
+in `~/miniconda3` or `~/miniforge3` instead of `/opt/anaconda3`).  Anaconda is free
+for individuals, universities and companies with fewer than 200
+employees; a larger company needs a licence for it - or takes Miniforge.
+
+**macOS - the Python of python.org** (the other way):
 
 1. Download the macOS installer of the newest Python 3 from
    <https://www.python.org/downloads/macos/> (the *universal2* `.pkg`)
@@ -212,10 +262,11 @@ below avoid both.
 4. Start APlot once with `python3 aplot.py`, or install it at once with
    `python3 aplot.py --make-app` (see `The name under the icon on macOS`).
 
-Leave Apple's own `/usr/bin/python3` alone: on a fresh Mac it only offers
-to install the Command Line Tools, whose Python is old and comes with an
-old Tk that macOS itself calls deprecated.  `which python3` should answer
-`/usr/local/bin/python3` (or `/Library/Frameworks/...`) after step 1.
+Leave Apple's own `/usr/bin/python3` alone, whichever way is taken: on a
+fresh Mac it only offers to install the Command Line Tools, whose Python
+is old and comes with an old Tk that macOS itself calls deprecated.
+`which python3` should answer `/opt/anaconda3/bin/python3` (conda), or
+`/usr/local/bin/python3` or `/Library/Frameworks/...` (python.org).
 
 **Ubuntu, Debian and the like** - the packages of the system, no pip:
 
@@ -2968,7 +3019,7 @@ and the name of the file is shown in the title bar of the table window.
 **Nothing is lost by accident.**  The program knows whether anything has
 been changed since the last save (moving or resizing a window does not
 count).  If it has, then closing the diagram or leaving the program asks
-first:
+first (and when nothing has been changed, it simply closes):
 
 > This graph has been edited and not saved.  Save it now?
 
@@ -2987,6 +3038,15 @@ so that it can ask; `Cancel` there simply leaves the program running.
 random data of the `Data` menu simply replace what is on the screen: the
 question about unsaved work belongs to **leaving** the program (and to
 closing the last diagram), where something really can be lost.
+
+**Only real changes count.**  APlot started and closed again without
+anything done to it closes **without a question**.  What the program does
+by itself is no edit: the blank sheet growing empty columns to fill a
+wider window, a click into a cell (it opens the cell's editor - leaving it
+with the same text leaves the cell exactly as it was), a selection, the
+settings, About or the documentation.  A value typed and deleted again
+leaves nothing to save either.  A value typed, a formula, a column renamed,
+a diagram opened or anything changed on it are asked about as before.
 
 **Closing a window is not an edit.**  A graph that is in step with its file
 stays in step when its diagram window is closed, so closing the diagram and

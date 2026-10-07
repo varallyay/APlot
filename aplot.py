@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.2 (2026-10-06) - see `APP_VERSION` below and "Version history" in the
+1.3.4 (2026-10-07) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -139,7 +139,8 @@ except ImportError as _error:
         f"({sys.executable}) comes without it.\n"
         "  Ubuntu, Debian:  sudo apt install python3-tk\n"
         "  Homebrew (Mac):  brew install python-tk\n"
-        "  The Python of python.org (Mac, Windows) has it built in.\n"
+        "  Mac: the Python of conda (Anaconda), recommended, or of\n"
+        "  python.org has it built in.\n"
         "See 'Installing Python and the packages' in README.md.")
     if __name__ != "__main__":
         raise ImportError(_NO_TK) from _error
@@ -250,8 +251,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.2"
-APP_VERSION_DATE = "2026-10-06"
+APP_VERSION = "1.3.4"
+APP_VERSION_DATE = "2026-10-07"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -9076,6 +9077,58 @@ class RegressionDialog(ToolDialog):
 # data table
 # --------------------------------------------------------------------------
 
+AUTO_COLUMN_NAME = re.compile(r"Y\d+")    # the names the program gives
+
+
+def _blank_cell(value):
+    """True for a cell with nothing in it."""
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def untouched_columns_trimmed(tab):
+    """One sheet of a document without the columns at its right end that
+    nobody has touched: empty, with the name the program gave them, no
+    formula, no width of their own and the first axis ticked, as every new
+    column has.  The blank starting sheet grows such columns by itself when
+    its window becomes wider, so they are no edit of the graph - a program
+    opened and closed again without anything done to it has nothing to
+    save.  The first column always stays.  A changed copy is returned."""
+    columns = [str(one) for one in tab.get("columns") or []]
+    rows = tab.get("rows") or []
+    formulas = tab.get("formulas") or {}
+    widths = tab.get("column_widths") or {}
+    axes = tab.get("axes") or {}
+    with_formula = set()
+    for key in formulas:
+        try:
+            with_formula.add(int(str(key).split(",")[1]))
+        except (IndexError, ValueError):
+            pass
+    first_axis = AXIS_TAGS["y"][0][0]
+    keep = len(columns)
+    while keep > 1:
+        index, name = keep - 1, columns[keep - 1]
+        if (not AUTO_COLUMN_NAME.fullmatch(name) or index in with_formula
+                or name in widths or axes.get(name) != first_axis
+                or not all(_blank_cell(row[index]) for row in rows
+                           if index < len(row))):
+            break
+        keep -= 1
+    if keep == len(columns):
+        return tab
+    trimmed = dict(tab)
+    gone = set(columns[keep:])
+    trimmed["columns"] = columns[:keep]
+    trimmed["rows"] = [list(row[:keep]) for row in rows]
+    trimmed["axes"] = {name: code for name, code in axes.items()
+                       if name not in gone}
+    return trimmed
+
+
 class DataTable(ttk.Frame):
     """Treeview based table with in-place cell editing."""
 
@@ -11943,6 +11996,8 @@ class DataTable(ttk.Frame):
         cell_formula = self.cell_formulas.get((int(row_id), col_index))
         init_val = cell_formula if cell_formula is not None else self.tree.set(row_id, column)
         var = tk.StringVar(value=init_val)
+        # what the cell held: an editor left with the same text changes nothing
+        self._editor_start = str(init_val)
         # exportselection=False keeps the highlighted text visible even when
         # another widget (e.g. the Treeview) takes over the X selection.
         entry = tk.Entry(self.tree, textvariable=var, exportselection=False,
@@ -12112,6 +12167,14 @@ class DataTable(ttk.Frame):
         self._editor = None
         text = var.get()
         entry.destroy()
+        if text == getattr(self, "_editor_start", None):
+            # the cell was only visited (every click opens its editor): it
+            # is left exactly as it was - no write, no step for Undo, and
+            # no edit of the graph (a number would come back as text, an
+            # empty cell of a file as "" instead of nothing)
+            self._editor_start = None
+            return
+        self._editor_start = None
 
         row = int(row_id)
         if row >= len(self.df) or col_index >= len(self.df.columns):
@@ -21926,7 +21989,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.2 (2026-10-06)**.  The number is written in one place
+This is **APlot 1.3.4 (2026-10-07)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -22055,6 +22118,8 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
+| 1.3.3 | 2026-10-07 | APlot opened and closed again without anything done to it closes without asking about saving: the empty columns the blank sheet grows to fill a wider window are no edit any more, and a cell that was only clicked into (its editor opened and left with the same text) stays exactly as it was - before, it could come back as another type and count as a change. |
 | 1.3.2 | 2026-10-06 | Works with pandas 3, which a fresh `pip install pandas` brings (a number calculated by Column Math into an empty column was refused); opening an Excel file no longer reports an error after reading it; a missing package is named with the command that installs it; new section `Installing Python and the packages` (why `pip` is "command not found", python.org Python on a Mac, apt on Linux, a virtual environment anywhere). |
 | 1.3.1 | 2026-10-05 | The cells of the sheet are divided by a light grey net, one pixel wide, beside the row numbers too; it lies under the blue outline, and a click, a drag or the wheel on a line reaches the cell under it (`SHEET_GRID`, `SHEET_GRID_COLOR` at the top of `aplot.py`). |
 | 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
@@ -22082,6 +22147,9 @@ All three at once, into the Python that runs APlot:
 
     python3 -m pip install numpy pandas matplotlib
 
+On a Mac the recommended Python is **conda** (Anaconda), which brings all
+of them already - see `Installing Python and the packages` below.
+
 When one of them is missing, APlot says which, and the exact command for
 the Python it was started with, instead of stopping with a traceback.
 
@@ -22097,7 +22165,52 @@ virtual environment and answer `error: externally-managed-environment`
 (PEP 668), so that pip cannot spoil the packages of the system.  The ways
 below avoid both.
 
-**macOS** - the Python of python.org:
+**macOS - recommended: conda (Anaconda).**  The Python of conda is the
+one recommended for APlot on a Mac: the Anaconda Distribution brings
+Python together with numpy, pandas, matplotlib, pillow, openpyxl and a Tk
+of its own - everything APlot needs is there at once, and conda keeps it
+up to date and in step.
+
+1. Install the Anaconda Distribution from
+   <https://www.anaconda.com/download> (the graphical installer for macOS).
+   It goes into `/opt/anaconda3` and sets up the Terminal for conda.
+2. Make conda's Python the **default Python of the Terminal**: open a new
+   Terminal window and type
+
+        conda activate base
+        conda config --set auto_activate_base true
+
+   The first line switches the window to conda's Python at once, the
+   second makes every new Terminal window start with it.  The prompt then
+   begins with `(base)`, and `python3` is no longer the Mac's own
+   `/usr/bin/python3` but conda's **`/opt/anaconda3/bin/python3`**, which
+   is much better prepared for APlot:
+
+        which python3            # /opt/anaconda3/bin/python3
+
+   (Newer conda versions call the setting `auto_activate` -
+   `conda config --set auto_activate true` - and accept the old name with
+   a warning.  If `conda` itself is "command not found", run
+   `/opt/anaconda3/bin/conda init zsh` once and open a new Terminal window.)
+3. The packages APlot needs are already there; the optional ones that
+   Anaconda does not bring come with pip, into conda's Python:
+
+        python3 -m pip install tkinterdnd2 pyobjc-framework-Cocoa
+
+4. Start APlot with `python3 aplot.py`, and install it with
+   `python3 aplot.py --make-app` **from such a `(base)` window**:
+   APlot.app then always starts with conda's Python, even without the
+   Terminal (an APlot.app made earlier with another Python is switched
+   over by running `--make-app` once more).
+
+With the smaller **Miniconda**, or with **Miniforge** (conda-forge, free
+for everyone), the same commands work after
+`conda install numpy pandas matplotlib pillow openpyxl` (their Python lies
+in `~/miniconda3` or `~/miniforge3` instead of `/opt/anaconda3`).  Anaconda is free
+for individuals, universities and companies with fewer than 200
+employees; a larger company needs a licence for it - or takes Miniforge.
+
+**macOS - the Python of python.org** (the other way):
 
 1. Download the macOS installer of the newest Python 3 from
    <https://www.python.org/downloads/macos/> (the *universal2* `.pkg`)
@@ -22115,10 +22228,11 @@ below avoid both.
 4. Start APlot once with `python3 aplot.py`, or install it at once with
    `python3 aplot.py --make-app` (see `The name under the icon on macOS`).
 
-Leave Apple's own `/usr/bin/python3` alone: on a fresh Mac it only offers
-to install the Command Line Tools, whose Python is old and comes with an
-old Tk that macOS itself calls deprecated.  `which python3` should answer
-`/usr/local/bin/python3` (or `/Library/Frameworks/...`) after step 1.
+Leave Apple's own `/usr/bin/python3` alone, whichever way is taken: on a
+fresh Mac it only offers to install the Command Line Tools, whose Python
+is old and comes with an old Tk that macOS itself calls deprecated.
+`which python3` should answer `/opt/anaconda3/bin/python3` (conda), or
+`/usr/local/bin/python3` or `/Library/Frameworks/...` (python.org).
 
 **Ubuntu, Debian and the like** - the packages of the system, no pip:
 
@@ -24871,7 +24985,7 @@ and the name of the file is shown in the title bar of the table window.
 **Nothing is lost by accident.**  The program knows whether anything has
 been changed since the last save (moving or resizing a window does not
 count).  If it has, then closing the diagram or leaving the program asks
-first:
+first (and when nothing has been changed, it simply closes):
 
 > This graph has been edited and not saved.  Save it now?
 
@@ -24890,6 +25004,15 @@ so that it can ask; `Cancel` there simply leaves the program running.
 random data of the `Data` menu simply replace what is on the screen: the
 question about unsaved work belongs to **leaving** the program (and to
 closing the last diagram), where something really can be lost.
+
+**Only real changes count.**  APlot started and closed again without
+anything done to it closes **without a question**.  What the program does
+by itself is no edit: the blank sheet growing empty columns to fill a
+wider window, a click into a cell (it opens the cell's editor - leaving it
+with the same text leaves the cell exactly as it was), a selection, the
+settings, About or the documentation.  A value typed and deleted again
+leaves nothing to save either.  A value typed, a formula, a column renamed,
+a diagram opened or anything changed on it are asked about as before.
 
 **Closing a window is not an edit.**  A graph that is in step with its file
 stays in step when its diagram window is closed, so closing the diagram and
@@ -26774,11 +26897,21 @@ class App:
 
     # -- APlot documents (.aplt) -------------------------------------------
     def project_signature(self):
-        """A fingerprint of the whole graph, the window places left out."""
+        """A fingerprint of the whole graph, the window places left out.
+
+        Two graphs with the same fingerprint hold the same work: what the
+        program does by itself is left out of it - the place, size and
+        scrolling of the windows, and the empty columns a blank sheet grows
+        to fill a wider window (`untouched_columns_trimmed`).
+        """
         try:
             document = self.project_document()
         except Exception:
             return None
+        document["tabs"] = [untouched_columns_trimmed(tab)
+                            for tab in document.get("tabs") or []]
+        if document["tabs"]:
+            document["data"] = document["tabs"][0]
         for state in document.get("plots") or []:
             # moving, resizing or scrolling a window is not an edit of
             # the graph
