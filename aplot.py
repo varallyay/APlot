@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.4 (2026-10-07) - see `APP_VERSION` below and "Version history" in the
+1.3.5 (2026-10-15) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -251,8 +251,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.4"
-APP_VERSION_DATE = "2026-10-07"
+APP_VERSION = "1.3.5"
+APP_VERSION_DATE = "2026-10-15"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -334,6 +334,11 @@ MARKERS = [
     ("Thin diamond", "d"), ("Plus", "+"), ("X", "x"), ("Star", "*"),
     ("Pentagon", "p"), ("Hexagon", "h"),
 ]
+
+# the markers the curves of one diagram are given in turn, one kind per
+# curve - circle, square, triangle... - the filled shapes first, then the
+# open ones; once every kind is taken they are used again from the start
+MARKER_SEQUENCE = ("o", "s", "^", "D", "v", "p", "h", "*", "d", "x", "+")
 
 LINE_STYLES = [
     ("Solid", "-"), ("Dashed", "--"), ("Dash-dot", "-."), ("Dotted", ":"),
@@ -1181,7 +1186,7 @@ DEFAULTS = {
         "title_template": "Data visualization as a function of {x}",
         "y_label": "Y values",
         "line_style": "Solid", "line_width": 1.5,
-        "marker": "Circle", "marker_size": 8.0,
+        "marker": "Circle", "marker_cycle": True, "marker_size": 8.0,
         "marker_edge_width": 1.0, "hollow_markers": False,
         "legend_visible": True, "legend_location": "best",
         "legend_frame": False, "legend_edge_color": "#000000",
@@ -1261,7 +1266,8 @@ SETTINGS_SPEC = [
         ("y_label", "Default Y axis label", "text"),
         [("line_style", "Line style", "choice", names(LINE_STYLES)),
          ("line_width", "Line width", "float")],
-        ("marker", "Marker", "choice", names(MARKERS)),
+        [("marker", "Marker (of the first curve)", "choice", names(MARKERS)),
+         ("marker_cycle", "A different marker for every curve", "bool")],
         [("marker_size", "Marker size", "float"),
          ("marker_edge_width", "Marker edge width", "float")],
         ("hollow_markers", "Hollow markers (no fill)", "bool"),
@@ -5593,7 +5599,16 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         return name_of(table, code, fallback)
 
     def default_marker(self):
-        """The marker a curve gets when the marker is switched on."""
+        """The marker a curve gets when the marker is switched on: a kind
+        no other curve of its diagram has (or the one of the settings)."""
+        chooser = getattr(self.master, "marker_for_new_curve", None)
+        if chooser is not None:
+            try:
+                wanted = name_of(MARKERS, chooser(exclude=self.line), "")
+                if wanted in drawn_names(MARKERS):
+                    return wanted
+            except Exception:
+                pass
         settings = getattr(self.master, "settings", None)
         try:
             wanted = str(settings.get("plot", "marker"))
@@ -14370,6 +14385,46 @@ class PlotWindow(tk.Toplevel):
             return PALETTE_FALLBACK
         return colors[int(index) % len(colors)]
 
+    def marker_for_new_curve(self, exclude=None):
+        """The marker of a new curve that is drawn with markers.
+
+        The first curve gets the marker of the settings (a circle), and
+        every one after it a kind that no other curve of the diagram has:
+        circle, square, triangle, diamond... (MARKER_SEQUENCE).  When every
+        kind is taken they are used again from the start.  The setting `A
+        different marker for every curve` switched off gives every curve
+        the marker of the settings, as before.  `exclude` is a curve whose
+        own marker does not count (the one that is getting a new one).
+        """
+        try:
+            plot_cfg = self.settings.section("plot")
+        except (AttributeError, KeyError):
+            plot_cfg = {}
+        first = code_of(MARKERS, plot_cfg.get("marker", "Circle"), "o")
+        if str(first).lower() == "none":
+            first = "o"
+        if not plot_cfg.get("marker_cycle", True):
+            return first
+        sequence = list(MARKER_SEQUENCE)
+        if first in sequence:
+            start = sequence.index(first)
+            sequence = sequence[start:] + sequence[:start]
+        else:
+            sequence.insert(0, first)
+        used = []
+        for line in self.lines:
+            if line is exclude:
+                continue
+            code = str(line.get_marker())
+            if code.strip() and code.lower() != "none":
+                used.append(code)
+        for code in sequence:
+            if code not in used:
+                return code
+        # every kind is taken: the one fewest curves have, in order
+        return min(sequence, key=lambda code: (used.count(code),
+                                               sequence.index(code)))
+
     def _create_line(self, x, y, y_col, x_col, side="left", style=None):
         """New curve drawn with the defaults of the configuration file.
 
@@ -14394,24 +14449,18 @@ class PlotWindow(tk.Toplevel):
             m_style = "None"
         elif series_st == "scatter":
             l_style = "none"
-            m_style = code_of(MARKERS, plot_cfg["marker"], "o")
-            if m_style.lower() == "none":
-                m_style = "o"
+            m_style = self.marker_for_new_curve()
         elif series_st in ("bar", "histogram", "stairs", "hist2d", "pie"):
             l_style = "none"        # the artist beside the curve is the plot
             m_style = "None"
         elif series_st in ERROR_STYLES:
             l_style = "none"
-            m_style = code_of(MARKERS, plot_cfg["marker"], "o")
-            if m_style.lower() == "none":
-                m_style = "o"
+            m_style = self.marker_for_new_curve()
         else:  # line_symbol
             l_style = code_of(LINE_STYLES, plot_cfg["line_style"], "-")
             if l_style.lower() == "none":
                 l_style = "-"
-            m_style = code_of(MARKERS, plot_cfg["marker"], "o")
-            if m_style.lower() == "none":
-                m_style = "o"
+            m_style = self.marker_for_new_curve()
 
         line, = target.plot(
             x, y, color=color,
@@ -21989,7 +22038,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.4 (2026-10-07)**.  The number is written in one place
+This is **APlot 1.3.5 (2026-10-15)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -22118,6 +22167,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
 | 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
 | 1.3.3 | 2026-10-07 | APlot opened and closed again without anything done to it closes without asking about saving: the empty columns the blank sheet grows to fill a wider window are no edit any more, and a cell that was only clicked into (its editor opened and left with the same text) stays exactly as it was - before, it could come back as another type and count as a change. |
 | 1.3.2 | 2026-10-06 | Works with pandas 3, which a fresh `pip install pandas` brings (a number calculated by Column Math into an empty column was refused); opening an Excel file no longer reports an error after reading it; a missing package is named with the command that installs it; new section `Installing Python and the packages` (why `pip` is "command not found", python.org Python on a Mac, apt on Linux, a virtual environment anywhere). |
@@ -22822,6 +22872,17 @@ an immediate action with a style menu:
 
 * **Clicking the main button** opens a new diagram drawn with whichever style is
   currently active (indicated by its vector icon on the button face).
+* **Every curve its own marker.**  When a diagram draws several curves
+  with markers (Line + Symbol, Scatter, the error bars), each of them gets
+  a **different kind**, in this order: circle, square, triangle, diamond,
+  triangle down, pentagon, hexagon, star, thin diamond, x, plus.  With more
+  curves than kinds they are used again from the start (the 12th curve has
+  a circle again).  The first curve gets the marker of the settings
+  (`Settings > Plot > Marker`), and the order goes on from there; a curve
+  added later, or switched to markers in its own window, takes a kind that
+  no other curve of the diagram has yet.  A marker chosen by hand, and every
+  saved graph, keep theirs.  `A different marker for every curve` in the
+  same settings, switched off, gives all of them the same marker.
 * **Clicking the dropdown arrow** opens the menu of all the plotting styles,
   each line with the little picture of its diagram - the same picture the
   button shows once that style is chosen:
@@ -25180,7 +25241,7 @@ less room than a title.
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows, whether the property windows stay above the diagram, and the size of the text in the windows (85 % on a Mac, 100 % elsewhere). |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
-| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, default marker, size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
+| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, the marker of the first curve and whether every curve gets a different one, marker size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
 | Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the page). |
