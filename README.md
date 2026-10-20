@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.5 (2026-10-15)**.  The number is written in one place
+This is **APlot 1.3.6 (2026-10-16)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -47,7 +47,8 @@ keeping the history of the code - commit and tag it:
 
 `git log` then lists every change, `git diff v1.0.0 v1.0.1` shows what a
 release changed, and `git checkout v1.0.0` brings back an older version
-exactly as it was.
+exactly as it was.  Pushing the tag (`git push origin v1.0.1`) also builds
+every installable package on GitHub (see `Installable packages`).
 
 **Publishing a release** for everybody's `Check for updates` is pushing
 the new `aplot.py` and `README.md` to the `main` branch of
@@ -152,6 +153,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
 | 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
 | 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
 | 1.3.3 | 2026-10-07 | APlot opened and closed again without anything done to it closes without asking about saving: the empty columns the blank sheet grows to fill a wider window are no edit any more, and a cell that was only clicked into (its editor opened and left with the same text) stays exactly as it was - before, it could come back as another type and count as a change. |
@@ -164,6 +166,95 @@ that runs, and the update window says it too.
 | 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
 | 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
 | 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
+
+
+## Installable packages
+
+APlot can be installed from a package as well, like any other program -
+from the **Releases** page of <https://github.com/varallyay/APlot>.  Two
+kinds are made:
+
+| Package | For | Python |
+| --- | --- | --- |
+| `aplot_<version>_all.deb` | Debian, Ubuntu, Mint... | the distribution's: `python3-tk`, `python3-numpy`, `python3-pandas`, `python3-matplotlib` come with it |
+| `aplot-<version>-1.noarch.rpm` | Fedora, openSUSE, RHEL... | the distribution's, the same way |
+| `APlot-<version>-macOS-arm64.dmg`, `-x86_64.dmg` | macOS (Apple Silicon, Intel) | **its own** - nothing else to install |
+| `APlot-<version>-Windows.msi` | Windows | **its own** |
+| `APlot-<version>-Linux.flatpak` | any Linux with flatpak | **its own** (on the freedesktop runtime of Flathub) |
+| `APlot-<version>-macOS-light.dmg` | macOS | the Mac's: conda (recommended), python.org or Homebrew |
+| `APlot-<version>-Windows-light.msi` | Windows | the computer's: conda (recommended) or python.org |
+
+Installing them:
+
+* **.deb**: `sudo apt install ./aplot_1.3.6_all.deb` (a double click opens
+  it in the software installer too).  APlot is then in the applications
+  menu, `aplot` starts it in a terminal, and the graph files have their icon
+  and picture; it lives in `/usr/share/aplot`.
+* **.rpm**: `sudo dnf install ./aplot-1.3.6-1.noarch.rpm` (openSUSE:
+  `sudo zypper install ...`).
+* **.flatpak**: `flatpak install --user APlot-1.3.6-Linux.flatpak`; flatpak
+  fetches the runtime from Flathub (add it once with `flatpak remote-add
+  --if-not-exists --user flathub
+  https://dl.flathub.org/repo/flathub.flatpakrepo`).  It may read and write
+  the home folder, draws with X11 (XWayland on a Wayland desktop) and
+  reaches the network for the updates.
+* **.dmg**: open it and drag APlot onto the Applications folder.  APlot is
+  not signed by an Apple developer account, so macOS stops the first start:
+  press Done, then System Settings > Privacy & Security > **Open Anyway**
+  (once) - or in Terminal `xattr -dr com.apple.quarantine
+  /Applications/APlot.app`.  The light one finds conda in `/opt/anaconda3`,
+  `~/anaconda3`, `~/miniconda3` or `~/miniforge3`, then the Python of
+  python.org and of Homebrew; with none of them it offers the download page
+  of Anaconda.  "Read me first.txt" in the disk image says all this, and
+  the Quick Look extensions are in it as an optional `.zip`.
+* **.msi**: a double click installs APlot **for the user who runs it** - no
+  administrator is needed - into `%LOCALAPPDATA%\Programs\APlot`, with
+  APlot in the Start menu and the `.aplt` files opening in it.  Windows
+  SmartScreen may warn about an unknown publisher (the package is not
+  signed): `More info > Run anyway`.  The light one's `APlot.exe` looks for
+  conda (Anaconda, Miniconda, Miniforge), then for every Python registered
+  by its installer (python.org, the Microsoft Store), and offers the
+  download page of Anaconda when there is none; `APLOT_PYTHON` may name a
+  Python of one's own.  It is uninstalled in Settings > Apps.
+
+**Updates of a packaged APlot** come from GitHub as before, and never
+write over the files of a package:
+
+* a **self-contained** APlot (its own Python) puts the new `aplot.py` into
+  a folder of the user - `~/Library/Application Support/APlot`,
+  `%LOCALAPPDATA%\APlot`, or the flatpak's own data folder - and starts the
+  newer of that and the one it came with; a newer package installed later
+  is never held back by an older update;
+* the **light** `.dmg` and `.msi` replace the `aplot.py` inside APlot.app or
+  in the install folder, as the APlot.app of `--make-app` does;
+* a **.deb or .rpm** leaves `/usr/share/aplot` to the package manager and
+  installs the new version for the user (`~/.local/share/aplot`, with its
+  menu entry); the menu entry and the `aplot` command of the package then
+  start whichever of the two is newer.
+
+`Help > About APlot` says which package an APlot came from.
+
+**Building the packages.**  Everything is in the `packaging` folder:
+
+* `python3 packaging/build_packages.py` makes the `.deb`, the `.rpm`, the
+  light `.dmg` and the light `.msi` on any Linux (Ubuntu: `sudo apt install
+  rpm xorriso wixl gcc-mingw-w64-x86-64`); `packaging/windows/launcher.c`
+  is the `APlot.exe` of the light `.msi`;
+* `python packaging/build_frozen.py` makes the self-contained APlot with
+  PyInstaller on the system it is for (`python -m pip install pyinstaller
+  numpy pandas matplotlib pillow openpyxl tkinterdnd2`): on a Mac the
+  `.dmg` itself, on Windows and Linux the folder that `build_packages.py
+  msi --windows ...` and `build_packages.py flatpak --linux ...` turn into
+  the `.msi` and the `.flatpak`; `packaging/frozen/aplot_frozen.py` is the
+  small program inside that starts `aplot.py`;
+* **GitHub builds all of them by itself**: `.github/workflows/packages.yml`
+  runs on GitHub's own Mac, Windows and Linux machines whenever a version
+  tag is pushed, and puts every package on the Releases page:
+
+        git tag -a v1.3.6 -m "APlot 1.3.6"
+        git push origin v1.3.6
+
+  (`Actions > Packages > Run workflow` builds them without a release.)
 
 
 ## What it needs

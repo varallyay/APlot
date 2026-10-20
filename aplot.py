@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.5 (2026-10-15) - see `APP_VERSION` below and "Version history" in the
+1.3.6 (2026-10-16) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -251,8 +251,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.5"
-APP_VERSION_DATE = "2026-10-15"
+APP_VERSION = "1.3.6"
+APP_VERSION_DATE = "2026-10-16"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -1615,12 +1615,45 @@ def write_icns(folder, name=APP_NAME, painter=None):
     except (OSError, subprocess.SubprocessError):
         pass
     shutil.rmtree(iconset, ignore_errors=True)
+    # no iconutil (another system, building a package for the Mac): the
+    # .icns is written directly - it is only a list of PNG pictures
+    try:
+        target.write_bytes(icns_bytes(painter))
+        return target
+    except (OSError, ValueError, TypeError):
+        pass
     fallback = folder / f"{name}.png"
     try:
         fallback.write_bytes(painter(APP_ICON_SIZE))
     except OSError:
         return None
     return fallback
+
+
+# the kinds of picture in an .icns file: (type, size in pixels)
+ICNS_TYPES = (("icp4", 16), ("icp5", 32), ("icp6", 64), ("ic07", 128),
+              ("ic08", 256), ("ic09", 512), ("ic10", 1024), ("ic11", 32),
+              ("ic12", 64), ("ic13", 256), ("ic14", 512))
+
+
+def icns_bytes(painter=None):
+    """An .icns file as bytes, written without Apple's iconutil.
+
+    It is a header and one PNG picture per size (the retina sizes are the
+    ones twice as large); macOS reads it like any other icon file.
+    """
+    import struct
+    painter = painter or app_icon_png
+    pictures = {}
+    body = b""
+    for kind, size in ICNS_TYPES:
+        if size not in pictures:
+            pictures[size] = painter(size)
+        data = pictures[size]
+        if not data:
+            raise ValueError("the icon could not be drawn")
+        body += kind.encode("ascii") + struct.pack(">I", len(data) + 8) + data
+    return b"icns" + struct.pack(">I", len(body) + 8) + body
 
 
 APP_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1691,13 +1724,62 @@ def app_plist(name=APP_NAME, icon=None, document_icon=None):
 INSTALLED_PROGRAM = "aplot.py"   # the name of the installed copy
 
 MACOS_LAUNCHER = """#!/bin/sh
-# Written by aplot.py (--make-app): starts the copy of APlot in this bundle.
+# Written by aplot.py: starts the copy of APlot in this bundle with the
+# first Python that has what APlot needs - a Python inside the bundle, the
+# one APlot.app was made with, conda (recommended), python.org, Homebrew.
 export {mark}=1
 contents="$(cd "$(dirname "$0")/.." && pwd)"
-python={python}
-[ -x "$python" ] || python="$(command -v python3)"
-exec "$python" "$contents/Resources/{program}" "$@"
+program="$contents/Resources/{program}"
+needs='import importlib.util as u, sys; sys.exit(0 if all(u.find_spec(m) for m in ("tkinter", "numpy", "pandas", "matplotlib")) else 1)'
+first=""
+for python in "$contents/Resources/python/bin/python3" {python} \\
+        /opt/anaconda3/bin/python3 "$HOME/anaconda3/bin/python3" \\
+        "$HOME/opt/anaconda3/bin/python3" /opt/miniconda3/bin/python3 \\
+        "$HOME/miniconda3/bin/python3" "$HOME/miniforge3/bin/python3" \\
+        /opt/homebrew/Caskroom/miniforge/base/bin/python3 \\
+        /Library/Frameworks/Python.framework/Versions/Current/bin/python3 \\
+        /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    [ -x "$python" ] || continue
+    [ -n "$first" ] || first="$python"
+    if "$python" -c "$needs" 2>/dev/null; then
+        exec "$python" "$program" "$@"
+    fi
+done
+if [ -n "$first" ]; then
+    exec "$first" "$program" "$@"   # APlot itself says what is missing
+fi
+answer=$(osascript -e 'button returned of (display dialog "APlot needs Python 3 with numpy, pandas and matplotlib, and this Mac has none.\\n\\nThe recommended Python is Anaconda: install it from anaconda.com, then open APlot again." buttons {{"Later", "Open anaconda.com"}} default button 2 with title "APlot" with icon caution)' 2>/dev/null)
+[ "$answer" = "Open anaconda.com" ] && open "https://www.anaconda.com/download"
+exit 1
 """
+
+
+PACKAGE_MARK = "PACKAGED"         # beside an aplot.py a package installed
+# a self-contained APlot (a Python inside it, built with PyInstaller) is
+# started by a small bootstrap, packaging/frozen/aplot_frozen.py, which says
+# what kind of package it is and where an update of the program goes
+FROZEN_MARK = "APLOT_FROZEN"
+UPDATE_TARGET_MARK = "APLOT_UPDATE_TARGET"
+PACKAGE_PROGRAM = Path("/usr/share/aplot") / INSTALLED_PROGRAM   # deb, rpm
+
+
+def package_kind(program=None):
+    """How this APlot was installed when a package put it there: "deb",
+    "rpm", "flatpak", "dmg", "msi" - or "" for a copy of one's own.
+
+    A package leaves the file PACKAGED beside the program; a flatpak is
+    also known by the sandbox it runs in.
+    """
+    frozen = os.environ.get(FROZEN_MARK, "").strip().lower()
+    if frozen:
+        return frozen                  # a self-contained build: "dmg", "msi"...
+    if os.environ.get("FLATPAK_ID") or os.path.exists("/.flatpak-info"):
+        return "flatpak"
+    try:
+        mark = Path(program or __file__).resolve().parent / PACKAGE_MARK
+        return mark.read_text(encoding="utf-8").split()[0].strip().lower()
+    except (OSError, IndexError, ValueError):
+        return ""
 
 
 def copy_program(program, target):
@@ -1743,7 +1825,8 @@ def app_bundle_of(program=None):
     return None
 
 
-def make_macos_app(folder=None, name=APP_NAME, program=None, platform=None):
+def make_macos_app(folder=None, name=APP_NAME, program=None, platform=None,
+                   python=None, package=None):
     """Install `APlot.app`, with a copy of this program; its path, or None.
 
     A program started as `python3 aplot.py` belongs to the interpreter as
@@ -1756,7 +1839,10 @@ def make_macos_app(folder=None, name=APP_NAME, program=None, platform=None):
     aplot.py it was made from can be edited, moved or deleted afterwards
     without changing it, and an update replaces the copy in the bundle.
     `program` is the file copied (this one by default); a bundle made from
-    its own copy keeps it and only renews the rest.
+    its own copy keeps it and only renews the rest.  `python` is the
+    interpreter the launcher tries first (the one running now; "" for none,
+    as in the .dmg, whose launcher looks for conda, python.org...), and
+    `package` marks the copy as part of a package ("dmg").
     """
     if (platform or sys.platform) != "darwin":
         return None
@@ -1768,6 +1854,8 @@ def make_macos_app(folder=None, name=APP_NAME, program=None, platform=None):
         macos.mkdir(parents=True, exist_ok=True)
         resources.mkdir(parents=True, exist_ok=True)
         copy_program(program, resources / INSTALLED_PROGRAM)
+        if package:
+            (resources / PACKAGE_MARK).write_text(f"{package}\n", encoding="utf-8")
         icon = write_icns(resources, name)
         # the graph files get an icon of their own: a sheet with the curve
         document_icon = write_icns(resources, DOCUMENT_ICON_NAME,
@@ -1780,7 +1868,8 @@ def make_macos_app(folder=None, name=APP_NAME, program=None, platform=None):
         launcher = macos / name
         launcher.write_text(MACOS_LAUNCHER.format(
             mark=BUNDLE_MARK,           # the program knows it is in a bundle
-            python=shlex.quote(sys.executable or "python3"),
+            python=shlex.quote(sys.executable or "python3"
+                               if python is None else str(python)),
             program=INSTALLED_PROGRAM), encoding="utf-8")
         launcher.chmod(0o755)
         # macOS keeps what it knows about a bundle: it is told to look again
@@ -2219,7 +2308,8 @@ def _run_quietly(command):
 
 
 def install_linux_desktop(system=False, prefix=None, program=None,
-                          python=None, refresh=True):
+                          python=None, refresh=True, destdir=None,
+                          package=None):
     """Install APlot: a copy of the program, the kind of file, its icon,
     the thumbnailer and APlot's entry in the menu.
 
@@ -2229,6 +2319,10 @@ def install_linux_desktop(system=False, prefix=None, program=None,
     program of its own, which the aplot.py it came from can be edited,
     moved or deleted without changing, and which an update replaces.
     `python` is the interpreter that runs it (the one running now).
+    `destdir` writes every file below that folder instead, while the files
+    still name the places they will have (how a .deb or an .rpm is built:
+    prefix /usr, destdir the package tree), and `package` marks the copy as
+    installed by that package ("deb", "rpm").
     Returns the list of the files written.
     """
     paths = linux_desktop_paths(system, prefix)
@@ -2237,8 +2331,14 @@ def install_linux_desktop(system=False, prefix=None, program=None,
     python = python or sys.executable or "python3"
     written = []
 
+    def place(path):
+        path = Path(path)
+        if destdir is None:
+            return path
+        return Path(destdir) / path.relative_to(path.anchor)
+
     def write(key, content, mode=0o644, owner=None):
-        target = paths[key]
+        target = place(paths[key])
         made = [folder for folder in reversed(target.parents)
                 if not folder.exists()]
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -2255,8 +2355,13 @@ def install_linux_desktop(system=False, prefix=None, program=None,
                     pass
         written.append(target)
 
-    copy_program(source, program)        # nothing to do when it runs from there
-    written.append(program)
+    copy_program(source, place(program))  # nothing to do when it runs from there
+    written.append(place(program))
+    if package:
+        mark = place(program).parent / PACKAGE_MARK
+        mark.write_text(f"{package}\n", encoding="utf-8")
+        os.chmod(mark, 0o644)
+        written.append(mark)
     write("launcher", LINUX_LAUNCHER.format(
         python=shlex.quote(python), program=shlex.quote(str(program))),
         mode=0o755)
@@ -2374,18 +2479,71 @@ def is_installed_copy(program=None, platform=None):
         program = Path(program or __file__).resolve()
     except (OSError, ValueError):
         return False
+    if package_kind(program):
+        return True                    # put there by a package
     if platform == "darwin":
         return app_bundle_of(program) is not None
     if platform.startswith("linux"):
         for system in (False, True):
             if program == linux_desktop_paths(system)["program"]:
                 return True
+        return program == PACKAGE_PROGRAM
     return False
+
+
+def installed_copies(platform=None):
+    """The installed APlots of this Linux computer that this user can
+    start: the user's own copy, the one for every user (`--install-desktop
+    --system`) and the one of a .deb or .rpm package."""
+    platform = platform or sys.platform
+    if not platform.startswith("linux"):
+        return []
+    places = [linux_desktop_paths()["program"],
+              linux_desktop_paths(system=True)["program"], PACKAGE_PROGRAM]
+    return [place for place in places if place.is_file()]
+
+
+def newer_installed_copy(program=None, platform=None):
+    """An installed APlot newer than this installed one, or None.
+
+    A package (.deb, .rpm) can be updated by APlot only for the user - into
+    the user's own copy - and a newer package can come after that; the
+    menu entry, the `aplot` command and a double click on a graph then
+    still start the newest of them.  A file of one's own (the one being
+    edited) is never passed over.
+    """
+    if os.environ.get("APLOT_NEWEST") or os.environ.get(FROZEN_MARK):
+        return None
+    try:
+        program = Path(program or __file__).resolve()
+    except (OSError, ValueError):
+        return None
+    if not is_installed_copy(program, platform):
+        return None
+    best, newest = None, version_tuple(APP_VERSION)
+    for other in installed_copies(platform):
+        try:
+            if other.resolve() == program:
+                continue
+            with open(other, encoding="utf-8", errors="replace") as handle:
+                found = version_tuple(program_facts(
+                    handle.read(UPDATE_HEAD_BYTES))["version"])
+        except OSError:
+            continue
+        if found > newest:
+            best, newest = other, found
+    return best
 
 
 def program_place(program=None, platform=None):
     """Where the running APlot is, as the user would name it: the bundle,
     or the program file (`~` for the home folder)."""
+    if os.environ.get(FROZEN_MARK) and program is None:
+        # a self-contained APlot: the program is the application itself
+        executable = Path(sys.executable).resolve()
+        bundle = next((one for one in executable.parents
+                       if one.name.endswith(".app")), None)
+        return short_path(bundle or executable.parent)
     program = Path(program or __file__).resolve()
     bundle = app_bundle_of(program) if (platform or sys.platform) == "darwin" else None
     return short_path(bundle or program)
@@ -2402,6 +2560,8 @@ def separate_installation(program=None, platform=None):
     what is to be told (an empty list when there was nothing to do).
     """
     platform = platform or sys.platform
+    if os.environ.get(FROZEN_MARK):
+        return []                      # a self-contained APlot has its own
     try:
         program = Path(program or __file__).resolve()
         text = str(program)
@@ -5158,6 +5318,10 @@ class UpdateDialog(ToolDialog):
         what = (f"Update now downloads it from {UPDATE_PAGE}, keeps a copy of "
                 f"this version in {kept}, puts the new one in its place and "
                 f"starts {APP_NAME} again.")
+        if package_kind() == "flatpak":
+            what = (f"This {APP_NAME} is a flatpak: the new version comes as a "
+                    f"new .flatpak from {UPDATE_PAGE}/releases - Update now "
+                    f"says how.")
         if sys.platform == "darwin" and is_newer(facts.get("quicklook"),
                                                  QUICKLOOK_VERSION):
             what += ("  The Quick Look extensions (the pictures in the "
@@ -22038,7 +22202,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.5 (2026-10-15)**.  The number is written in one place
+This is **APlot 1.3.6 (2026-10-16)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -22062,7 +22226,8 @@ keeping the history of the code - commit and tag it:
 
 `git log` then lists every change, `git diff v1.0.0 v1.0.1` shows what a
 release changed, and `git checkout v1.0.0` brings back an older version
-exactly as it was.
+exactly as it was.  Pushing the tag (`git push origin v1.0.1`) also builds
+every installable package on GitHub (see `Installable packages`).
 
 **Publishing a release** for everybody's `Check for updates` is pushing
 the new `aplot.py` and `README.md` to the `main` branch of
@@ -22167,6 +22332,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
 | 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
 | 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
 | 1.3.3 | 2026-10-07 | APlot opened and closed again without anything done to it closes without asking about saving: the empty columns the blank sheet grows to fill a wider window are no edit any more, and a cell that was only clicked into (its editor opened and left with the same text) stays exactly as it was - before, it could come back as another type and count as a change. |
@@ -22179,6 +22345,95 @@ that runs, and the update window says it too.
 | 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
 | 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
 | 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
+
+
+## Installable packages
+
+APlot can be installed from a package as well, like any other program -
+from the **Releases** page of <https://github.com/varallyay/APlot>.  Two
+kinds are made:
+
+| Package | For | Python |
+| --- | --- | --- |
+| `aplot_<version>_all.deb` | Debian, Ubuntu, Mint... | the distribution's: `python3-tk`, `python3-numpy`, `python3-pandas`, `python3-matplotlib` come with it |
+| `aplot-<version>-1.noarch.rpm` | Fedora, openSUSE, RHEL... | the distribution's, the same way |
+| `APlot-<version>-macOS-arm64.dmg`, `-x86_64.dmg` | macOS (Apple Silicon, Intel) | **its own** - nothing else to install |
+| `APlot-<version>-Windows.msi` | Windows | **its own** |
+| `APlot-<version>-Linux.flatpak` | any Linux with flatpak | **its own** (on the freedesktop runtime of Flathub) |
+| `APlot-<version>-macOS-light.dmg` | macOS | the Mac's: conda (recommended), python.org or Homebrew |
+| `APlot-<version>-Windows-light.msi` | Windows | the computer's: conda (recommended) or python.org |
+
+Installing them:
+
+* **.deb**: `sudo apt install ./aplot_1.3.6_all.deb` (a double click opens
+  it in the software installer too).  APlot is then in the applications
+  menu, `aplot` starts it in a terminal, and the graph files have their icon
+  and picture; it lives in `/usr/share/aplot`.
+* **.rpm**: `sudo dnf install ./aplot-1.3.6-1.noarch.rpm` (openSUSE:
+  `sudo zypper install ...`).
+* **.flatpak**: `flatpak install --user APlot-1.3.6-Linux.flatpak`; flatpak
+  fetches the runtime from Flathub (add it once with `flatpak remote-add
+  --if-not-exists --user flathub
+  https://dl.flathub.org/repo/flathub.flatpakrepo`).  It may read and write
+  the home folder, draws with X11 (XWayland on a Wayland desktop) and
+  reaches the network for the updates.
+* **.dmg**: open it and drag APlot onto the Applications folder.  APlot is
+  not signed by an Apple developer account, so macOS stops the first start:
+  press Done, then System Settings > Privacy & Security > **Open Anyway**
+  (once) - or in Terminal `xattr -dr com.apple.quarantine
+  /Applications/APlot.app`.  The light one finds conda in `/opt/anaconda3`,
+  `~/anaconda3`, `~/miniconda3` or `~/miniforge3`, then the Python of
+  python.org and of Homebrew; with none of them it offers the download page
+  of Anaconda.  "Read me first.txt" in the disk image says all this, and
+  the Quick Look extensions are in it as an optional `.zip`.
+* **.msi**: a double click installs APlot **for the user who runs it** - no
+  administrator is needed - into `%LOCALAPPDATA%\\Programs\\APlot`, with
+  APlot in the Start menu and the `.aplt` files opening in it.  Windows
+  SmartScreen may warn about an unknown publisher (the package is not
+  signed): `More info > Run anyway`.  The light one's `APlot.exe` looks for
+  conda (Anaconda, Miniconda, Miniforge), then for every Python registered
+  by its installer (python.org, the Microsoft Store), and offers the
+  download page of Anaconda when there is none; `APLOT_PYTHON` may name a
+  Python of one's own.  It is uninstalled in Settings > Apps.
+
+**Updates of a packaged APlot** come from GitHub as before, and never
+write over the files of a package:
+
+* a **self-contained** APlot (its own Python) puts the new `aplot.py` into
+  a folder of the user - `~/Library/Application Support/APlot`,
+  `%LOCALAPPDATA%\\APlot`, or the flatpak's own data folder - and starts the
+  newer of that and the one it came with; a newer package installed later
+  is never held back by an older update;
+* the **light** `.dmg` and `.msi` replace the `aplot.py` inside APlot.app or
+  in the install folder, as the APlot.app of `--make-app` does;
+* a **.deb or .rpm** leaves `/usr/share/aplot` to the package manager and
+  installs the new version for the user (`~/.local/share/aplot`, with its
+  menu entry); the menu entry and the `aplot` command of the package then
+  start whichever of the two is newer.
+
+`Help > About APlot` says which package an APlot came from.
+
+**Building the packages.**  Everything is in the `packaging` folder:
+
+* `python3 packaging/build_packages.py` makes the `.deb`, the `.rpm`, the
+  light `.dmg` and the light `.msi` on any Linux (Ubuntu: `sudo apt install
+  rpm xorriso wixl gcc-mingw-w64-x86-64`); `packaging/windows/launcher.c`
+  is the `APlot.exe` of the light `.msi`;
+* `python packaging/build_frozen.py` makes the self-contained APlot with
+  PyInstaller on the system it is for (`python -m pip install pyinstaller
+  numpy pandas matplotlib pillow openpyxl tkinterdnd2`): on a Mac the
+  `.dmg` itself, on Windows and Linux the folder that `build_packages.py
+  msi --windows ...` and `build_packages.py flatpak --linux ...` turn into
+  the `.msi` and the `.flatpak`; `packaging/frozen/aplot_frozen.py` is the
+  small program inside that starts `aplot.py`;
+* **GitHub builds all of them by itself**: `.github/workflows/packages.yml`
+  runs on GitHub's own Mac, Windows and Linux machines whenever a version
+  tag is pushed, and puts every package on the Releases page:
+
+        git tag -a v1.3.6 -m "APlot 1.3.6"
+        git push origin v1.3.6
+
+  (`Actions > Packages > Run workflow` builds them without a release.)
 
 
 ## What it needs
@@ -26790,7 +27045,8 @@ class App:
             "Spreadsheet editor and interactive Matplotlib plots.\n\n"
             f"Developer\n{DEVELOPER}\n\n"
             f"Program: {program_place()}"
-            + (" (installed)" if is_installed_copy() else "") + "\n"
+            + (f" (installed by the {package_kind()} package)" if package_kind()
+               else " (installed)" if is_installed_copy() else "") + "\n"
             f"Settings file: {short_path(self.settings.path)}", parent=self.root)
 
     def open_settings(self):
@@ -28289,7 +28545,13 @@ def download_update(facts, source=None, folder=None):
 
 
 def update_target():
-    """The program file that is running (where an update is written)."""
+    """The program file that is running (where an update is written) - or,
+    for a self-contained APlot, the place its bootstrap names: an update
+    goes to a folder of the user, and the application stays as it was
+    built (and signed)."""
+    override = os.environ.get(UPDATE_TARGET_MARK)
+    if override:
+        return Path(override)
     return Path(__file__).resolve()
 
 
@@ -28452,7 +28714,42 @@ def install_update(new_program, facts, target=None, source=None,
     except OSError:
         old = {"version": "", "date": "", "quicklook": ""}
     why = ""
-    if (target.parent / ".git").exists():
+    if os.environ.get(UPDATE_TARGET_MARK) and target == update_target():
+        # a self-contained APlot: the new program is put in the user's
+        # folder, and the bootstrap starts the newer of the two from then on
+        try:
+            if target.is_file():
+                result["backup"] = _keep_old(target)
+            else:
+                result["backup"] = _keep_old(Path(__file__).resolve())
+        except OSError:
+            pass
+        try:
+            copy_program(new_program, target)
+        except OSError as error:
+            raise UpdateError(f"{target} could not be written: {error}") from error
+        result.update(installed=True, command=[sys.executable],
+                      where=Path(program_place()))
+        old = {"quicklook": QUICKLOOK_VERSION}
+    kind = "" if result["installed"] else package_kind(target)
+    if result["installed"]:
+        pass
+    elif kind == "flatpak":
+        # the sandbox of a flatpak cannot be written to, and a program put
+        # outside it would not find its Python: flatpak updates it
+        result["notes"].append(
+            f"This {APP_NAME} is a flatpak, and flatpak brings the new "
+            f"version: install the {APP_NAME} .flatpak of version "
+            f"{facts['version']} from {UPDATE_PAGE}/releases (or run "
+            f"`flatpak update` when it came from a repository).")
+        return result
+    elif kind in ("deb", "rpm"):
+        # the files of a package belong to the package manager: they are
+        # never written over (the next package would put them back, or
+        # stop); the new version is installed for the user instead
+        why = (f"it was installed by the .{kind} package, and the files of "
+               f"a package are left to the package manager")
+    elif (target.parent / ".git").exists():
         pulled, why = git(target.parent)
         try:
             now = program_facts(target.read_text(encoding="utf-8",
@@ -28577,7 +28874,9 @@ def after_update(settings, platform=None):
         return None          # (an older copy leaves it to the new version)
     notes = [one for one in str(state.get("notes") or "").split("\n\n") if one]
     program = update_target()
-    if platform.startswith("linux"):
+    if os.environ.get(FROZEN_MARK):
+        pass                    # a self-contained APlot has nothing outside it
+    elif platform.startswith("linux"):
         paths = linux_desktop_paths()
         if paths["desktop"].exists():
             # the installed copy is this one (or becomes it, when an older
@@ -28790,6 +29089,15 @@ def main(argv=None):
     done = run_command(argv)
     if done is not None:
         return done
+    # an installed APlot hands over to a newer installed one: a package
+    # updated for the user lives on in the user's own copy
+    newer = newer_installed_copy()
+    if newer is not None:
+        os.environ["APLOT_NEWEST"] = "1"
+        try:
+            os.execv(sys.executable, [sys.executable, str(newer)] + argv)
+        except OSError:
+            pass                      # this one is good enough after all
     set_macos_app_name(APP_NAME)  # must run before the first Tk window
     root = tk.Tk()
     app = App(root, check_updates=True)
