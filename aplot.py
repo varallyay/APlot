@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.6 (2026-10-16) - see `APP_VERSION` below and "Version history" in the
+1.3.7 (2026-10-22) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -251,8 +251,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.6"
-APP_VERSION_DATE = "2026-10-16"
+APP_VERSION = "1.3.7"
+APP_VERSION_DATE = "2026-10-22"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -3535,8 +3535,37 @@ def _paint_import(draw, box):
                  fill=ICON_ADD_COLOR, outline=ICON_ADD_EDGE, width=width)
 
 
+ICON_GEAR = "#8f9bab"      # the grey of the settings gear
+GEAR_TEETH = 8
+
+
+def _paint_settings(draw, box):
+    """A gear wheel: the settings of the program."""
+    middle = 0.5 * box
+    outer, root = 0.48 * box, 0.355 * box      # tips and roots of the teeth
+    pitch = 2 * math.pi / GEAR_TEETH
+    tooth_root, tooth_tip = pitch * 0.58, pitch * 0.40
+    points = []
+    for tooth in range(GEAR_TEETH):
+        angle = tooth * pitch - math.pi / 2
+        corners = ((angle - tooth_root / 2, root), (angle - tooth_tip / 2, outer),
+                   (angle + tooth_tip / 2, outer), (angle + tooth_root / 2, root))
+        points += [(middle + radius * math.cos(at), middle + radius * math.sin(at))
+                   for at, radius in corners]
+        # the round bottom between this tooth and the next one
+        for step in range(1, 4):
+            at = angle + tooth_root / 2 + (pitch - tooth_root) * step / 4
+            points.append((middle + root * math.cos(at), middle + root * math.sin(at)))
+    draw.polygon(points, fill=ICON_GEAR, outline=ICON_EDGE,
+                 width=max(1, int(round(0.026 * box))))
+    hole = 0.14 * box
+    draw.ellipse([middle - hole, middle - hole, middle + hole, middle + hole],
+                 fill=ICON_PAPER, outline=ICON_EDGE,
+                 width=max(1, int(round(0.026 * box))))
+
+
 FILE_ICON_PAINTERS = {"open": _paint_open, "save": _paint_save,
-                      "import": _paint_import}
+                      "import": _paint_import, "settings": _paint_settings}
 
 
 # -- the tools of a diagram window, in the very same shades ----------------
@@ -22202,7 +22231,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.6 (2026-10-16)**.  The number is written in one place
+This is **APlot 1.3.7 (2026-10-22)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -22332,6 +22361,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
 | 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
 | 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
 | 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
@@ -22839,7 +22869,7 @@ sheets together:
 | Delete row (icon) | first | Deletes every row the highlighted block touches. |
 | Add column (icon, split button) | first | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
 | Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
-| Settings... | first | Opens the settings editor (see section 5). |
+| Gear (Settings) | first | Opens the settings editor (see section 5). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
 | **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
@@ -23043,8 +23073,10 @@ The icons are **24 pixels** large, and every outline is drawn a good pixel
 wide, so that none of them fades away when it is shrunk.  The buttons of
 the main toolbar fit tightly around them, with no wide empty rim, and all
 of them are **equally tall**: a button with words only (`Update`,
-`Settings...`, `Regression`) carries an invisible picture as tall as an
-icon, so it stands exactly as high as the ones with icons.  A few constants at the top of
+`Regression`) carries an invisible picture as tall as an icon, so it
+stands exactly as high as the ones with icons.  The settings are the
+**gear** at the right end of the toolbar, as narrow as the other icon
+buttons.  A few constants at the top of
 `aplot.py` set the look:
 
 | Constant | What it sets |
@@ -25478,8 +25510,8 @@ used when a data file is written.
 
 ## 5. Settings
 
-`Settings...` on the toolbar, in the `APlot` menu, or `Cmd+,` in the
-application menu on macOS.  The values are written to
+The **gear** at the right end of the toolbar, `Settings...` in the `APlot`
+menu, or `Cmd+,` in the application menu on macOS.  The values are written to
 
     ~/.aplot/config.json
 
@@ -26500,13 +26532,14 @@ class App:
             bar, kind="column", action="delete", command=self.delete_column)
         self.delete_column_btn.pack(side="left", padx=(6, 0))
         
-        btn_settings = ttk.Button(bar, text="Settings...",
-                                  style=TOOLBAR_STYLE,
+        # the settings: a gear, as narrow as the other icon buttons
+        btn_settings = ttk.Button(bar, text="", width=0, style=TOOLBAR_STYLE,
                                   command=self.open_settings)
-        self.as_tall_as_icons(btn_settings)
+        if self._set_tool_icon(btn_settings, "settings", "Settings...") is None:
+            self.as_tall_as_icons(btn_settings)      # words, without Pillow
         self.settings_btn = btn_settings
         btn_settings.pack(side="right")
-        Tooltip(btn_settings, "Graph settings")
+        Tooltip(btn_settings, "Settings")
 
         # ---- the second row, under the Plot and Update buttons ----------
         second = ttk.Frame(self.root, padding=(10, 0, 10, 8))
@@ -28238,9 +28271,12 @@ class App:
 
     @staticmethod
     def all_numbers(values):
-        """True when every value that is there at all is a number."""
+        """True when every value that is there at all is a number (an
+        empty cell - a hole left in the sheet - is not there)."""
         numbers = pd.to_numeric(values, errors="coerce")
-        return int(numbers.notna().sum()) == int(values.notna().sum())
+        present = values.notna() & ~values.map(
+            lambda value: isinstance(value, str) and not value.strip())
+        return int(numbers.notna().sum()) == int(present.sum())
 
     @staticmethod
     def merge_key(values, numeric):
@@ -28254,6 +28290,41 @@ class App:
         if numeric:
             return pd.to_numeric(values, errors="coerce").astype(float)
         return values.astype(object).where(values.notna(), None).astype(str)
+
+    @staticmethod
+    def hold_hole_places(keys):
+        """The X values of one sheet, with every row that has no X given a
+        place between its neighbours.
+
+        A row left empty is a hole in the curve, but when several sheets are
+        shown together their rows are matched up on X and sorted by it - and
+        a row without an X would be sorted away from its place, so the curve
+        ran straight across the hole.  Such a row is given an X value that
+        lies between the X of the rows before and after it (its curves have
+        no number there, so nothing is drawn at it): it stays where it was,
+        and the curve breaks there.  Empty rows at the very beginning or end
+        of a sheet break nothing and are left as they are.
+        """
+        values = keys.to_numpy(dtype=float, copy=True)
+        missing = ~np.isfinite(values)
+        if not missing.any() or missing.all():
+            return keys
+        index = 0
+        count = len(values)
+        while index < count:
+            if not missing[index]:
+                index += 1
+                continue
+            end = index
+            while end < count and missing[end]:
+                end += 1
+            if index > 0 and end < count:
+                before, after = values[index - 1], values[end]
+                steps = end - index + 1
+                for place in range(index, end):
+                    values[place] = before + (after - before) * (place - index + 1) / steps
+            index = end
+        return pd.Series(values, index=keys.index)
 
     @staticmethod
     def mark_holes(frame, columns):
@@ -28292,6 +28363,10 @@ class App:
             columns = [one for one in frame.columns if one != own_x]
             self.mark_holes(frame, columns)
             frame[own_x] = self.merge_key(frame[own_x], numeric)
+            if numeric:
+                # an empty row keeps its place among the others, and so
+                # stays a hole in the curve
+                frame[own_x] = self.hold_hole_places(frame[own_x])
             frame = frame.rename(columns={**names, own_x: base_x})
             if merged is None:
                 merged = frame
@@ -28300,7 +28375,8 @@ class App:
         if merged is None:
             return self.tables[idx].plot_dataframe(1).copy()
         try:
-            merged = merged.sort_values(by=base_x, ignore_index=True)
+            merged = merged.sort_values(by=base_x, ignore_index=True,
+                                        kind="stable")
         except (TypeError, ValueError, KeyError):
             pass
         return merged

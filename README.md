@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.6 (2026-10-16)**.  The number is written in one place
+This is **APlot 1.3.7 (2026-10-22)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -153,6 +153,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
 | 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
 | 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
 | 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
@@ -660,7 +661,7 @@ sheets together:
 | Delete row (icon) | first | Deletes every row the highlighted block touches. |
 | Add column (icon, split button) | first | Asks for a name and inserts an empty column **around the selected cell**. The arrow chooses: before, after, or at the right end of the sheet. |
 | Delete column (icon) | first | Deletes the column of the selected cell (after a confirmation). |
-| Settings... | first | Opens the settings editor (see section 5). |
+| Gear (Settings) | first | Opens the settings editor (see section 5). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
 | **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
 
@@ -864,8 +865,10 @@ The icons are **24 pixels** large, and every outline is drawn a good pixel
 wide, so that none of them fades away when it is shrunk.  The buttons of
 the main toolbar fit tightly around them, with no wide empty rim, and all
 of them are **equally tall**: a button with words only (`Update`,
-`Settings...`, `Regression`) carries an invisible picture as tall as an
-icon, so it stands exactly as high as the ones with icons.  A few constants at the top of
+`Regression`) carries an invisible picture as tall as an icon, so it
+stands exactly as high as the ones with icons.  The settings are the
+**gear** at the right end of the toolbar, as narrow as the other icon
+buttons.  A few constants at the top of
 `aplot.py` set the look:
 
 | Constant | What it sets |
@@ -3299,8 +3302,8 @@ used when a data file is written.
 
 ## 5. Settings
 
-`Settings...` on the toolbar, in the `APlot` menu, or `Cmd+,` in the
-application menu on macOS.  The values are written to
+The **gear** at the right end of the toolbar, `Settings...` in the `APlot`
+menu, or `Cmd+,` in the application menu on macOS.  The values are written to
 
     ~/.aplot/config.json
 
