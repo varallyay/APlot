@@ -23,7 +23,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.7 (2026-10-22)**.  The number is written in one place
+This is **APlot 1.3.8 (2026-11-04)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -153,6 +153,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
 | 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
 | 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
 | 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
@@ -652,7 +653,7 @@ sheets together:
 | Button | Row | What it does |
 | --- | --- | --- |
 | Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
-| Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
+| Update | first | Sends the current data to the diagrams that are already open, keeping every style setting.  The diagrams come to the front, and the one used last **gets the keyboard** as well - the arrow keys move its selected object at once (a click into the sheet gives the keyboard back to the sheet). |
 | Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
 | Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
 | Save graph (disc icon) | first | Writes the whole graph - the sheets and the diagrams - into the `.aplt` file.  `Cmd/Ctrl+S`. |
@@ -825,10 +826,20 @@ the program itself, so nothing beyond numpy is needed.
   from - useful when a difficult fit runs away - and ticking `Hold` beside
   it **keeps that parameter fixed** at the value typed in while the others
   are fitted (a plateau that is known, a baseline that is zero).
+  The list grows up to **seven parameters**; with more of them (a
+  polynomial of order 7 to 10) it keeps that height and **scrolls**, with a
+  scroll bar at its right edge - the wheel and `Tab` reach every line - so
+  the window never grows taller and its `Fit` and `Close` buttons stay on
+  the screen.  Values typed in stay when only the order changes.
 * **The curve that is written**: how many `Points` it is drawn with (100)
   and how far `Past the data` it reaches (5 per cent of the range at both
   ends).  A moving average says nothing outside the measurements, so it is
   never drawn past them.
+
+The answer under the settings - every parameter of every fitted column,
+with R squared - shows six lines and scrolls the same way when it is
+longer.  On a small screen both lists give up lines (down to a few) until
+the whole window fits.
 
 **What `Fit` does**
 
@@ -1493,11 +1504,19 @@ nothing.
   cursor and is the first character in it, as in a spreadsheet.  `Enter`
   or `F2` opens it with the value that is there instead.
 * Click a cell to edit it.  The text is selected, so typing replaces it.
-* `Enter` or `Down` moves one row down, `Up` one row up.
+* `Enter` or `Down` moves one row down, `Shift+Enter` or `Up` one row up.
 * `Tab` moves right, `Shift+Tab` moves left; at the end of a row the cursor
-  wraps to the beginning of the next one.
+  wraps to the beginning of the next one (and `Shift+Tab` back to the end
+  of the row above).  Before the very first cell there is nothing, so the
+  cursor stays there.
 * Leaving the last row appends a new row automatically, so the table grows
-  as long as you keep typing.  This can be switched off in the settings.
+  as long as you keep typing.  This can be switched off in the settings
+  (the cursor then stays in the last row).
+* **Nothing typed is lost, however fast**: the next cell opens within the
+  same key press, and keys that come in before it is on the screen - a
+  quick `1`, `Tab`, `2`, `Tab`, `3`, `Enter`, or a moment the computer is
+  busy redrawing a diagram - go into the cells they were meant for.  (Up to
+  1.3.7 such keys could go missing, or end up in the cell just left.)
 * `Left` and `Right` move the text cursor inside the cell, and step to the
   neighbouring cell once the cursor has reached the end of the text (at the
   end of a row they wrap to the next one, exactly like `Tab`).
@@ -1516,7 +1535,11 @@ nothing.
   (`Cmd+A` on macOS) selects the whole text of the cell and `Ctrl+C`
   (`Cmd+C`) copies it.
 * `Esc` closes the editor and leaves the keyboard on the table itself,
-  where the arrow keys walk from cell to cell.
+  where the arrow keys walk from cell to cell - and `Tab` and `Shift+Tab`
+  as well, along the row.
+* `Enter` (or `Esc`) in the **formula bar** gives the keyboard back to the
+  sheet, and so does jumping to a cell with the address box: the arrows walk
+  on from there at once.
 
 Values that look like numbers are stored as numbers; everything else is
 kept as text and is ignored when plotting.
@@ -1542,6 +1565,7 @@ leaves its row quiet.
 | `Shift`+click a heading | Selects that whole column. |
 | `Shift`+arrow keys | One row or column more (or less) in the block - this also works while a cell is being edited, where `Shift+Up/Down` leaves the editor at once and `Shift+Left/Right` first select the text of the cell. |
 | Arrow keys (no Shift) | Walk from cell to cell; the block collapses to that one cell. |
+| `Tab` / `Shift+Tab` | One cell to the right / to the left, on to the next row (the previous one) at the end of a row - the keyboard stays on the table. |
 | `Shift+Space` | The whole rows the block touches (they become tinted). |
 | `Ctrl/Cmd+Space` | The whole columns the block touches. |
 | `Ctrl/Cmd+A` | The whole table. |
@@ -1553,7 +1577,11 @@ keyboard, even when a diagram window was the one in front a moment before
 (after a graph was opened, for instance): the cell takes the keyboard back
 for itself, and a diagram window never takes it away from a cell that is
 being edited.  Clicking in the diagram, as always, gives the keyboard back
-to the diagram.
+to the diagram.  **The keyboard follows the window in front**: going back
+and forth between the sheet and a diagram (a click on a title bar, the
+Dock, `Cmd+Tab`), editing cells in between, `Update`, or the axes window
+opened and closed again - the window that comes to the front has the
+keys, and in a diagram the arrows move the selected object.
 
 The block is what the data operations work on:
 
@@ -1744,7 +1772,7 @@ another place (see `Moving the whole graph`).
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter.  On a **picture** the four **corner** points keep its proportions and the four **side** points squeeze or stretch it (see `Resizing with the control points`). |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
-| Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
+| Arrow keys | Move the selected object by one pixel, with `Shift` by ten.  They also do so while one of the diagram's property windows is in front - after `Apply`, say - unless a field of that window (a number, a text, a list) has the keyboard and needs them itself. |
 | Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`.  It works while a property window is in front of the diagram as well: the diagram comes to the front and its menu opens a moment later. |
 | Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view around the pointer; the toolbar's `-`, zoom and `+` do the same (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
@@ -3115,6 +3143,13 @@ belong to the characters of that text, exactly as everywhere else.
 | Export figure (image)... | `Cmd/Ctrl+E` | Writes the graph as a picture (PNG, PDF, SVG, ...), cut out of the page. |
 | Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
+
+**With Caps Lock or Num Lock on** every shortcut works the same.  (Up
+to 1.3.7 `Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z` and `Q` did nothing with
+Caps Lock on, and with Num Lock on Linux took `Ctrl+O`, `S` and `E` for
+`Ctrl+Alt+O`, `S` and `E` - `Import data`, `Export data`, `Export as
+matplotlib script`.  `Cmd` is bound on a Mac only: elsewhere Tk reads it
+as `Alt`, or as Num Lock on Windows.)
 
 **Saving with one key.**  `Cmd/Ctrl+S` asks for a name only the **first**
 time.  From then on the graph belongs to that file: every further

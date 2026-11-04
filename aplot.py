@@ -99,7 +99,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.7 (2026-10-22) - see `APP_VERSION` below and "Version history" in the
+1.3.8 (2026-11-04) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -251,8 +251,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.7"
-APP_VERSION_DATE = "2026-10-22"
+APP_VERSION = "1.3.8"
+APP_VERSION_DATE = "2026-11-04"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -563,8 +563,54 @@ CARET_OFF_MS = 350          # ... and how long it is away: it blinks
 # the modifiers that make a key press a command instead of a character:
 # Control, Mod1 (Alt on Linux, Command on the Mac), and the Alt and Meta
 # bits Tk adds itself.  Option on the Mac is left out on purpose: it is how
-# the accented letters are written there.
-TYPING_COMMAND_KEYS = 0x0004 | 0x0008 | 0x20000 | 0x40000
+# the accented letters are written there.  On Windows Mod1 is Num Lock, so
+# there it is left out as well - with Num Lock on, nothing could be typed.
+TYPING_COMMAND_KEYS = (0x0004 | 0x20000 | 0x40000
+                       | (0 if sys.platform == "win32" else 0x0008))
+# the keys the commands are held with: Ctrl everywhere, and Cmd as well on a
+# Mac.  Tk knows the name "Command" on every system, but elsewhere it is the
+# same Mod1 bit: Alt on Linux and Num Lock on Windows, where a plain "o"
+# with Num Lock on would have been taken for Cmd+O.
+COMMAND_MODIFIERS = (("Control", "Command") if sys.platform == "darwin"
+                     else ("Control",))
+# ...and the second key of the few commands held with two of them (Alt, or
+# Option on a Mac).  "Option" is the Mod2 bit, which is Num Lock on Linux.
+SECOND_MODIFIERS = ("Alt", "Option") if sys.platform == "darwin" else ("Alt",)
+
+
+def altgr_character(event):
+    """True for a character written with AltGr on Windows (@, [, { and the
+    rest on many keyboards): Windows reports it as Ctrl and Alt held at
+    once, which is not a command."""
+    if sys.platform != "win32":
+        return False
+    try:
+        state = int(event.state or 0)
+    except (TypeError, ValueError):
+        return False
+    char = str(getattr(event, "char", "") or "")
+    return bool(state & 0x0004 and state & 0x20000 and len(char) == 1
+                and char.isprintable())
+
+
+class _KeyLike:
+    """What a key handler reads from an event, for a key carried out by
+    the program itself (see `DataTable._hand_key`)."""
+
+    def __init__(self, widget, keysym="", char="", state=0):
+        self.widget = widget
+        self.keysym = keysym
+        self.char = char
+        self.state = state
+
+
+def is_command_key(event):
+    """True when a key press is a command (Ctrl, Cmd, Alt ...), not typing."""
+    try:
+        state = int(event.state or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(state & TYPING_COMMAND_KEYS) and not altgr_character(event)
 SELECT_COLOR = "#1a5fb4"    # the blue of the selection
 BLOCK_TINT = "#d7e6f8"      # background of the selected spreadsheet cells
 BLOCK_LINE = 2              # thickness of the outline around the block
@@ -4934,6 +4980,15 @@ class ToolDialog(tk.Toplevel):
         self.body.pack(fill="both", expand=True)
         self.bind("<Escape>", lambda _e: self.close())
         self.protocol("WM_DELETE_WINDOW", self.close)
+        # the arrow keys move the selected object of the diagram while its
+        # property window is in front - after `Apply`, say - as long as no
+        # field of the window needs them
+        steps = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, 1), "Down": (0, -1)}
+        for name, (sx, sy) in steps.items():
+            self.bind(f"<KeyPress-{name}>",
+                      lambda e, x=sx, y=sy: self._arrow_to_diagram(e, x, y, False))
+            self.bind(f"<Shift-KeyPress-{name}>",
+                      lambda e, x=sx, y=sy: self._arrow_to_diagram(e, x, y, True))
         # placed once it is complete: a timer, not "when idle" - a window
         # that lays itself out while it is built (update_idletasks) would
         # run an idle task half-way and be measured too small
@@ -5010,6 +5065,34 @@ class ToolDialog(tk.Toplevel):
         except tk.TclError:
             pass
         return False
+
+    # widgets that have no use for the arrow keys: with one of them holding
+    # the keyboard, the arrows go to the diagram (a text field, a number
+    # box, a list or the tabs of the window keep them)
+    ARROWS_PASS = ("TButton", "Button", "TCheckbutton", "Checkbutton",
+                   "TRadiobutton", "Radiobutton", "TFrame", "Frame",
+                   "Toplevel", "TLabel", "Label", "TLabelframe", "Labelframe",
+                   "TSeparator")
+
+    def _arrow_to_diagram(self, event, sx, sy, big):
+        """An arrow key in this window: the selected object of the diagram
+        moves, when the widget with the keyboard has no use for it."""
+        try:
+            kind = str(event.widget.winfo_class())
+        except (tk.TclError, AttributeError):
+            return None
+        if kind not in self.ARROWS_PASS:
+            return None
+        diagram = self.master
+        nudge = getattr(diagram, "nudge_selection", None)
+        if not callable(nudge):
+            return None
+        if not (getattr(diagram, "selection", None)
+                or getattr(diagram, "group", None)):
+            return None
+        step = NUDGE_BIG_STEP if big else NUDGE_STEP
+        nudge(sx * step, sy * step)
+        return "break"
 
     def close(self):
         if self._on_close:
@@ -8872,6 +8955,120 @@ def fitted_curve(result, grid):
     return np.where(np.isfinite(values), values, np.nan)
 
 
+FIT_ROWS_SHOWN = 7          # parameter rows the regression window shows at most
+FIT_SUMMARY_LINES = 6       # ...and lines of the answer under them
+
+
+class ScrollArea(ttk.Frame):
+    """A part of a window that grows with what it holds - up to a height.
+
+    Everything goes into `inner`.  Up to `most` pixels the area is exactly
+    as tall as its contents; beyond that it keeps that height and a scroll
+    bar appears at its right edge (the wheel scrolls it as well), so the
+    window around it - and the buttons at its bottom - stay where they are.
+    """
+
+    def __init__(self, master, most=200, **kwargs):
+        super().__init__(master, **kwargs)
+        self.most = max(1, int(most))
+        try:
+            background = ttk.Style().lookup("TFrame", "background") or None
+        except tk.TclError:
+            background = None
+        options = {"background": background} if background else {}
+        try:            # one notch of the wheel: about one row
+            step = tkfont.nametofont("TkDefaultFont").metrics("linespace") + 8
+        except (tk.TclError, AttributeError):
+            step = 24
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0,
+                                width=1, height=1, yscrollincrement=step,
+                                **options)
+        self.bar = ttk.Scrollbar(self, orient="vertical",
+                                 command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.bar.set)
+        self.inner = ttk.Frame(self.canvas)
+        self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.inner.bind("<Configure>", lambda _e: self.fit(), add="+")
+        self._wheel_tag = f"ScrollArea{id(self)}"
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.bind_class(self._wheel_tag, sequence, self._wheel)
+        self.follow_wheel()
+
+    def set_most(self, pixels):
+        self.most = max(1, int(pixels))
+        self.fit()
+
+    def scrolls(self):
+        """True while the contents are taller than the area shows."""
+        return self.inner.winfo_reqheight() > self.most
+
+    def fit(self):
+        """Size the area to its contents, at most `most` pixels high."""
+        try:
+            width = self.inner.winfo_reqwidth()
+            height = self.inner.winfo_reqheight()
+            shown = min(height, self.most)
+            self.canvas.configure(width=width, height=shown,
+                                  scrollregion=(0, 0, width, height))
+            if height > self.most:
+                self.bar.grid(row=0, column=1, sticky="ns")
+            else:
+                self.bar.grid_remove()
+                self.canvas.yview_moveto(0.0)
+        except tk.TclError:
+            pass
+
+    def follow_wheel(self):
+        """The wheel scrolls the area wherever the pointer is on it (call
+        this again after new widgets were put into `inner`)."""
+        widgets = [self, self.canvas, self.inner]
+        stack = list(self.inner.winfo_children())
+        while stack:
+            widget = stack.pop()
+            widgets.append(widget)
+            stack.extend(widget.winfo_children())
+        for widget in widgets:
+            try:
+                tags = tuple(widget.bindtags())
+                if self._wheel_tag not in tags:
+                    widget.bindtags((self._wheel_tag,) + tags)
+            except tk.TclError:
+                continue
+
+    def _wheel(self, event):
+        if not self.scrolls():
+            return None
+        number = getattr(event, "num", None)
+        if number == 4:
+            step = -1
+        elif number == 5:
+            step = 1
+        else:
+            delta = getattr(event, "delta", 0) or 0
+            if not delta:
+                return None
+            step = -1 if delta > 0 else 1
+        self.canvas.yview_scroll(step, "units")
+        return "break"
+
+    def see(self, widget):
+        """Scroll until `widget` (inside `inner`) is in view."""
+        try:
+            self.update_idletasks()
+            top = widget.winfo_rooty() - self.inner.winfo_rooty()
+            bottom = top + widget.winfo_height()
+            height = max(1, self.inner.winfo_reqheight())
+            first, last = (float(one) for one in self.canvas.yview())
+            if top < first * height:
+                self.canvas.yview_moveto(top / height)
+            elif bottom > last * height:
+                self.canvas.yview_moveto(max(0.0, (bottom - self.most) / height))
+        except (tk.TclError, ValueError):
+            pass
+
+
 class RegressionDialog(ToolDialog):
     """Fit a curve to the columns of one sheet.
 
@@ -8939,6 +9136,12 @@ class RegressionDialog(ToolDialog):
             right, text="Parameters (empty = worked out from the data)",
             padding=8)
         self.params_box.pack(fill="x", pady=(10, 0))
+        # the rows of the parameters: with more than FIT_ROWS_SHOWN of them
+        # (a polynomial of a high order) the list stops growing and scrolls,
+        # so the window keeps its size and its buttons stay on the screen
+        self.params_area = ScrollArea(self.params_box)
+        self.params_area.pack(fill="x")
+        self.params_grid = self.params_area.inner
 
         curve = ttk.LabelFrame(right, text="The curve that is written",
                                padding=8)
@@ -8958,9 +9161,19 @@ class RegressionDialog(ToolDialog):
                         text="Draw it with the data at once").grid(
             row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
-        self.result_label = ttk.Label(right, text="", justify="left",
-                                      wraplength=330)
-        self.result_label.pack(anchor="w", pady=(10, 0))
+        # the answer: a long one (many parameters, many columns) scrolls
+        # instead of pushing the buttons off the screen
+        self.result_area = ScrollArea(right)
+        self.result_area.pack(anchor="w", fill="x", pady=(10, 0))
+        self.result_label = ttk.Label(self.result_area.inner, text="",
+                                      justify="left", wraplength=330)
+        self.result_label.pack(anchor="w")
+        self.result_area.follow_wheel()
+        try:
+            line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        except (tk.TclError, AttributeError):
+            line = 16
+        self.result_area.set_most(FIT_SUMMARY_LINES * line + 2)
 
         buttons = ttk.Frame(self.body)
         buttons.pack(side="bottom", fill="x", pady=(12, 0))
@@ -9113,31 +9326,111 @@ class RegressionDialog(ToolDialog):
         self._rebuild_params()
 
     def _rebuild_params(self, *_args):
-        """One row per parameter: its name, a starting value and a hold."""
-        for child in self.params_box.winfo_children():
+        """One row per parameter: its name, a starting value and a hold.
+
+        The values already typed in are kept for the parameters that are
+        still there when only the settings change (a polynomial whose order
+        changes keeps its c0, c1 ...); another method starts afresh.
+        """
+        typed = {}
+        if getattr(self, "_params_of", None) == self.model.code:
+            for name, start, hold in zip(getattr(self, "param_names", []),
+                                         self.start_vars, self.hold_vars):
+                try:
+                    typed[name] = (start.get(), bool(hold.get()))
+                except tk.TclError:
+                    continue
+        self._params_of = self.model.code
+        grid = self.params_grid
+        for child in grid.winfo_children():
             child.destroy()
         self.start_vars, self.hold_vars = [], []
         names = self.model.parameter_names(self.options())
+        self.param_names = list(names)
+        self.param_entries = []
         if self.model.code == "movavg":
             self.params_box.pack_forget()
             return names
         self.params_box.pack(fill="x", pady=(10, 0), before=self.curve_box)
-        ttk.Label(self.params_box, text="Start value", foreground="#666").grid(
+        ttk.Label(grid, text="Start value", foreground="#666").grid(
             row=0, column=1, sticky="w", padx=(0, 8))
-        ttk.Label(self.params_box, text="Hold", foreground="#666").grid(
+        ttk.Label(grid, text="Hold", foreground="#666").grid(
             row=0, column=2, sticky="w")
         for row, name in enumerate(names, start=1):
-            ttk.Label(self.params_box, text=name).grid(
+            ttk.Label(grid, text=name).grid(
                 row=row, column=0, sticky="w", padx=(0, 8), pady=2)
-            start = tk.StringVar(value="")
-            hold = tk.BooleanVar(value=False)
+            old_text, old_hold = typed.get(name, ("", False))
+            start = tk.StringVar(value=old_text)
+            hold = tk.BooleanVar(value=old_hold)
             self.start_vars.append(start)
             self.hold_vars.append(hold)
-            ttk.Entry(self.params_box, textvariable=start, width=12).grid(
-                row=row, column=1, sticky="w", padx=(0, 8), pady=2)
-            ttk.Checkbutton(self.params_box, variable=hold).grid(
+            entry = ttk.Entry(grid, textvariable=start, width=12)
+            entry.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=2)
+            # Tab into a row out of sight scrolls it into view
+            entry.bind("<FocusIn>",
+                       lambda _e, w=entry: self.params_area.see(w), add="+")
+            self.param_entries.append(entry)
+            ttk.Checkbutton(grid, variable=hold).grid(
                 row=row, column=2, sticky="w", pady=2)
+        self._cap_params(len(names))
         return names
+
+    def _rows_height(self, rows):
+        """Pixels of the heading and the first `rows` parameter rows."""
+        try:
+            box = self.params_grid.grid_bbox(0, 0, 2, max(0, int(rows)))
+            return int(box[3]) + 1 if box and box[3] > 0 else None
+        except (tk.TclError, TypeError, ValueError, IndexError):
+            return None
+
+    def _cap_params(self, count):
+        """The list of parameters shows FIT_ROWS_SHOWN rows at most."""
+        self.params_area.follow_wheel()
+        self.params_area.canvas.yview_moveto(0.0)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        """The two lists that grow - the parameters and the answer - keep
+        to FIT_ROWS_SHOWN rows and FIT_SUMMARY_LINES lines; on a small
+        screen they give up whole rows and lines (down to a few) until the
+        whole window fits, its buttons at the bottom included."""
+        try:
+            line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        except (tk.TclError, AttributeError):
+            line = 16
+        try:
+            self.update_idletasks()
+            count = len(self.start_vars)
+            rows = min(count, FIT_ROWS_SHOWN)
+            lines = FIT_SUMMARY_LINES
+            self.result_area.set_most(lines * line + 2)
+            height = self._rows_height(rows)
+            if height:
+                self.params_area.set_most(height)
+            _left, top, _right, bottom = usable_screen(self)
+            room = bottom - top - TITLE_BAR
+            while True:
+                self.update_idletasks()
+                if self.winfo_reqheight() <= room:
+                    break
+                if lines > 2 and self.result_area.scrolls():
+                    lines -= 1
+                    self.result_area.set_most(lines * line + 2)
+                elif rows > 3 and count > 3:
+                    rows -= 1
+                    height = self._rows_height(rows)
+                    if not height:
+                        break
+                    self.params_area.set_most(height)
+                else:
+                    break
+        except tk.TclError:
+            return False
+        try:
+            self.after_idle(self.keep_on_screen)
+        except tk.TclError:
+            pass
+        return True
 
     def starting_values(self):
         """(start, hold) as the engine wants them; empty means automatic."""
@@ -9204,6 +9497,8 @@ class RegressionDialog(ToolDialog):
         sheet, names_off = self.build_sheet(good, x_name, options)
         self.app.add_fit_tab(sheet, names_off, plot=bool(self.plot_var.get()))
         self.result_label.configure(text=self.summary(good, failed))
+        self.result_area.canvas.yview_moveto(0.0)
+        self.fit_to_screen()
         return good
 
     def summary(self, results, failed=()):
@@ -9721,10 +10016,16 @@ class DataTable(ttk.Frame):
         for name, (d_row, d_col) in steps.items():
             tree.bind(f"<{name}>", wrap(self.move_cursor, d_row, d_col))
             tree.bind(f"<Shift-{name}>", wrap(self.extend_block, d_row, d_col))
+        # Tab and Shift+Tab walk along the row, as they do in an open cell
+        # (Tk would otherwise send the keyboard on to the next widget of the
+        # window - the formula bar - and the arrows stopped moving the cell)
+        tree.bind("<Tab>", wrap(self.tab_cursor, 1))
+        for sequence in ("<Shift-Tab>", "<ISO_Left_Tab>"):
+            tree.bind(sequence, wrap(self.tab_cursor, -1))
         tree.bind("<Return>", wrap(self.edit_cursor))
         tree.bind("<KP_Enter>", wrap(self.edit_cursor))
         tree.bind("<F2>", wrap(self.edit_cursor))
-        for modifier in ("Control", "Command"):
+        for modifier in COMMAND_MODIFIERS:
             tree.bind(f"<{modifier}-a>", wrap(self.select_all_cells))
             tree.bind(f"<{modifier}-A>", wrap(self.select_all_cells))
             tree.bind(f"<{modifier}-c>", wrap(self.copy_block))
@@ -9743,6 +10044,10 @@ class DataTable(ttk.Frame):
             tree.bind(sequence, wrap(self.clear_block))
         # anything else that is a character starts writing the cell
         tree.bind("<Key>", self._on_grid_typing)
+        # ...and a key typed before a cell had opened goes into that cell
+        late = f"LateKeys{id(self)}"
+        tree.bindtags((late,) + tuple(tree.bindtags()))
+        self.bind_class(late, "<KeyPress>", self._late_grid_key)
 
     def _shape(self):
         return len(self.df), len(self.df.columns)
@@ -9871,6 +10176,29 @@ class DataTable(ttk.Frame):
         self.see_cell(row, col)
         return True
 
+    def tab_cursor(self, step):
+        """Tab (`step` 1) or Shift+Tab (-1) on the table: one cell to the
+        right or to the left; past the end of a row the cursor goes on at
+        the beginning of the next one (the end of the previous one), the
+        way it does in an open cell.  The first and the last cell of the
+        table are as far as it goes."""
+        rows, columns = self._shape()
+        if not rows or not columns:
+            return False
+        row, col = self.cursor
+        col += 1 if step > 0 else -1
+        if col >= columns:
+            row, col = row + 1, 0
+        elif col < 0:
+            row, col = row - 1, columns - 1
+        if not 0 <= row < rows:
+            row, col = self.cursor
+        row = max(0, min(rows - 1, row))
+        col = max(0, min(columns - 1, col))
+        self.select_cell(row, col)
+        self.see_cell(row, col)
+        return True
+
     def select_all_cells(self):
         rows, columns = self._shape()
         if not rows or not columns:
@@ -9951,11 +10279,8 @@ class DataTable(ttk.Frame):
         """
         if self._editor is not None or self._heading_editor is not None:
             return None
-        try:                     # Ctrl / Alt / Cmd: a command, not a letter
-            if int(event.state or 0) & (TYPING_COMMAND_KEYS):
-                return None
-        except (TypeError, ValueError):
-            pass
+        if is_command_key(event):  # Ctrl / Alt / Cmd: a command, not a letter
+            return None
         text = str(event.char or "")
         if len(text) != 1 or not text.isprintable():
             return None
@@ -11696,9 +12021,11 @@ class DataTable(ttk.Frame):
         return (int(row_id), col)
 
     def _on_click(self, event):
-        self.tree.focus_set()
         region = self.tree.identify_region(event.x, event.y)
         column_id = self.tree.identify_column(event.x)
+        if region != "cell":
+            self._commit_edit()         # a click beside the cells closes it
+        self.tree.focus_set()
         if region == "separator" and column_id:
             # the edge of a heading: Tk itself drags it; the new width is
             # taken over when the button is let go
@@ -11948,10 +12275,11 @@ class DataTable(ttk.Frame):
     # -- selection / clipboard --------------------------------------------
     def _bind_text_editing(self, entry, cell=False):
         """Selection and copy bindings shared by the cell and heading editors."""
-        for sequence in ("<Control-a>", "<Control-A>", "<Command-a>", "<Command-A>"):
-            entry.bind(sequence, self._select_all)
-        for sequence in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>"):
-            entry.bind(sequence, self._copy_text)
+        for modifier in COMMAND_MODIFIERS:
+            for letter in ("a", "A"):
+                entry.bind(f"<{modifier}-{letter}>", self._select_all)
+            for letter in ("c", "C"):
+                entry.bind(f"<{modifier}-{letter}>", self._copy_text)
         if not cell:                     # the heading editor holds text only
             entry.bind("<Shift-Up>", lambda e: self._extend_selection(e, "start"))
             entry.bind("<Shift-Down>", lambda e: self._extend_selection(e, "end"))
@@ -12182,11 +12510,226 @@ class DataTable(ttk.Frame):
                              max(0, min(column, len(self.df.columns) - 1)))
         return True
 
+    def _cell_entry(self):
+        """The one text field every cell of this sheet is written in.
+
+        It is made once and moved from cell to cell.  Tk hands a key to the
+        widget that held the keyboard when the key was typed (a Mac does so
+        always): with a new field for every cell, a key typed faster than
+        the next cell opened - a burst of typing, a busy moment of the
+        system - went to the field of the cell just left, which was gone,
+        and was lost.  One field that stays is always the right one.
+        """
+        entry = getattr(self, "_cell_field", None)
+        try:
+            if entry is not None and entry.winfo_exists():
+                return entry
+        except tk.TclError:
+            pass
+        # exportselection=False keeps the highlighted text visible even when
+        # another widget (e.g. the Treeview) takes over the X selection.
+        entry = tk.Entry(self.tree, exportselection=False,
+                         borderwidth=1, relief="solid", justify="center",
+                         insertbackground=CARET_COLOR, insertwidth=2,
+                         insertontime=CARET_ON_MS, insertofftime=CARET_OFF_MS)
+        self._cell_field = entry
+        # first of all: a key that reaches the field while no cell is open
+        guard = f"CellGuard{id(self)}"
+        entry.bindtags((guard,) + tuple(entry.bindtags()))
+        self.bind_class(guard, "<KeyPress>", self._closed_field_key)
+        for sequence, delta in (("<Return>", (1, 0)), ("<KP_Enter>", (1, 0)),
+                                ("<Shift-Return>", (-1, 0)),
+                                ("<Shift-KP_Enter>", (-1, 0)),
+                                ("<Down>", (1, 0)), ("<Up>", (-1, 0)),
+                                ("<Tab>", (0, 1)), ("<Shift-Tab>", (0, -1)),
+                                ("<ISO_Left_Tab>", (0, -1))):
+            entry.bind(sequence, lambda _e, d=delta: self._move(*d))
+        # Left / Right walk inside the text and step to the neighbouring cell
+        # when the cursor is already at the end of it
+        entry.bind("<Left>", lambda e: self._arrow(e, 0, -1))
+        entry.bind("<Right>", lambda e: self._arrow(e, 0, 1))
+        for prefix in COMMAND_MODIFIERS + ("Alt",):
+            for key, delta in (("Left", (0, -1)), ("Right", (0, 1)),
+                               ("Up", (-1, 0)), ("Down", (1, 0))):
+                entry.bind(f"<{prefix}-{key}>", lambda _e, d=delta: self._move(*d))
+        entry.bind("<Escape>", lambda _e: self._leave_editor())
+        entry.bind("<FocusOut>", self._cell_focus_out)
+        # a block on the clipboard must fill a block of cells, not one cell
+        for prefix in COMMAND_MODIFIERS:
+            for letter in ("v", "V"):
+                entry.bind(f"<{prefix}-{letter}>", self._paste_from_editor)
+            for letter in ("x", "X"):
+                entry.bind(f"<{prefix}-{letter}>", self._cut_from_editor)
+        self._bind_text_editing(entry, cell=True)
+        return entry
+
+    def _cell_focus_out(self, event):
+        """The field lost the keyboard: the cell is kept and closed.
+
+        Not when the keyboard is back in the field already, and not when
+        it went to the table itself while the cell is still open: the
+        click that opens a cell is handled by the table after the cell has
+        opened (Tk's own part of that click takes the keyboard for the
+        table) - the open cell simply takes it back.  Whatever closes a
+        cell on purpose closes it before the table gets the keyboard.
+        """
+        entry = event.widget
+        if self._editor is None or self._editor[0] is not entry:
+            return None
+        try:
+            now = entry.focus_get()
+        except (tk.TclError, KeyError):
+            now = None
+        if now is entry:
+            return None
+        if now is self.tree:
+            def back(field=entry):
+                editor = self._editor
+                try:
+                    if (editor is not None and editor[0] is field
+                            and field.focus_get() is self.tree):
+                        field.focus_set()
+                except (tk.TclError, KeyError):
+                    pass
+            entry.after_idle(back)
+            return None
+        self._commit_edit(refocus=False)
+        return None
+
+    def _closed_field_key(self, event):
+        """A key for the cell field while no cell is open in it.
+
+        It was typed just before the cell was closed (`Esc`, or `Shift` and
+        an arrow, and then a key at once): it belongs to the table, which
+        takes the keyboard and this very key."""
+        entry = event.widget
+        if self._editor is not None and self._editor[0] is entry:
+            return None                   # a cell is open: the field's keys
+        try:
+            self.tree.focus_set()
+        except tk.TclError:
+            return "break"
+        if is_command_key(event):
+            return None                   # Ctrl / Cmd: the commands, as ever
+        self._hand_key(self.tree, event)
+        return "break"
+
+    # the keys of the table and of the open cell, for the keys that reach
+    # the wrong one of the two (see `_closed_field_key`, `_late_grid_key`)
+    _ARROWS = {"Up": (-1, 0), "Down": (1, 0), "Left": (0, -1), "Right": (0, 1)}
+
+    def _hand_key(self, widget, event):
+        """Do what one key press does on the table (`widget` is the tree)
+        or in the open cell (`widget` is its field).
+
+        The key is carried out here directly: a key made up again with
+        `event_generate` would go to whichever widget holds the keyboard,
+        which in these moments need not be the one it is meant for.
+        """
+        keysym = str(getattr(event, "keysym", "") or "")
+        try:
+            state = int(event.state or 0)
+        except (TypeError, ValueError):
+            state = 0
+        shift = bool(state & 0x0001)
+        char = str(getattr(event, "char", "") or "")
+        typed = (len(char) == 1 and char.isprintable()
+                 and keysym not in ("Tab", "ISO_Left_Tab"))
+        if widget is self.tree:
+            if typed:
+                return self._on_grid_typing(event) == "break"
+            if keysym in self._ARROWS:
+                d_row, d_col = self._ARROWS[keysym]
+                (self.extend_block if shift else self.move_cursor)(d_row, d_col)
+            elif keysym in ("Tab", "ISO_Left_Tab"):
+                self.tab_cursor(-1 if shift or keysym == "ISO_Left_Tab" else 1)
+            elif keysym in ("Return", "KP_Enter", "F2"):
+                self.edit_cursor()
+            elif keysym in ("Delete", "BackSpace"):
+                self.clear_block()
+            else:
+                return False
+            return True
+        editor = self._editor
+        if editor is None or editor[0] is not widget:
+            return False
+        entry = widget
+        try:
+            if typed:
+                entry.tk.call("tk::EntryInsert", entry, char)
+                entry.xview("insert")
+            elif keysym in ("Tab", "ISO_Left_Tab"):
+                self._move(0, -1 if shift or keysym == "ISO_Left_Tab" else 1)
+            elif keysym in ("Return", "KP_Enter"):
+                self._move(-1 if shift else 1, 0)
+            elif keysym in ("Up", "Down"):
+                if shift:
+                    self._block_from_editor(self._ARROWS[keysym][0], 0)
+                else:
+                    self._move(*self._ARROWS[keysym])
+            elif keysym in ("Left", "Right"):
+                step = self._ARROWS[keysym][1]
+                moved = self._arrow(_KeyLike(entry), 0, step)
+                if moved is None:
+                    entry.selection_clear()
+                    entry.icursor(max(0, entry.index("insert") + step))
+            elif keysym == "BackSpace":
+                entry.tk.call("tk::EntryBackspace", entry)
+            elif keysym == "Delete":
+                if entry.selection_present():
+                    entry.delete("sel.first", "sel.last")
+                else:
+                    entry.delete("insert")
+            elif keysym == "Escape":
+                self._leave_editor()
+            else:
+                return False
+        except tk.TclError:
+            return False
+        return True
+
+    def _late_grid_key(self, event):
+        """A key for the table itself while a cell is open.
+
+        It was typed before the cell had opened - quick typing on the grid
+        ("1", "2", Tab ...): the open cell takes it, so "12" is not cut to
+        "1" and the Tab does not walk the table from under the open cell."""
+        editor = self._editor
+        if editor is None:
+            return None                   # the table's own keys
+        entry = editor[0]
+        try:
+            if not entry.winfo_manager():
+                return None               # (placed, even if not drawn yet)
+        except tk.TclError:
+            return None
+        if is_command_key(event):
+            return None                   # Ctrl / Cmd: commands, as always
+        try:
+            entry.focus_set()
+        except tk.TclError:
+            return None
+        if self._hand_key(entry, event):
+            return "break"
+        return None
+
+    def _park_keyboard(self):
+        """The cell field was closed while it had the keyboard: the table
+        takes it, so the arrows walk the cells at once."""
+        entry = getattr(self, "_cell_field", None)
+        try:
+            if entry is not None and entry.focus_get() is entry:
+                self.tree.focus_set()
+        except (tk.TclError, KeyError):
+            pass
+
     def _begin_edit(self, row_id, col_index, retry=True):
-        self._commit_edit()
+        self._commit_edit(refocus=False)
         if not self.tree.exists(row_id) or not (0 <= col_index < len(self.df.columns)):
+            self._park_keyboard()
             return
         if self._selecting and self.block_cells()[0] > 1:
+            self._park_keyboard()
             return          # the pointer is drawing a block, not editing
         # opening a cell for editing makes that cell the whole selection
         self.select_cell(int(row_id), col_index)
@@ -12194,8 +12737,9 @@ class DataTable(ttk.Frame):
         self.update_idletasks()
         bbox = self.tree.bbox(row_id, f"#{col_index + 1}")
         if not bbox:
+            self._park_keyboard()
             if retry:  # the row was scrolled into view only now
-                self.after(20, lambda: self._begin_edit(row_id, col_index, False))
+                self.after(20, lambda: self._retry_edit(row_id, col_index))
             return
 
         x, y, width, height = bbox
@@ -12206,15 +12750,17 @@ class DataTable(ttk.Frame):
         var = tk.StringVar(value=init_val)
         # what the cell held: an editor left with the same text changes nothing
         self._editor_start = str(init_val)
-        # exportselection=False keeps the highlighted text visible even when
-        # another widget (e.g. the Treeview) takes over the X selection.
-        entry = tk.Entry(self.tree, textvariable=var, exportselection=False,
-                         borderwidth=1, relief="solid", justify="center",
-                         insertbackground=CARET_COLOR, insertwidth=2,
-                         insertontime=CARET_ON_MS, insertofftime=CARET_OFF_MS)
+        entry = self._cell_entry()
+        entry.configure(textvariable=var)
         entry.place(x=x, y=y, width=width, height=height)
+        entry.lift()
+        # placed now, shown at once: Tk gives the keyboard to a widget that
+        # is not shown yet only once it appears - until then the keys went
+        # on to the table, and a passing FocusOut closed the cell again
+        self.update_idletasks()
         entry.focus_set()
         entry.icursor("end")
+        entry.xview("end")
         entry.select_range(0, "end")
         self._editor = (entry, var, row_id, col_index)
         # the editor must not bury the fill handle of the selection
@@ -12224,28 +12770,14 @@ class DataTable(ttk.Frame):
         self._insist_editor_focus(entry)
         self.after(30, lambda box=entry: self._insist_editor_focus(box))
 
-        for sequence, delta in (("<Return>", (1, 0)), ("<KP_Enter>", (1, 0)),
-                                ("<Down>", (1, 0)), ("<Up>", (-1, 0)),
-                                ("<Tab>", (0, 1)), ("<Shift-Tab>", (0, -1)),
-                                ("<ISO_Left_Tab>", (0, -1))):
-            entry.bind(sequence, lambda _e, d=delta: self._move(*d))
-        # Left / Right walk inside the text and step to the neighbouring cell
-        # when the cursor is already at the end of it
-        entry.bind("<Left>", lambda e: self._arrow(e, 0, -1))
-        entry.bind("<Right>", lambda e: self._arrow(e, 0, 1))
-        for prefix in ("Control", "Command", "Alt"):
-            for key, delta in (("Left", (0, -1)), ("Right", (0, 1)),
-                               ("Up", (-1, 0)), ("Down", (1, 0))):
-                entry.bind(f"<{prefix}-{key}>", lambda _e, d=delta: self._move(*d))
-        entry.bind("<Escape>", lambda _e: self._leave_editor())
-        entry.bind("<FocusOut>", lambda _e: self._commit_edit())
-        # a block on the clipboard must fill a block of cells, not one cell
-        for prefix in ("Control", "Command"):
-            for letter in ("v", "V"):
-                entry.bind(f"<{prefix}-{letter}>", self._paste_from_editor)
-            for letter in ("x", "X"):
-                entry.bind(f"<{prefix}-{letter}>", self._cut_from_editor)
-        self._bind_text_editing(entry, cell=True)
+    def _retry_edit(self, row_id, col_index):
+        """The second try of `_begin_edit`, once the row is on the screen -
+        unless a key typed meanwhile has opened a cell already."""
+        if self._editor is not None or self._heading_editor is not None:
+            return None
+        if tuple(self.cursor) != (int(row_id), int(col_index)):
+            return None                  # the cursor has gone on since
+        return self._begin_edit(row_id, col_index, False)
 
     def _insist_editor_focus(self, entry):
         """Keep the keyboard - and the blinking cursor - inside the cell.
@@ -12337,44 +12869,71 @@ class DataTable(ttk.Frame):
         return self._move(d_row, d_col)
 
     def _move(self, d_row, d_col):
+        """Enter, Tab or an arrow in an open cell: keep it, open the next.
+
+        The next cell opens within the same key press, in the same text
+        field (see `_cell_entry`): a key typed faster than the program
+        follows - quick typing, a busy moment of the system - goes into the
+        next cell, where it belongs.  It used to be lost, or written over
+        the cell just left.
+        """
         if not self._editor:
             return "break"
         _entry, _var, row_id, col_index = self._editor
         columns = len(self.df.columns)
-        self._commit_edit()
+        self._commit_edit(refocus=False)   # the field keeps the keyboard
 
         row = int(row_id) + d_row
         col = col_index + d_col
+        wrapped = False
         if col >= columns:
-            col, row = 0, row + 1
+            col, row, wrapped = 0, row + 1, True
         elif col < 0:
-            col, row = columns - 1, row - 1
+            col, row, wrapped = columns - 1, row - 1, True
+        if wrapped and row < 0:
+            # before the very first cell there is nothing: it stays there
+            row, col = int(row_id), col_index
 
         if row >= len(self.df):
             if self.config_obj.get("table", "auto_extend"):
                 while row >= len(self.df):  # grow the table as needed
                     self.add_row()
+            elif wrapped:
+                row, col = int(row_id), col_index   # the very last cell
             else:
                 row = len(self.df) - 1
         row = max(0, min(len(self.df) - 1, row))
         col = max(0, min(columns - 1, col))
-        self.after(1, lambda: self._begin_edit(str(row), col))
+        self.select_cell(row, col)       # the cursor is there at once
+        self._begin_edit(str(row), col)
         return "break"
 
-    def _cancel_edit(self):
+    def _hide_field(self, entry, refocus=True):
+        """Put the cell field away (it stays, for the next cell)."""
+        if refocus:
+            self._park_keyboard()
+        try:
+            entry.selection_clear()
+            entry.place_forget()
+            entry.configure(textvariable="")
+            entry.delete(0, "end")
+        except tk.TclError:
+            pass
+
+    def _cancel_edit(self, refocus=True):
         if self._editor:
             entry, *_ = self._editor
             self._editor = None
-            entry.destroy()
+            self._hide_field(entry, refocus)
         return "break"
 
-    def _commit_edit(self):
+    def _commit_edit(self, refocus=True):
         if not self._editor:
             return
         entry, var, row_id, col_index = self._editor
         self._editor = None
         text = var.get()
-        entry.destroy()
+        self._hide_field(entry, refocus)
         if text == getattr(self, "_editor_start", None):
             # the cell was only visited (every click opens its editor): it
             # is left exactly as it was - no write, no step for Undo, and
@@ -12494,7 +13053,8 @@ class DataTable(ttk.Frame):
         row_idx = row_1_based - 1
         if 0 <= row_idx < len(self.df) and 0 <= col_idx < len(self.df.columns):
             self.select_cell(row_idx, col_idx)
-            self.tree.see(str(row_idx))
+            self.see_cell(row_idx, col_idx)
+            self.tree.focus_set()        # the arrows walk on from there
 
     def _update_formula_bar(self):
         if not hasattr(self, "formula_bar") or not len(self.df.columns) or not len(self.df):
@@ -12577,9 +13137,13 @@ class DataTable(ttk.Frame):
         self._changed()
         self._update_formula_bar()
         self._update_status_bar()
+        # the keyboard goes back to the sheet: the arrows walk the cells
+        # again at once, instead of moving inside the formula bar
+        self.tree.focus_set()
 
     def _formula_bar_cancel(self):
         self._update_formula_bar()
+        self.tree.focus_set()
 
     def open_column_math(self):
         ColumnMathDialog(self.winfo_toplevel(), self)
@@ -13848,7 +14412,37 @@ class PlotWindow(tk.Toplevel):
                 widget.focus_set()
         except (tk.TclError, AttributeError):
             pass
+        app = getattr(self, "app", None)
+        if app is not None:
+            app.plot_used(self)
         return None            # never "break": matplotlib needs the click too
+
+    def take_keyboard(self):
+        """Become the active window, with the keyboard on the diagram.
+
+        A cell of the spreadsheet that is being written and the little
+        in-place text editor keep the keyboard."""
+        if self._inline is not None:
+            return False
+        app = getattr(self, "app", None)
+        try:
+            current = self.focus_displayof()
+        except (tk.TclError, KeyError):
+            current = None
+        if app is not None and current is not None:
+            try:
+                if app.keyboard_busy(current):
+                    return False
+            except (tk.TclError, AttributeError):
+                pass
+        try:
+            self.lift()
+            self.canvas.get_tk_widget().focus_force()
+        except (tk.TclError, AttributeError):
+            return False
+        if app is not None:
+            app.plot_used(self)
+        return True
 
     def _bind_native_focus(self):
         """Every click in the diagram brings the keyboard back, natively."""
@@ -13941,6 +14535,9 @@ class PlotWindow(tk.Toplevel):
         to another window: after a property dialog was used, its own field
         may still be holding it.
         """
+        app = getattr(self, "app", None)
+        if app is not None:
+            app.plot_used(self)
         try:
             current = self.focus_displayof()
         except (tk.TclError, KeyError):
@@ -13953,7 +14550,6 @@ class PlotWindow(tk.Toplevel):
                 return None            # a widget of this window: it keeps it
         except tk.TclError:
             current = None
-        app = getattr(self, "app", None)
         if app is not None and current is not None:
             try:
                 if app.keyboard_busy(current):
@@ -13982,7 +14578,7 @@ class PlotWindow(tk.Toplevel):
             except tk.TclError:
                 pass
 
-        for modifier in ("Control", "Command"):
+        for modifier in COMMAND_MODIFIERS:
             for letter in ("c", "C"):
                 bind_both(f"<{modifier}-{letter}>", wrap(self.copy_shortcut))
             for letter in ("v", "V"):
@@ -22231,7 +22827,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.7 (2026-10-22)**.  The number is written in one place
+This is **APlot 1.3.8 (2026-11-04)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -22361,6 +22957,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
 | 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
 | 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
 | 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
@@ -22860,7 +23457,7 @@ sheets together:
 | Button | Row | What it does |
 | --- | --- | --- |
 | Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
-| Update | first | Sends the current data to the diagrams that are already open, keeping every style setting. |
+| Update | first | Sends the current data to the diagrams that are already open, keeping every style setting.  The diagrams come to the front, and the one used last **gets the keyboard** as well - the arrow keys move its selected object at once (a click into the sheet gives the keyboard back to the sheet). |
 | Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
 | Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
 | Save graph (disc icon) | first | Writes the whole graph - the sheets and the diagrams - into the `.aplt` file.  `Cmd/Ctrl+S`. |
@@ -23033,10 +23630,20 @@ the program itself, so nothing beyond numpy is needed.
   from - useful when a difficult fit runs away - and ticking `Hold` beside
   it **keeps that parameter fixed** at the value typed in while the others
   are fitted (a plateau that is known, a baseline that is zero).
+  The list grows up to **seven parameters**; with more of them (a
+  polynomial of order 7 to 10) it keeps that height and **scrolls**, with a
+  scroll bar at its right edge - the wheel and `Tab` reach every line - so
+  the window never grows taller and its `Fit` and `Close` buttons stay on
+  the screen.  Values typed in stay when only the order changes.
 * **The curve that is written**: how many `Points` it is drawn with (100)
   and how far `Past the data` it reaches (5 per cent of the range at both
   ends).  A moving average says nothing outside the measurements, so it is
   never drawn past them.
+
+The answer under the settings - every parameter of every fitted column,
+with R squared - shows six lines and scrolls the same way when it is
+longer.  On a small screen both lists give up lines (down to a few) until
+the whole window fits.
 
 **What `Fit` does**
 
@@ -23701,11 +24308,19 @@ nothing.
   cursor and is the first character in it, as in a spreadsheet.  `Enter`
   or `F2` opens it with the value that is there instead.
 * Click a cell to edit it.  The text is selected, so typing replaces it.
-* `Enter` or `Down` moves one row down, `Up` one row up.
+* `Enter` or `Down` moves one row down, `Shift+Enter` or `Up` one row up.
 * `Tab` moves right, `Shift+Tab` moves left; at the end of a row the cursor
-  wraps to the beginning of the next one.
+  wraps to the beginning of the next one (and `Shift+Tab` back to the end
+  of the row above).  Before the very first cell there is nothing, so the
+  cursor stays there.
 * Leaving the last row appends a new row automatically, so the table grows
-  as long as you keep typing.  This can be switched off in the settings.
+  as long as you keep typing.  This can be switched off in the settings
+  (the cursor then stays in the last row).
+* **Nothing typed is lost, however fast**: the next cell opens within the
+  same key press, and keys that come in before it is on the screen - a
+  quick `1`, `Tab`, `2`, `Tab`, `3`, `Enter`, or a moment the computer is
+  busy redrawing a diagram - go into the cells they were meant for.  (Up to
+  1.3.7 such keys could go missing, or end up in the cell just left.)
 * `Left` and `Right` move the text cursor inside the cell, and step to the
   neighbouring cell once the cursor has reached the end of the text (at the
   end of a row they wrap to the next one, exactly like `Tab`).
@@ -23724,7 +24339,11 @@ nothing.
   (`Cmd+A` on macOS) selects the whole text of the cell and `Ctrl+C`
   (`Cmd+C`) copies it.
 * `Esc` closes the editor and leaves the keyboard on the table itself,
-  where the arrow keys walk from cell to cell.
+  where the arrow keys walk from cell to cell - and `Tab` and `Shift+Tab`
+  as well, along the row.
+* `Enter` (or `Esc`) in the **formula bar** gives the keyboard back to the
+  sheet, and so does jumping to a cell with the address box: the arrows walk
+  on from there at once.
 
 Values that look like numbers are stored as numbers; everything else is
 kept as text and is ignored when plotting.
@@ -23750,6 +24369,7 @@ leaves its row quiet.
 | `Shift`+click a heading | Selects that whole column. |
 | `Shift`+arrow keys | One row or column more (or less) in the block - this also works while a cell is being edited, where `Shift+Up/Down` leaves the editor at once and `Shift+Left/Right` first select the text of the cell. |
 | Arrow keys (no Shift) | Walk from cell to cell; the block collapses to that one cell. |
+| `Tab` / `Shift+Tab` | One cell to the right / to the left, on to the next row (the previous one) at the end of a row - the keyboard stays on the table. |
 | `Shift+Space` | The whole rows the block touches (they become tinted). |
 | `Ctrl/Cmd+Space` | The whole columns the block touches. |
 | `Ctrl/Cmd+A` | The whole table. |
@@ -23761,7 +24381,11 @@ keyboard, even when a diagram window was the one in front a moment before
 (after a graph was opened, for instance): the cell takes the keyboard back
 for itself, and a diagram window never takes it away from a cell that is
 being edited.  Clicking in the diagram, as always, gives the keyboard back
-to the diagram.
+to the diagram.  **The keyboard follows the window in front**: going back
+and forth between the sheet and a diagram (a click on a title bar, the
+Dock, `Cmd+Tab`), editing cells in between, `Update`, or the axes window
+opened and closed again - the window that comes to the front has the
+keys, and in a diagram the arrows move the selected object.
 
 The block is what the data operations work on:
 
@@ -23952,7 +24576,7 @@ another place (see `Moving the whole graph`).
 | Drag any selected-able object | Moves it (the title, the axis labels, the legend boxes, text boxes, drawings and arrows all move freely). |
 | Drag a control point | Resizes a drawing, moves the tip or the tail of an arrow or of a line, or makes an axis longer or shorter.  On a **picture** the four **corner** points keep its proportions and the four **side** points squeeze or stretch it (see `Resizing with the control points`). |
 | Drag the round control point above a drawing or a text box | Turns it around its centre (a text box around its own anchor); `Shift` keeps 15 degree steps.  A line has no such point: its two ends give the direction. |
-| Arrow keys | Move the selected object by one pixel, with `Shift` by ten. |
+| Arrow keys | Move the selected object by one pixel, with `Shift` by ten.  They also do so while one of the diagram's property windows is in front - after `Apply`, say - unless a field of that window (a number, a text, a list) has the keyboard and needs them itself. |
 | Right click (`Ctrl`+click on a Mac) | The menu of that object: `Copy`, `Cut`, `Paste`, `Duplicate`, `Bring to front`, `Bring forward`, `Send backward`, `Send to back` (see `Which object is in front`).  On the **paper** the same menu ends with `Resize graph`.  It works while a property window is in front of the diagram as well: the diagram comes to the front and its menu opens a moment later. |
 | Wheel / `Ctrl/Cmd`+wheel | Scrolls the page in the window / zooms the view around the pointer; the toolbar's `-`, zoom and `+` do the same (see `The page`). |
 | `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V` | Copies or cuts out the selected text box, drawing, picture or arrow with all of its properties, and pastes another copy of it.  Of the two things that can be waiting - an object copied here and a picture on the clipboard of the system - `Ctrl/Cmd+V` takes the **newer** one. |
@@ -25324,6 +25948,13 @@ belong to the characters of that text, exactly as everywhere else.
 | Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
 
+**With Caps Lock or Num Lock on** every shortcut works the same.  (Up
+to 1.3.7 `Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z` and `Q` did nothing with
+Caps Lock on, and with Num Lock on Linux took `Ctrl+O`, `S` and `E` for
+`Ctrl+Alt+O`, `S` and `E` - `Import data`, `Export data`, `Export as
+matplotlib script`.  `Cmd` is bound on a Mac only: elsewhere Tk reads it
+as `Alt`, or as Num Lock on Windows.)
+
 **Saving with one key.**  `Cmd/Ctrl+S` asks for a name only the **first**
 time.  From then on the graph belongs to that file: every further
 `Cmd/Ctrl+S` simply brings it up to date, with no dialog and no message,
@@ -26381,11 +27012,8 @@ class App:
         widget = getattr(event, "widget", None)
         if not self.keyboard_nowhere(widget, buttons=False):
             return None
-        try:
-            if int(event.state or 0) & TYPING_COMMAND_KEYS:
-                return None           # a command: the menus deal with it
-        except (TypeError, ValueError):
-            pass
+        if is_command_key(event):
+            return None               # a command: the menus deal with it
         table = self.table
         if table is None or not self.focus_sheet(force=True):
             return None
@@ -27499,10 +28127,14 @@ class App:
             window.bind("<F9>", wrap(self.new_random_numbers))
         except tk.TclError:
             pass
-        for modifier in ("Control", "Command"):
+        for modifier in COMMAND_MODIFIERS:
             for letter, handler in commands.items():
                 try:
                     window.bind(f"<{modifier}-{letter}>", handler)
+                    # with Caps Lock on the key arrives as the capital
+                    # letter - and without Shift it is still this command
+                    # (before, none of these keys did anything then)
+                    window.bind(f"<Lock-{modifier}-{letter.upper()}>", handler)
                 except tk.TclError:
                     pass
             for letter, handler in shifted.items():
@@ -27514,7 +28146,7 @@ class App:
                     except tk.TclError:
                         pass
             for letter, handler in with_alt.items():
-                for extra in ("Alt", "Option", "Mod2"):
+                for extra in SECOND_MODIFIERS:
                     for name in (letter, letter.upper()):
                         try:
                             window.bind(f"<{modifier}-{extra}-{name}>", handler)
@@ -28437,7 +29069,30 @@ class App:
             index = self.window_tab(window)
             window.update_data(self.plot_data(index=index),
                                layout=self.plot_layout(index=index))
-            window.lift()
+        # the diagrams come to the front - the one used last on top - and
+        # that one becomes the active window as well: the window in front
+        # is the one the keys go to.  Before, the diagram stood in front
+        # while the keyboard stayed with the sheet behind it, and the arrow
+        # keys moved cells there instead of the selected object.
+        recent = self.recent_plot()
+        for window in windows:
+            if window is not recent:
+                window.lift()
+        if recent is not None:
+            recent.lift()
+            recent.take_keyboard()
+
+    def recent_plot(self):
+        """The diagram window that had the keyboard last (or the newest)."""
+        windows = self.open_windows()
+        recent = getattr(self, "_recent_plot", None)
+        if recent is not None and recent in windows:
+            return recent
+        return windows[-1] if windows else None
+
+    def plot_used(self, window):
+        """A diagram window has the keyboard (see `recent_plot`)."""
+        self._recent_plot = window
 
     def window_tab(self, window):
         """The sheet a diagram was made from (the one in front by default)."""
