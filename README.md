@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.0 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.1 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
 | 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
 | 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
 | 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
@@ -2798,6 +2799,10 @@ switched on in `Curve properties` like any other.
     Values that are zero or negative have no logarithm and are left out.
   * `Opacity (0-1)` with a `Colour bar` switch next to it (on to begin
     with), and the `Colour bar label` written along the bar.
+  * `Exchange the X and Y axes (turn the picture)`: the Y column runs
+    across and the X column runs up.  The labels, the ranges and the steps
+    of the two axes change places with it, and every surface of the
+    diagram is turned together.
 * **Colour surface properties** (visible for Colour Surfaces):
   * `Shading`: `Flat` paints one cell of one colour around every point,
     `Smooth` blends the colours from point to point.

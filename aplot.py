@@ -33,7 +33,8 @@ Spreadsheet window
 * cell text can be selected with the mouse, with Shift+arrows or Ctrl/Cmd+A
   and copied with Ctrl/Cmd+C; Ctrl/Cmd+C on a selected row copies the row
 * click a column heading to rename it; the name is the legend text of that
-  curve and, for the first column, the label of the X axis
+  curve and, for the first column, the label of the X axis; a row of cells
+  pasted into a heading (Ctrl/Cmd+V) names that column and the ones after it
 
 Files
 -----
@@ -109,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.4.0 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
+1.4.1 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -262,7 +263,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 APP_VERSION_DATE = "2026-11-13"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -6610,6 +6611,12 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                              textvariable=self.sf_bar_label_var))
         self.sf_bar_label_var.trace_add("write", self._apply)
 
+        self.sf_swap_var = tk.BooleanVar(value=bool(cfg.get("swap")))
+        self._wide(ttk.Checkbutton(box, text="Exchange the X and Y axes "
+                                             "(turn the picture)",
+                                   variable=self.sf_swap_var,
+                                   command=self._apply), 8, pady=(4, 0))
+
     def _build_pcolor_box(self):
         """Colour surface: how the cells are painted."""
         box = ttk.LabelFrame(self.body, text="Colour surface properties",
@@ -7105,6 +7112,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                 "shading": code_of(SURFACE_SHADINGS,
                                    self.sf_shading_var.get(), "flat"),
                 "edges": bool(self.sf_edges_var.get()),
+                "swap": bool(self.sf_swap_var.get()),
                 "levels": max(1, min(to_int(self.sf_levels_var.get(),
                                             SURFACE_LEVELS),
                                      MAX_SURFACE_LEVELS)),
@@ -12597,6 +12605,8 @@ class DataTable(ttk.Frame):
         index = list(self.df.columns).index(old)
         if str(old) in self.column_widths:     # the width goes with the name
             self.column_widths[str(new)] = self.column_widths.pop(str(old))
+        if str(old) in self.axis_vars:         # ...and so does its axis
+            self.axis_vars[str(new)] = self.axis_vars.pop(str(old))
         self.df = self.df.rename(columns={old: new})
         self.refresh()
         self.current_column = new
@@ -12845,6 +12855,11 @@ class DataTable(ttk.Frame):
         entry.bind("<KP_Enter>", lambda _e: self._commit_heading_edit())
         entry.bind("<Escape>", lambda _e: self._cancel_heading_edit())
         entry.bind("<FocusOut>", lambda _e: self._commit_heading_edit())
+        # a row of names on the clipboard names a row of columns, not one
+        for prefix in COMMAND_MODIFIERS:
+            for letter in ("v", "V"):
+                entry.bind(f"<{prefix}-{letter}>", self._paste_into_heading)
+        entry.bind("<<Paste>>", self._paste_into_heading)
         self._bind_text_editing(entry)
 
     def _cancel_heading_edit(self):
@@ -12866,6 +12881,66 @@ class DataTable(ttk.Frame):
                 "Error", f"'{new}' cannot be used as a column name "
                          "(it is empty or already exists).", parent=self)
         return "break"
+
+    def _paste_into_heading(self, _event=None):
+        """Ctrl/Cmd+V in a heading: a row of names fills a row of headings.
+
+        A single name is left to the text editor, so it can be pasted into
+        the middle of a heading.  Names divided by tabs - a row of cells
+        copied from a sheet - are given to this column and to the ones
+        after it, one name each, just as they stood in their own columns.
+        """
+        text = self._clipboard_text()
+        if not self._heading_editor or not self.is_block_text(text):
+            return None                  # one name: the normal text paste
+        _entry, _var, old = self._heading_editor
+        self._cancel_heading_edit()
+        first = next((line for line in str(text).replace("\r", "\n")
+                      .split("\n") if line.strip()), "")
+        columns = [str(one) for one in self.df.columns]
+        if str(old) in columns:
+            self.rename_columns(columns.index(str(old)), first.split("\t"))
+        self.tree.focus_set()
+        return "break"
+
+    def rename_columns(self, start, new_names):
+        """Name the columns from `start` on, one name each, in one step.
+
+        An empty name leaves its column as it is, and a name that is
+        already taken by another column gets a number after it.  Returns
+        how many columns were renamed.
+        """
+        columns = list(self.df.columns)
+        final = [str(one) for one in columns]
+        changed = []
+        for offset, name in enumerate(new_names):
+            index = start + offset
+            if not (0 <= index < len(columns)):
+                break
+            name = " ".join(str(name).split())
+            if not name or name == final[index]:
+                continue
+            others = set(final[:index] + final[index + 1:])
+            wanted, number = name, 1
+            while name in others:
+                number += 1
+                name = f"{wanted}.{number}"
+            changed.append((index, columns[index], name))
+            final[index] = name
+        if not changed:
+            return 0
+        for _index, old, new in changed:   # the width goes with the name
+            if str(old) in self.column_widths:
+                self.column_widths[new] = self.column_widths.pop(str(old))
+            if str(old) in self.axis_vars:      # ...and so does its axis
+                self.axis_vars[new] = self.axis_vars.pop(str(old))
+        self.df.columns = final
+        self.refresh()
+        self.current_column = changed[0][2]
+        if self.on_rename:
+            for index, old, new in changed:
+                self.on_rename(old, new, index)
+        return len(changed)
 
     # -- selection / clipboard --------------------------------------------
     def _bind_text_editing(self, entry, cell=False):
@@ -16362,7 +16437,35 @@ class PlotWindow(tk.Toplevel):
         if self.text_x_mode(df):
             # the first column names the rows: there is no X value to read
             return self.row_number_points(df, y_col)
-        return self._series_data(df, x_col, y_col)
+        x, y = self._series_data(df, x_col, y_col)
+        if style in SURFACE_STYLES and self.surface_swapped(y_col):
+            return y, x                # the surface is turned: Y runs across
+        return x, y
+
+    def surface_swapped(self, column):
+        """True when a surface is drawn with its X and Y columns exchanged."""
+        return bool((self.surface_cfg.get(column) or {}).get("swap"))
+
+    def swap_surface_axes(self):
+        """The two axes change places: labels, ranges, steps and scales.
+
+        Called when a surface is turned, so that what was read along the
+        X axis is read along the Y axis afterwards - the same numbers and
+        the same text, only on the other side.
+        """
+        labels = {which: self.axis_label(which) for which in ("x", "y")}
+        limits = {which: sorted(self.current_limits(which))
+                  for which in ("x", "y")}
+        was = {which: dict(self.axis_cfg[which]) for which in ("x", "y")}
+        for which, other in (("x", "y"), ("y", "x")):
+            moved = {name: was[other].get(name) for name in
+                     ("auto", "step", "minor", "scale", "direction",
+                      "ends_on_ticks") if name in was[other]}
+            self.apply_axis(which, {**was[which], **moved,
+                                    "label": labels[other],
+                                    "min": limits[other][0],
+                                    "max": limits[other][1]}, redraw=False)
+        return True
 
     def refresh_histogram(self, column):
         """Count the values of `column` again and draw the bars."""
@@ -16697,7 +16800,7 @@ class PlotWindow(tk.Toplevel):
         return {"zcol": "", "cmap": "viridis", "reverse": False,
                 "alpha": 1.0, "colorbar": True, "bar_label": "",
                 "vmin": None, "vmax": None, "log": False,
-                "shading": "flat", "edges": False,
+                "shading": "flat", "edges": False, "swap": False,
                 "levels": SURFACE_LEVELS, "linewidth": 1.2, "linestyle": "-",
                 "onecolor": False, "outline": False, "color": "#000000",
                 "labels": False, "label_size": 9}
@@ -17360,12 +17463,47 @@ class PlotWindow(tk.Toplevel):
         for column in list(self.series):
             self.refresh_fill(column)
 
+    def rename_reference(self, old, new):
+        """A column that is no curve was renamed: the Z values of a surface."""
+        self._follow_column_name(old, new)
+        for cfg in self.surface_cfg.values():
+            if str(cfg.get("zcol") or "") == str(old):
+                cfg["zcol"] = str(new)
+        return True
+
+    def _follow_column_name(self, old, new):
+        """The copy of the table this diagram draws from learns a new name.
+
+        Without it the diagram would look for the old name the next time a
+        curve is drawn again - and a surface would not find its Z values.
+        """
+        names = [str(one) for one in self.df.columns]
+        if str(old) in names and str(new) not in names:
+            self.df = self.df.rename(columns={
+                column: str(new) for column in self.df.columns
+                if str(column) == str(old)})
+        for store in (self.error_partner, self.error_partner_low):
+            for key in list(store):
+                value = store[key]
+                if str(value) == str(old):
+                    store[key] = value = str(new)
+                if str(key) == str(old):
+                    store[str(new)] = store.pop(key)
+        return True
+
     def rename_series(self, old, new, is_x_column=False):
         """Follow a column rename in the spreadsheet.
 
         Legend texts and the X axis label are only changed when they still
         carry the automatic (column) name - custom texts are kept.
         """
+        self._follow_column_name(old, new)
+        if self.plot_style in SURFACE_STYLES:
+            # x, y, z: both axes carry the name of a column - and a turned
+            # surface carries them on the other axis
+            for label in (self.ax.xaxis.label, self.ax.yaxis.label):
+                if label.get_text() == str(old):
+                    label.set_text(str(new))
         if is_x_column:
             if self.ax.get_xlabel() == old:
                 self.ax.set_xlabel(new)
@@ -17986,6 +18124,9 @@ class PlotWindow(tk.Toplevel):
                + (f" & (sz_{tag} > 0))" if plan["log"] else ")"),
                f"sx_{tag}, sy_{tag}, sz_{tag} = "
                f"sx_{tag}[ok_{tag}], sy_{tag}[ok_{tag}], sz_{tag}[ok_{tag}]"]
+        if self.surface_swapped(column):
+            out += ["# the surface is turned: the Y column runs across",
+                    f"sx_{tag}, sy_{tag} = sy_{tag}, sx_{tag}"]
         grid = plan["grid"]
         if grid:
             out += [
@@ -23176,6 +23317,16 @@ class PlotWindow(tk.Toplevel):
             self.open_properties(kind, key)
             return True
         name = self.series_at(event)       # a curve of either Y axis
+        if name is not None and self.covering_series_at(event):
+            # a surface lies over the lines of the frame and of the axes:
+            # on the edge of the plot area those are what is meant
+            if kind == "frame":
+                self.open_properties(kind, key)
+                return True
+            which = self.edge_axis_at(event.x, event.y)
+            if which:
+                self.open_axes_dialog(which)
+                return True
         if name is not None:
             if self.selection is not None:
                 self.select_object(None, None)
@@ -23388,11 +23539,63 @@ class PlotWindow(tk.Toplevel):
                 try:
                     if not artist.get_visible():
                         continue
+                    if not self._drawn_under(artist, event):
+                        continue
                     hit, _info = artist.contains(event)
                 except (ValueError, TypeError, AttributeError, RuntimeError):
                     continue
                 if hit:
                     return name
+        return None
+
+    @staticmethod
+    def _drawn_under(artist, event):
+        """False where the artist is cut away by the edge of the plot area.
+
+        A curve or a surface that reaches beyond the range of the axes is
+        clipped there - but its hit test still answers for the part that is
+        not drawn.  With a range made smaller than the data the invisible
+        rest of a surface would lie under the numbers and the labels of the
+        axes and take every click meant for them.
+        """
+        axes = getattr(artist, "axes", None)
+        if axes is None or not artist.get_clip_on():
+            return True
+        box = axes.get_window_extent()
+        return (box.x0 <= event.x <= box.x1) and (box.y0 <= event.y <= box.y1)
+
+    def covering_series_at(self, event):
+        """True when what the pointer finds is a surface, not a curve.
+
+        A coloured surface, filled contours and a 2D histogram cover the
+        whole plot area, the lines of its frame included - so there the
+        frame and the axes are asked first.
+        """
+        name = self.series_at(event)
+        if name is None:
+            return False
+        style = self.series_style.get(name, self.plot_style)
+        return style in SURFACE_STYLES or style == "hist2d"
+
+    def edge_axis_at(self, x, y):
+        """The axis whose edge of the plot area is under the pointer.
+
+        "x", "y" or "y2" - whether a frame line is drawn there or not.
+        """
+        if x is None or y is None:
+            return None
+        box = self.ax.get_window_extent()
+        tolerance = max(4.0, float(self.frame_cfg.get("width", 1.0)) + 3.0)
+        if not (box.x0 - tolerance <= x <= box.x1 + tolerance
+                and box.y0 - tolerance <= y <= box.y1 + tolerance):
+            return None
+        x_edge = box.y1 if self.x_side == "top" else box.y0
+        if abs(y - x_edge) <= tolerance:
+            return "x"
+        if abs(x - box.x0) <= tolerance and self.left_axis_shown():
+            return "y"
+        if abs(x - box.x1) <= tolerance and self.right_axis_active():
+            return "y2"
         return None
 
     def frame_side_at(self, x, y):
@@ -23847,10 +24050,24 @@ class PlotWindow(tk.Toplevel):
         def set_surface_cfg(cfg):
             if column is None or cfg == self.surface_cfg.get(column):
                 return               # a surface of many cells is not quick
+            turned = bool(cfg.get("swap")) != self.surface_swapped(column)
             self.surface_cfg[column] = cfg
-            if self.series_style.get(column,
-                                     self.plot_style) in SURFACE_STYLES:
+            surfaces = [name for name in self.series
+                        if self.series_style.get(name, self.plot_style)
+                        in SURFACE_STYLES]
+            if turned:
+                # one plot area has one X and one Y axis: every surface of
+                # the diagram is turned together
+                for name in surfaces:
+                    if name != column:
+                        self.surface_cfg.setdefault(
+                            name, self.default_surface_cfg())["swap"] = \
+                            bool(cfg.get("swap"))
+                        self.refresh_series_visuals(name)
+            if column in surfaces:
                 self.refresh_series_visuals(column)
+                if turned:
+                    self.swap_surface_axes()
                 self._rescale()      # flat cells reach beyond their points
 
         def set_pie_cfg(cfg):
@@ -24028,7 +24245,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.0 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.1 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -24159,6 +24376,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
 | 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
 | 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
 | 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
@@ -26797,6 +27015,10 @@ switched on in `Curve properties` like any other.
     Values that are zero or negative have no logarithm and are left out.
   * `Opacity (0-1)` with a `Colour bar` switch next to it (on to begin
     with), and the `Colour bar label` written along the bar.
+  * `Exchange the X and Y axes (turn the picture)`: the Y column runs
+    across and the X column runs up.  The labels, the ranges and the steps
+    of the two axes change places with it, and every surface of the
+    diagram is turned together.
 * **Colour surface properties** (visible for Colour Surfaces):
   * `Shading`: `Flat` paints one cell of one colour around every point,
     `Smooth` blends the colours from point to point.
@@ -30069,6 +30291,8 @@ class App:
                     window.rename_series(old, new, is_x_column=True)
                     followed += 1
                 continue
+            if len(chain) == 1:            # the names are the sheet's own
+                window.rename_reference(old, new)   # a Z column, say
             if new not in names:
                 continue                   # not drawn from this sheet at all
             drawn_new = names[new]
