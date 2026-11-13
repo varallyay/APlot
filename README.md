@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.2 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.3 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.3 | 2026-11-13 | The axes of the three **x, y, z** styles - `Colour Surface (pcolor)`, `Contour Lines` and `Filled Contours` - **begin and end on a major tick**, as the axes of every other plot style do: the automatic range is rounded out to the ticks around the surface instead of stopping at its edge.  Where the surface ends between two ticks a narrow strip of the plot area stays empty beside it; `Begin and end on a major tick` of `Axes properties` switches the rounding off for one axis, and the surface fills its plot area to the edge again.  A diagram saved by 1.4.0 - 1.4.2 opens as it was saved.  `Exchange the X and Y axes (turn the picture)` turns contour lines and filled contours exactly as it turns a colour surface - over a grid or over scattered points - and the ticks at the two ends of the axes change places with the rest. |
 | 1.4.2 | 2026-11-13 | The report at the first start after an update - *"APlot has been updated from ... to ..."*, what is new and what is left to do - is a window of its own with a **scroll bar** instead of a message box, which grew with its text until its button was below the screen: the window is never taller than the main (data sheet) window, the rest is reached by scrolling, and it lists every version since the one that was updated, not only the newest six; `OK`, `Return` or `Esc` closes it, and the program can be used while it is open.  The window that offers a newer version keeps within the height of the main window too, and shows up to 20 lines of what is new. |
 | 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
 | 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
@@ -2827,8 +2828,11 @@ switched on in `Curve properties` like any other.
   into triangles and drawn from those.  A column that holds one single
   value cannot be an axis: of `x, y, z, value` data taken on the plane
   `x = constant`, delete the `x` column so that `y`, `z` and the value
-  are left.  The automatic range of such a diagram ends at the edge of the
-  surface instead of on the next tick, so no white band is left around it.
+  are left.  The automatic range of such a diagram begins and ends on a
+  major tick, as that of every other diagram does; where the surface
+  ends between two ticks a narrow strip stays empty beside it.  Switch
+  `Begin and end on a major tick` off in `Axes properties` and the range
+  ends at the edge of the surface instead.
 * **Pie properties** (visible for Pie Charts):
   * `Slice colours`: the colour map the slices are taken from - `Tab10` and
     `Tab20` give distinct colours, the others a smooth scale.
