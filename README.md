@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.10 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.0 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
 | 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
 | 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
 | 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
@@ -680,7 +681,7 @@ sheets together:
 
 | Button | Row | What it does |
 | --- | --- | --- |
-| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
+| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 13 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting.  The diagrams come to the front, and the one used last **gets the keyboard** as well - the arrow keys move its selected object at once (a click into the sheet gives the keyboard back to the sheet). |
 | Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
 | Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
@@ -1039,6 +1040,16 @@ an immediate action with a style menu:
     (`ax.hist2d`): where the points crowd together the cell is brighter.
     The number of bins across X and up Y, the colour scale, the opacity and
     an optional colour bar are all settings of the curve.
+  * **Colour Surface (pcolor)**: Three columns, **x, y, z**: the Z values
+    painted as coloured cells over the X/Y plane (`ax.pcolormesh`, the
+    `pcolor` of MATLAB) - a field over a cross-section, a map, a
+    spectrogram.  The first column is X, the second Y and the third Z;
+    further pairs of columns (`y`, `z`, `y`, `z`, ...) are further surfaces.
+  * **Contour Lines**: The same x, y, z columns as the **lines of equal
+    Z** (`ax.contour`), as the height lines of a map are drawn, with the
+    values written on them if wanted.
+  * **Filled Contours**: The **bands between** those lines, each in one
+    colour (`ax.contourf`), with or without the lines themselves.
   * **Pie Chart**: The values of **one** column as slices of a circle
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
@@ -2639,12 +2650,14 @@ and moves it (see `Moving the whole graph`), so the properties need the
 second click, exactly like a text box or a drawing.
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 10 styles: **Line +
+representation of any individual curve between all 13 styles: **Line +
 Symbol**, **Line**, **Scatter**, **Bar Chart**, **Error Bar (Median, SD)**,
 **Error Bar (Median, +error, -error)**, **Histogram**, **Stairs**,
-**2D Histogram** and **Pie Chart**.  A single curve switched to an error
+**2D Histogram**, **Colour Surface (pcolor)**, **Contour Lines**,
+**Filled Contours** and **Pie Chart**.  A single curve switched to an error
 bar style by hand reads the column after it (or the two columns after it)
-for its errors.  The dialog shows exactly
+for its errors, and one switched to a surface or contour style reads the
+column after it for its Z values.  The dialog shows exactly
 the sections that style can use, and nothing else:
 
 | Style | Sections |
@@ -2658,6 +2671,9 @@ the sections that style can use, and nothing else:
 | Histogram | Legend, Histogram properties |
 | Stairs | Legend, Stairs properties |
 | 2D Histogram | Legend, 2D histogram properties |
+| Colour Surface (pcolor) | Legend, Colour scale (Z values), Colour surface properties |
+| Contour Lines | Legend, Colour scale (Z values), Contour properties |
+| Filled Contours | Legend, Colour scale (Z values), Contour properties |
 | Pie Chart | Legend, Pie properties |
 
 The dialog sections each have **their own check button as the title**: switched
@@ -2693,7 +2709,10 @@ looks like in front of the text: a line with its marker for a curve, a
 **coloured bar** for a bar chart and a histogram, a marker with an
 **error bar** through it for an error bar plot, the **staircase** itself for
 a stairs plot, one **slice** for a pie and a patch of the **colour scale**
-for a 2D histogram.
+for a 2D histogram, a colour surface and filled contours (a piece of line
+for contour lines).  A diagram opened as a surface or as contours starts
+**without** a legend box - its colour bar is its legend - and the box can be
+switched on in `Curve properties` like any other.
 
 * **Bar properties** (visible for Bar Charts):
   * `Width`: the width of the bars in X-axis data units.
@@ -2764,6 +2783,46 @@ for a 2D histogram.
   * `Leave the empty cells white`: on (the default) a cell with nothing in
     it is not painted at all, so the background stays visible; off, it is
     painted with the lowest colour of the scale.
+* **Colour scale (Z values)** (visible for Colour Surfaces, Contour Lines
+  and Filled Contours - the three styles share these settings, so a
+  surface switched to contours keeps its colours):
+  * `Z values from`: the column that holds Z.  `(the next column)` - the
+    column standing right after this one in the table - to begin with; any
+    other column can be chosen.
+  * `Colour scale`: the same 21 colour maps, and `Turn the colour scale
+    round` to run any of them the other way.
+  * `Lowest Z` and `Highest Z`: the two ends of the colour scale.  An empty
+    field follows the data; a number typed in fixes that end, which is how
+    two diagrams are given the same scale.
+  * `Logarithmic colour scale`: for values that span several decades.
+    Values that are zero or negative have no logarithm and are left out.
+  * `Opacity (0-1)` with a `Colour bar` switch next to it (on to begin
+    with), and the `Colour bar label` written along the bar.
+* **Colour surface properties** (visible for Colour Surfaces):
+  * `Shading`: `Flat` paints one cell of one colour around every point,
+    `Smooth` blends the colours from point to point.
+  * `Draw the edges of the cells`: a thin black line around every cell.
+* **Contour properties** (visible for Contour Lines and Filled Contours):
+  * `Levels`: how many lines (or bands) are drawn, 10 to begin with.  They
+    stand at round numbers, as the ticks of an axis do - or exactly evenly
+    between `Lowest Z` and `Highest Z` when those are typed in.
+  * `Line width`, `Line style` and `Line colour`.
+  * `Draw every line in one colour` (Contour Lines): off, each line has
+    the colour of its level on the colour scale; on, all of them have the
+    `Line colour`.
+  * `Draw the lines between the bands` (Filled Contours): the contour
+    lines over the coloured bands, in the `Line colour`.
+  * `Values on the lines` with their `Font size`: the Z value of each line
+    written into a gap of the line itself.
+* **How the x, y, z points become a picture.**  Points that stand on a
+  **rectangular grid** - every Y for the first X, every Y for the second,
+  in any order of the rows - are drawn as that grid; a few missing points
+  stay empty cells.  Points **scattered freely** over the plane are joined
+  into triangles and drawn from those.  A column that holds one single
+  value cannot be an axis: of `x, y, z, value` data taken on the plane
+  `x = constant`, delete the `x` column so that `y`, `z` and the value
+  are left.  The automatic range of such a diagram ends at the edge of the
+  surface instead of on the next tick, so no white band is left around it.
 * **Pie properties** (visible for Pie Charts):
   * `Slice colours`: the colour map the slices are taken from - `Tab10` and
     `Tab20` give distinct colours, the others a smooth scale.

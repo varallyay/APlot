@@ -47,8 +47,9 @@ Files
 
 Plot window
 -----------
-* nine plot styles, each with its own settings: line + symbol, line,
-  scatter, bar chart, error bar, histogram, stairs, 2D histogram and pie
+* thirteen plot styles, each with its own settings: line + symbol, line,
+  scatter, bar chart, two kinds of error bar, histogram, stairs, 2D
+  histogram, colour surface (pcolor), contour lines, filled contours, pie
 * drawings and text boxes can be turned to any angle: drag the round
   control point above them (Shift: 15 degree steps) or type the angle in
   their property window
@@ -108,7 +109,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.10 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
+1.4.0 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -232,7 +233,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.backend_bases import MouseEvent
-from matplotlib.colors import to_hex, to_rgba
+from matplotlib.colors import LogNorm, Normalize, to_hex, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.image import BboxImage
 from matplotlib.legend import Legend
@@ -261,7 +262,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.10"
+APP_VERSION = "1.4.0"
 APP_VERSION_DATE = "2026-11-13"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -322,6 +323,12 @@ PLOT_STYLES = [
     ("Histogram", "histogram", "Counts the values of a column into bins"),
     ("Stairs", "stairs", "A stepped outline of the values (ax.stairs)"),
     ("2D Histogram", "hist2d", "Counts the X/Y pairs in a grid (ax.hist2d)"),
+    ("Colour Surface (pcolor)", "pcolor",
+     "x, y, z: the Z values as coloured cells (ax.pcolormesh)"),
+    ("Contour Lines", "contour",
+     "x, y, z: the lines of equal Z (ax.contour)"),
+    ("Filled Contours", "contourf",
+     "x, y, z: the bands between the lines of equal Z (ax.contourf)"),
     ("Pie Chart", "pie", "The values of one column as slices (ax.pie)"),
 ]
 
@@ -329,6 +336,15 @@ PLOT_STYLES = [
 # (upwards and downwards).  Everything that is true of an error bar diagram
 # is true of both of them.
 ERROR_STYLES = ("errorbar", "errorbar_pm")
+
+# the three styles that draw a third column, Z, over the X/Y plane: a
+# coloured surface, the lines of equal Z and the bands between them.  Their
+# columns are read in pairs - x, y, z, y, z, ... - and everything that is
+# true of one of them (the Z column, the colour scale, the colour bar) is
+# true of all three, so they share one group of settings.
+SURFACE_STYLES = ("pcolor", "contour", "contourf")
+# the styles whose curves take the column after them for themselves
+PAIRED_STYLES = ERROR_STYLES + SURFACE_STYLES
 
 ERROR_SOURCES = [
     ("Next column (x, mean, std)", "pair"),
@@ -389,6 +405,13 @@ COLOR_MAPS = [
 PIE_LABELS = [("The text of the first column", "column"),
               ("The row number", "row")]
 
+# how a colour surface paints its cells
+SURFACE_SHADINGS = [("Flat (one colour per point)", "flat"),
+                    ("Smooth (colours blended)", "smooth")]
+SURFACE_NEXT_COLUMN = "(the next column)"    # where the Z values come from
+SURFACE_LEVELS = 10        # the levels of a contour plot
+MAX_SURFACE_LEVELS = 200
+SURFACE_GRID_DIGITS = 9    # two X (or Y) values this close are one grid line
 HIST2D_BINS = 20           # the grid of a 2D histogram, per axis
 MAX_HIST2D_BINS = 500
 PIE_START_ANGLE = 90.0     # the first slice starts at the top
@@ -3335,7 +3358,7 @@ class PlotSplitButton(ttk.Button):
     """The Plot button: a little picture of the style it will draw.
 
     The icon follows the chosen style - a line, a pie, a staircase - and the
-    arrow on its right opens the list of the nine of them.
+    arrow on its right opens the list of all of them.
     """
 
     LABEL = "  Plot"            # the word beside the picture
@@ -3459,7 +3482,7 @@ def _dots(draw, box, points, color=ICON_BLUE, radius=0.1, outline=ICON_INK):
                      width=max(1, int(round(0.022 * box))))
 
 
-# -- the nine plot styles ---------------------------------------------------
+# -- the plot styles --------------------------------------------------------
 # every one of them is a tiny picture of the diagram it draws
 _CURVE = [(0.12, 0.78), (0.34, 0.44), (0.56, 0.60), (0.80, 0.20)]
 
@@ -3533,6 +3556,45 @@ def _paint_hist2d(draw, box):
                  ICON_PAPER, 0.02)
 
 
+def _paint_pcolor(draw, box):
+    """A surface: a fine grid of cells that brighten towards one corner."""
+    shades = (ICON_MUTED, ICON_BLUE, ICON_LILAC, ICON_SAGE, ICON_SAND,
+              ICON_ROSE)
+    cells = 4
+    step = 0.76 / cells
+    for row in range(cells):
+        for column in range(cells):
+            x = 0.12 + column * step
+            y = 0.12 + row * step
+            depth = column + (cells - 1 - row)
+            draw.rectangle([x * box, y * box, (x + step) * box,
+                            (y + step) * box],
+                           fill=shades[min(depth, len(shades) - 1)])
+    _bar(draw, box, 0.12, 0.12, 0.88, 0.88, None, ICON_INK, 0.03)
+
+
+def _rings(draw, box, filled):
+    """The closed lines of equal height around one peak."""
+    shades = (ICON_MUTED, ICON_BLUE, ICON_SAGE, ICON_SAND)
+    centre_x, centre_y = 0.52, 0.50
+    for index, (half_w, half_h) in enumerate(((0.42, 0.38), (0.31, 0.27),
+                                              (0.20, 0.17), (0.09, 0.07))):
+        shape = [(centre_x - half_w) * box, (centre_y - half_h) * box,
+                 (centre_x + half_w) * box, (centre_y + half_h) * box]
+        draw.ellipse(shape, fill=shades[index] if filled else None,
+                     outline=ICON_INK if filled else ICON_STROKE,
+                     width=max(1, int(round((0.022 if filled else 0.05)
+                                            * box))))
+
+
+def _paint_contour(draw, box):
+    _rings(draw, box, False)
+
+
+def _paint_contourf(draw, box):
+    _rings(draw, box, True)
+
+
 def _paint_pie(draw, box):
     low, high = 0.11 * box, 0.89 * box
     draw.pieslice([low, low, high, high], 0, 360, fill=ICON_BLUE,
@@ -3553,6 +3615,9 @@ PLOT_ICON_PAINTERS = {
     "histogram": _paint_histogram,
     "stairs": _paint_stairs,
     "hist2d": _paint_hist2d,
+    "pcolor": _paint_pcolor,
+    "contour": _paint_contour,
+    "contourf": _paint_contourf,
     "pie": _paint_pie,
 }
 
@@ -5910,6 +5975,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                  stairs_cfg=None, on_stairs_cfg=None,
                  hist2d_cfg=None, on_hist2d_cfg=None,
                  pie_cfg=None, on_pie_cfg=None,
+                 surface_cfg=None, on_surface_cfg=None,
                  available_columns=None):
         super().__init__(master, "Curve properties", on_close=on_close)
         self.line = line
@@ -5930,6 +5996,8 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self.on_hist2d_cfg = on_hist2d_cfg
         self.pie_cfg = dict(pie_cfg or {})
         self.on_pie_cfg = on_pie_cfg
+        self.surface_cfg = dict(surface_cfg or {})
+        self.on_surface_cfg = on_surface_cfg
         self.error_cfg = dict(error_cfg or {})
         self.on_error_cfg = on_error_cfg
         self.available_columns = list(available_columns or [])
@@ -5981,12 +6049,17 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self._build_error_box(line_color)
         self._build_stairs_box(line_color)
         self._build_hist2d_box()
+        self._build_surface_box()
+        self._build_pcolor_box()
+        self._build_contour_box()
         self._build_pie_box(line_color)
         self._build_fill_box(line_color)
         self._align_columns((self.legend_box, self.line_box,
                              self.marker_box, self.bar_box,
                              self.error_box, self.stairs_box,
-                             self.hist2d_box, self.pie_box, self.fill_box))
+                             self.hist2d_box, self.surface_box,
+                             self.pcolor_box, self.contour_box,
+                             self.pie_box, self.fill_box))
         self._update_section_visibility()
         self._build_buttons()
         self.mirror(force=True)
@@ -6446,6 +6519,189 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                                    variable=self.h2_empty_var,
                                    command=self._apply), 3, pady=(4, 0))
 
+    # -- x, y, z: a coloured surface, contour lines, filled contours -------
+    @staticmethod
+    def _limit_text(value):
+        """A limit of the colour scale as the field shows it: empty = automatic."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return ""
+        return f"{number:g}" if math.isfinite(number) else ""
+
+    @staticmethod
+    def _limit_value(text):
+        """What was typed for a limit of the colour scale, or None."""
+        try:
+            number = float(str(text).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    def _build_surface_box(self):
+        """What the three x, y, z styles share: Z, the colours, the bar."""
+        box = ttk.LabelFrame(self.body, text="Colour scale (Z values)",
+                             padding=8)
+        self.surface_box = box
+        cfg = self.surface_cfg
+        columns = [str(one) for one in self.available_columns
+                   if str(one) != str(self.column)]
+        chosen = str(cfg.get("zcol") or "")
+        self.sf_zcol_var = tk.StringVar(
+            value=chosen if chosen in columns else SURFACE_NEXT_COLUMN)
+        self.sf_cmap_var = tk.StringVar(
+            value=name_of(COLOR_MAPS, cfg.get("cmap", "viridis"),
+                          names(COLOR_MAPS)[0]))
+        self.sf_reverse_var = tk.BooleanVar(value=bool(cfg.get("reverse")))
+        self.sf_alpha_var = tk.StringVar(value=str(cfg.get("alpha", 1.0)))
+        self.sf_bar_var = tk.BooleanVar(value=bool(cfg.get("colorbar", True)))
+        self.sf_bar_label_var = tk.StringVar(
+            value=str(cfg.get("bar_label") or ""))
+        self.sf_vmin_var = tk.StringVar(value=self._limit_text(cfg.get("vmin")))
+        self.sf_vmax_var = tk.StringVar(value=self._limit_text(cfg.get("vmax")))
+        self.sf_log_var = tk.BooleanVar(value=bool(cfg.get("log")))
+
+        combo = ttk.Combobox(box, textvariable=self.sf_zcol_var,
+                             state="readonly", width=22,
+                             values=[SURFACE_NEXT_COLUMN] + columns)
+        self.field(box, 0, "Z values from:", combo)
+        combo.bind("<<ComboboxSelected>>", self._apply)
+
+        combo = ttk.Combobox(box, textvariable=self.sf_cmap_var,
+                             state="readonly", values=names(COLOR_MAPS),
+                             width=22)
+        self.field(box, 1, "Colour scale:", combo)
+        combo.bind("<<ComboboxSelected>>", self._apply)
+
+        self._wide(ttk.Checkbutton(box, text="Turn the colour scale round",
+                                   variable=self.sf_reverse_var,
+                                   command=self._apply), 2, pady=(2, 2))
+
+        self._pair(box, 3,
+                   "Lowest Z:",
+                   ttk.Entry(box, width=SPIN_WIDTH + 3,
+                             textvariable=self.sf_vmin_var),
+                   "Highest Z:",
+                   ttk.Entry(box, width=SPIN_WIDTH + 3,
+                             textvariable=self.sf_vmax_var))
+        self.sf_vmin_var.trace_add("write", self._apply)
+        self.sf_vmax_var.trace_add("write", self._apply)
+        self._wide(ttk.Label(box, foreground="#666",
+                             text="An empty field follows the data."),
+                   4, pady=(0, 2))
+
+        self._wide(ttk.Checkbutton(box, text="Logarithmic colour scale",
+                                   variable=self.sf_log_var,
+                                   command=self._apply), 5, pady=(2, 2))
+
+        self._pair(box, 6,
+                   "Opacity (0-1):",
+                   ttk.Spinbox(box, from_=0, to=1, increment=0.05,
+                               width=SPIN_WIDTH + 1,
+                               textvariable=self.sf_alpha_var,
+                               command=self._apply),
+                   "Colour bar:",
+                   ttk.Checkbutton(box, variable=self.sf_bar_var,
+                                   command=self._apply))
+        self.sf_alpha_var.trace_add("write", self._apply)
+
+        self.field(box, 7, "Colour bar label:",
+                   ttk.Entry(box, width=24,
+                             textvariable=self.sf_bar_label_var))
+        self.sf_bar_label_var.trace_add("write", self._apply)
+
+    def _build_pcolor_box(self):
+        """Colour surface: how the cells are painted."""
+        box = ttk.LabelFrame(self.body, text="Colour surface properties",
+                             padding=8)
+        self.pcolor_box = box
+        cfg = self.surface_cfg
+        self.sf_shading_var = tk.StringVar(
+            value=name_of(SURFACE_SHADINGS, cfg.get("shading", "flat"),
+                          names(SURFACE_SHADINGS)[0]))
+        self.sf_edges_var = tk.BooleanVar(value=bool(cfg.get("edges")))
+        combo = ttk.Combobox(box, textvariable=self.sf_shading_var,
+                             state="readonly", width=24,
+                             values=names(SURFACE_SHADINGS))
+        self.field(box, 0, "Shading:", combo)
+        combo.bind("<<ComboboxSelected>>", self._apply)
+        self._wide(ttk.Checkbutton(box, text="Draw the edges of the cells",
+                                   variable=self.sf_edges_var,
+                                   command=self._apply), 1, pady=(4, 0))
+
+    def _build_contour_box(self):
+        """Contours: the levels, the lines and the numbers written on them."""
+        box = ttk.LabelFrame(self.body, text="Contour properties", padding=8)
+        self.contour_box = box
+        cfg = self.surface_cfg
+        self.sf_levels_var = tk.StringVar(
+            value=str(int(cfg.get("levels", SURFACE_LEVELS))))
+        self.sf_lwidth_var = tk.StringVar(
+            value=f"{float(cfg.get('linewidth', 1.2)):g}")
+        self.sf_lstyle_var = tk.StringVar(
+            value=name_of(LINE_STYLES[:-1], cfg.get("linestyle", "-"),
+                          "Solid"))
+        self.sf_onecolor_var = tk.BooleanVar(value=bool(cfg.get("onecolor")))
+        self.sf_outline_var = tk.BooleanVar(value=bool(cfg.get("outline")))
+        self.sf_labels_var = tk.BooleanVar(value=bool(cfg.get("labels")))
+        self.sf_label_size_var = tk.StringVar(
+            value=str(int(cfg.get("label_size", 9))))
+        self.sf_line_color = ColorSwatch(
+            box, cfg.get("color", "#000000"),
+            command=lambda _c: self._apply())
+
+        self._pair(box, 0,
+                   "Levels:",
+                   ttk.Spinbox(box, from_=1, to=MAX_SURFACE_LEVELS,
+                               increment=1, width=SPIN_WIDTH,
+                               textvariable=self.sf_levels_var,
+                               command=self._apply),
+                   "Line width:",
+                   ttk.Spinbox(box, from_=0.1, to=10, increment=0.1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.sf_lwidth_var,
+                               command=self._apply))
+        self.sf_levels_var.trace_add("write", self._apply)
+        self.sf_lwidth_var.trace_add("write", self._apply)
+
+        # the two styles ask a different question about their lines in the
+        # same place: only one of the two switches is shown at a time
+        self.sf_onecolor_check = ttk.Checkbutton(
+            box, text="Draw every line in one colour",
+            variable=self.sf_onecolor_var, command=self._apply)
+        self.sf_outline_check = ttk.Checkbutton(
+            box, text="Draw the lines between the bands",
+            variable=self.sf_outline_var, command=self._apply)
+        self._wide(self.sf_onecolor_check, 1, pady=(4, 2))
+        self._wide(self.sf_outline_check, 1, pady=(4, 2))
+
+        combo = ttk.Combobox(box, textvariable=self.sf_lstyle_var,
+                             state="readonly", width=SPIN_WIDTH + 4,
+                             values=names(LINE_STYLES[:-1]))
+        self._pair(box, 2, "Line style:", combo,
+                   "Line colour:", self.sf_line_color)
+        combo.bind("<<ComboboxSelected>>", self._apply)
+
+        self._pair(box, 3,
+                   "Values on the lines:",
+                   ttk.Checkbutton(box, variable=self.sf_labels_var,
+                                   command=self._apply),
+                   "Font size:",
+                   ttk.Spinbox(box, from_=4, to=40, increment=1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.sf_label_size_var,
+                               command=self._apply))
+        self.sf_label_size_var.trace_add("write", self._apply)
+
+    def _show_contour_fields(self, filled):
+        """Contour lines choose their colour, filled contours their lines."""
+        if filled:
+            self.sf_onecolor_check.grid_remove()
+            self.sf_outline_check.grid()
+        else:
+            self.sf_outline_check.grid_remove()
+            self.sf_onecolor_check.grid()
+
     def _build_pie_box(self, line_color):
         """Pie: the slices, their names and the numbers written on them."""
         box = ttk.LabelFrame(self.body, text="Pie properties", padding=8)
@@ -6640,6 +6896,9 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         "errorbar_pm": ("marker_box", "line_box", "error_box"),
         "stairs": ("stairs_box",),
         "hist2d": ("hist2d_box",),
+        "pcolor": ("surface_box", "pcolor_box"),
+        "contour": ("surface_box", "contour_box"),
+        "contourf": ("surface_box", "contour_box"),
         "pie": ("pie_box",),
     }
 
@@ -6647,10 +6906,13 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         """Show exactly the sections the plot style of this curve can use."""
         st = self.style_code()
         for name in ("line_box", "marker_box", "bar_box", "error_box",
-                     "stairs_box", "hist2d_box", "pie_box", "fill_box"):
+                     "stairs_box", "hist2d_box", "surface_box",
+                     "pcolor_box", "contour_box", "pie_box", "fill_box"):
             getattr(self, name).pack_forget()
         if st in ("bar", "histogram"):
             self._show_bar_fields(st == "histogram")
+        if st in ("contour", "contourf"):
+            self._show_contour_fields(st == "contourf")
         for name in self.SECTIONS.get(st, self.SECTIONS["line_symbol"]):
             getattr(self, name).pack(fill="x", pady=(10, 0))
         # a pie has one legend row per slice: a single text would be a lie
@@ -6670,7 +6932,8 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         elif st == "line_symbol":
             self.line_on_var.set(True)
             self.marker_on_var.set(True)
-        elif st in ("bar", "histogram", "stairs", "hist2d", "pie"):
+        elif st in ("bar", "histogram", "stairs", "hist2d", "pie",
+                    *SURFACE_STYLES):
             # these draw an artist of their own instead of the curve
             self.line_on_var.set(False)
             self.marker_on_var.set(False)
@@ -6826,6 +7089,33 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                 "alpha": to_float(self.h2_alpha_var.get(), 1.0),
                 "colorbar": bool(self.h2_bar_var.get()),
                 "hide_empty": bool(self.h2_empty_var.get()),
+            })
+        if self.on_surface_cfg:
+            zcol = self.sf_zcol_var.get()
+            self.on_surface_cfg({
+                "zcol": "" if zcol == SURFACE_NEXT_COLUMN else zcol,
+                "cmap": code_of(COLOR_MAPS, self.sf_cmap_var.get(), "viridis"),
+                "reverse": bool(self.sf_reverse_var.get()),
+                "alpha": to_float(self.sf_alpha_var.get(), 1.0),
+                "colorbar": bool(self.sf_bar_var.get()),
+                "bar_label": self.sf_bar_label_var.get().strip(),
+                "vmin": self._limit_value(self.sf_vmin_var.get()),
+                "vmax": self._limit_value(self.sf_vmax_var.get()),
+                "log": bool(self.sf_log_var.get()),
+                "shading": code_of(SURFACE_SHADINGS,
+                                   self.sf_shading_var.get(), "flat"),
+                "edges": bool(self.sf_edges_var.get()),
+                "levels": max(1, min(to_int(self.sf_levels_var.get(),
+                                            SURFACE_LEVELS),
+                                     MAX_SURFACE_LEVELS)),
+                "linewidth": to_float(self.sf_lwidth_var.get(), 1.2),
+                "linestyle": code_of(LINE_STYLES, self.sf_lstyle_var.get(),
+                                     "-"),
+                "onecolor": bool(self.sf_onecolor_var.get()),
+                "outline": bool(self.sf_outline_var.get()),
+                "color": self.sf_line_color.color,
+                "labels": bool(self.sf_labels_var.get()),
+                "label_size": max(4, to_int(self.sf_label_size_var.get(), 9)),
             })
         if self.on_pie_cfg:
             self.on_pie_cfg({
@@ -9483,6 +9773,10 @@ class RegressionDialog(ToolDialog):
                 for _mean, low in dict(window.error_partner_low).items():
                     found.add(str(low))
                 for column, style in dict(window.series_style).items():
+                    if style in SURFACE_STYLES:
+                        partner = window.surface_z_column(column)
+                        if partner:
+                            found.add(str(partner))
                     if style not in ERROR_STYLES:
                         continue
                     cfg = window.error_cfg.get(column) or {}
@@ -13638,6 +13932,8 @@ def scale_style_document(document, factor):
               ("capsize", "capthick", "elinewidth"), length)
         touch(curve.get("histogram_cfg"), ("edgewidth",), length)
         touch(curve.get("stairs_cfg"), ("width",), length)
+        touch(curve.get("surface_cfg"), ("linewidth",), length)
+        touch(curve.get("surface_cfg"), ("label_size",), font)
         touch(curve.get("pie_cfg"), ("edgewidth",), length)
         touch(curve.get("pie_cfg"),
               ("label_size", "name_size", "pct_size"), font)
@@ -13708,6 +14004,8 @@ class PlotWindow(tk.Toplevel):
         self.hist2d_cfg: dict = {}            # column -> {xbins, ybins, cmap, alpha, bar}
         self.hist2d_meshes: dict = {}         # column -> the QuadMesh of ax.hist2d
         self.hist2d_bars: dict = {}           # column -> the colour bar beside it
+        self.surface_cfg: dict = {}           # column -> {zcol, cmap, levels, ...}
+        self.surface_artists: dict = {}       # column -> what pcolor/contour drew
         self.pie_cfg: dict = {}               # column -> {start, percent, hole, labels, ...}
         self.pie_wedges: dict = {}            # column -> the wedges of ax.pie
         self.pie_texts: dict = {}             # column -> the texts drawn on it
@@ -13823,7 +14121,11 @@ class PlotWindow(tk.Toplevel):
                     # which way the axis runs, and how its numbers are spread
                     "direction": "standard", "scale": "linear",
                     # the automatic range begins and ends on a major tick
-                    "ends_on_ticks": bool(plot_cfg.get("ends_on_ticks", True)),
+                    # ... except under a surface, which fills its plot
+                    # area to the edge: a rounded range would leave a white
+                    # band around it
+                    "ends_on_ticks": (bool(plot_cfg.get("ends_on_ticks", True))
+                                      and plot_style not in SURFACE_STYLES),
                     # where the axis stands in the stack: in front of the
                     # diagram to begin with, each of the three on its own
                     # step so that none of them is tied with another
@@ -15212,7 +15514,7 @@ class PlotWindow(tk.Toplevel):
             memory = getattr(self, "_axis_memory", None) or {}
             plot_cfg = self.settings.section("plot")
             fallback = {"x": self.x_axis_name(),
-                        "y": str(plot_cfg.get("y_label", ""))}
+                        "y": self.default_y_label(plot_cfg)}
             self.ax.set_aspect("auto")
             for which in ("x", "y"):
                 saved = memory.get(which) or {}
@@ -15425,11 +15727,48 @@ class PlotWindow(tk.Toplevel):
         self.apply_end_margins(ax)
         try:
             ax.relim(visible_only=True)
+            self.include_surfaces(ax)
             ax.autoscale_view(scalex=scalex, scaley=scaley)
         finally:
             for fill in hidden:
                 fill.set_visible(True)
         return None
+
+    def default_y_label(self, plot_cfg=None):
+        """The text the Y axis carries until it is given one by hand.
+
+        The text of the settings - except in an x, y, z diagram of a single
+        surface, where the Y axis carries exactly one column of the table
+        and that column has a name.
+        """
+        if plot_cfg is None:
+            plot_cfg = self.settings.section("plot")
+        if self.plot_style in SURFACE_STYLES and len(self.series) == 1:
+            return str(next(iter(self.series)))
+        return str(plot_cfg.get("y_label", ""))
+
+    def include_surfaces(self, ax):
+        """Make the range reach the outer edge of the cells of a surface.
+
+        A flat colour surface paints one cell **around** every point, so
+        its outermost cells reach half a cell beyond the outermost points -
+        and the curve that carries the points knows nothing of it.
+        """
+        if ax.get_xscale() != "linear" or ax.get_yscale() != "linear":
+            return False           # half a cell below zero has no logarithm
+        found = False
+        for artists in self.surface_artists.values():
+            for artist in artists:
+                extent = getattr(artist, "aplot_extent", None)
+                if extent is None or getattr(artist, "axes", None) is not ax:
+                    continue
+                try:
+                    ax.update_datalim([(extent[0], extent[2]),
+                                       (extent[1], extent[3])])
+                    found = True
+                except (TypeError, ValueError, IndexError):
+                    continue
+        return found
 
     def ends_on_ticks(self, which):
         """True when the automatic range of that axis ends on major ticks."""
@@ -15444,9 +15783,13 @@ class PlotWindow(tk.Toplevel):
         it one tick further.  Any other axis keeps matplotlib's margin.
         """
         y_which = "y2" if ax is not None and ax is self.ax2 else "y"
+        # a surface reaches the very edge of its plot area: no air either
+        surface = any(getattr(artist, "axes", None) is ax
+                      for artists in self.surface_artists.values()
+                      for artist in artists)
         wanted = []
         for which, key in (("x", "axes.xmargin"), (y_which, "axes.ymargin")):
-            wanted.append(0.0 if self.ends_on_ticks(which)
+            wanted.append(0.0 if (surface or self.ends_on_ticks(which))
                           else float(matplotlib.rcParams[key]))
         try:
             if ax.get_xmargin() != wanted[0]:
@@ -15590,7 +15933,9 @@ class PlotWindow(tk.Toplevel):
 
         # a pie writes the names beside its slices: a box with one single
         # colour in it says nothing, so it starts switched off
-        pie_label = "_nolegend_" if series_st == "pie" else str(y_col)
+        # ... and so does a surface, whose legend is its colour bar
+        pie_label = ("_nolegend_" if series_st in ("pie", *SURFACE_STYLES)
+                     else str(y_col))
         if series_st == "line":
             l_style = code_of(LINE_STYLES, plot_cfg["line_style"], "-")
             if l_style.lower() == "none":
@@ -15599,7 +15944,8 @@ class PlotWindow(tk.Toplevel):
         elif series_st == "scatter":
             l_style = "none"
             m_style = self.marker_for_new_curve()
-        elif series_st in ("bar", "histogram", "stairs", "hist2d", "pie"):
+        elif series_st in ("bar", "histogram", "stairs", "hist2d", "pie",
+                           *SURFACE_STYLES):
             l_style = "none"        # the artist beside the curve is the plot
             m_style = "None"
         elif series_st in ERROR_STYLES:
@@ -16243,13 +16589,16 @@ class PlotWindow(tk.Toplevel):
         return patch
 
     # -- the X/Y pairs counted in a grid: ax.hist2d -------------------------
-    def _clear_hist2d(self, column):
+    def _clear_color_bar(self, column):
         bar = self.hist2d_bars.pop(column, None)
         if bar is not None:
             try:
                 bar.remove()               # the colour bar and its own axes
             except (ValueError, AttributeError, KeyError):
                 pass
+
+    def _clear_hist2d(self, column):
+        self._clear_color_bar(column)
         mesh = self.hist2d_meshes.pop(column, None)
         if mesh is not None:
             try:
@@ -16312,7 +16661,7 @@ class PlotWindow(tk.Toplevel):
             self._add_color_bar(column, mesh, target)
         return mesh
 
-    def _add_color_bar(self, column, mesh, target):
+    def _add_color_bar(self, column, mesh, target, label=""):
         """A colour scale beside the plot area, in axes of its own.
 
         It is an inset of the plot area, so it follows it wherever the
@@ -16324,12 +16673,313 @@ class PlotWindow(tk.Toplevel):
             bar.outline.set_linewidth(float(self.frame_cfg.get("width", 1.0)))
             size = int(self.axis_cfg["y"].get("tick_size", 12))
             cax.tick_params(labelsize=size)
+            if label:
+                bar.set_label(str(label), fontsize=int(
+                    self.axis_cfg["y"].get("label_size", size)))
             for artist in (cax, bar.outline):
                 artist.set_in_layout(True)
             self.hist2d_bars[column] = bar
             return bar
         except (ValueError, TypeError, AttributeError):
             return None
+
+    # -- x, y, z: a coloured surface, contour lines, filled contours -------
+    def _clear_surface(self, column):
+        self._clear_color_bar(column)
+        for artist in list(self.surface_artists.pop(column, ()) or ()):
+            try:
+                artist.remove()
+            except (ValueError, AttributeError, NotImplementedError):
+                pass
+
+    @staticmethod
+    def default_surface_cfg(_line=None):
+        return {"zcol": "", "cmap": "viridis", "reverse": False,
+                "alpha": 1.0, "colorbar": True, "bar_label": "",
+                "vmin": None, "vmax": None, "log": False,
+                "shading": "flat", "edges": False,
+                "levels": SURFACE_LEVELS, "linewidth": 1.2, "linestyle": "-",
+                "onecolor": False, "outline": False, "color": "#000000",
+                "labels": False, "label_size": 9}
+
+    def surface_z_column(self, column):
+        """The column that holds the Z values of one surface.
+
+        The one chosen in `Curve properties`, or - to begin with - the
+        column standing right after this one in the table: x, y, z.
+        """
+        chosen = str((self.surface_cfg.get(column) or {}).get("zcol") or "")
+        if chosen and chosen in [str(one) for one in self.df.columns]:
+            return chosen
+        return self.partner_column(column)
+
+    def _column_values(self, name, count, rows=None):
+        """The numbers of one column beside a curve of `count` points."""
+        name = str(name or "")
+        if not name or name not in self.df.columns:
+            return None
+        values = pd.to_numeric(self.df[name], errors="coerce")
+        if rows is not None:
+            try:
+                values = values[rows]
+            except (IndexError, KeyError, TypeError, ValueError):
+                pass
+        values = values.to_numpy(float)
+        if len(values) >= count:
+            return values[:count]
+        return np.pad(values, (0, count - len(values)),
+                      constant_values=np.nan)
+
+    def surface_points(self, column):
+        """The x, y, z triples of one surface, without the gaps."""
+        empty = np.array([], dtype=float)
+        line = self.series.get(column)
+        if line is None:
+            return empty, empty, empty
+        x_arr = np.asarray(line.get_xdata(), dtype=float)
+        y_arr = np.asarray(line.get_ydata(), dtype=float)
+        z_arr = self._column_values(self.surface_z_column(column), len(y_arr),
+                                    self.series_rows(column))
+        if z_arr is None or len(x_arr) != len(y_arr):
+            return empty, empty, empty
+        good = np.isfinite(x_arr) & np.isfinite(y_arr) & np.isfinite(z_arr)
+        if (self.surface_cfg.get(column) or {}).get("log"):
+            good &= z_arr > 0          # nothing else has a logarithm
+        return x_arr[good], y_arr[good], z_arr[good]
+
+    @staticmethod
+    def surface_decimals(values):
+        """The decimals at which two values of an axis are one grid line."""
+        span = float(np.ptp(values)) if len(values) else 0.0
+        if not (span > 0 and math.isfinite(span)):
+            return None
+        return int(SURFACE_GRID_DIGITS - 1 - math.floor(math.log10(span)))
+
+    @classmethod
+    def surface_grid(cls, x_arr, y_arr, z_arr):
+        """The triples as a rectangular grid: (xs, ys, Z, decimals) or None.
+
+        A simulation writes its field out point by point - every Y for the
+        first X, every Y for the second - and so does a table typed row by
+        row.  Such points stand on a grid, and a grid is drawn as it is.
+        A few missing cells are allowed (they stay empty); points scattered
+        freely are no grid at all and are joined into triangles instead.
+        """
+        dx, dy = cls.surface_decimals(x_arr), cls.surface_decimals(y_arr)
+        if dx is None or dy is None or len(z_arr) < 4:
+            return None
+        xs, ix = np.unique(np.round(x_arr, dx), return_inverse=True)
+        ys, iy = np.unique(np.round(y_arr, dy), return_inverse=True)
+        cells = len(xs) * len(ys)
+        if len(xs) < 2 or len(ys) < 2 or not (cells / 2.0 <= len(z_arr)
+                                              <= cells):
+            return None
+        grid = np.full((len(ys), len(xs)), np.nan)
+        grid[np.ravel(iy), np.ravel(ix)] = z_arr
+        return xs, ys, np.ma.masked_invalid(grid), (dx, dy)
+
+    @staticmethod
+    def surface_range(cfg, z_arr):
+        """The two ends of the colour scale: (low, high, typed by hand)."""
+        def typed(key):
+            try:
+                value = float(cfg.get(key))
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        low, high = typed("vmin"), typed("vmax")
+        if cfg.get("log"):
+            low = low if (low is not None and low > 0) else None
+            high = high if (high is not None and high > 0) else None
+        manual = low is not None or high is not None
+        low = float(np.min(z_arr)) if low is None else low
+        high = float(np.max(z_arr)) if high is None else high
+        if high < low:
+            low, high = high, low
+        if high == low:                 # a flat surface still needs a scale
+            if cfg.get("log"):
+                low, high = low / 10.0, high * 10.0
+            else:
+                step = abs(low) * 0.5 or 0.5
+                low, high = low - step, high + step
+        return low, high, manual
+
+    @staticmethod
+    def surface_levels(cfg, low, high, manual, filled):
+        """The Z values the contours are drawn at."""
+        try:
+            count = int(float(cfg.get("levels", SURFACE_LEVELS)))
+        except (TypeError, ValueError):
+            count = SURFACE_LEVELS
+        count = max(1, min(count, MAX_SURFACE_LEVELS))
+        bands = count if filled else count + 1
+        if cfg.get("log"):
+            edges = np.geomspace(low, high, bands + 1)
+        elif manual:
+            edges = np.linspace(low, high, bands + 1)
+        else:
+            # round numbers, as the ticks of an axis are
+            edges = np.asarray(MaxNLocator(bands, min_n_ticks=1)
+                               .tick_values(low, high), dtype=float)
+        if filled:
+            if len(edges) < 2:
+                edges = np.array([low, high], dtype=float)
+            return [float(one) for one in edges]
+        inner = [float(one) for one in edges if low < one < high]
+        return inner or [float((low + high) / 2.0)]
+
+    @staticmethod
+    def surface_cmap_name(cfg):
+        name = str(cfg.get("cmap", "viridis"))
+        if name not in matplotlib.colormaps:
+            name = "viridis"
+        if cfg.get("reverse") and f"{name}_r" in matplotlib.colormaps:
+            name += "_r"
+        return name
+
+    @staticmethod
+    def surface_alpha(cfg):
+        try:
+            return max(0.0, min(float(cfg.get("alpha", 1.0)), 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def surface_plan(self, column):
+        """Everything worked out for one surface before a line is drawn.
+
+        The diagram and the exported matplotlib program are both made from
+        this one description, so they cannot come to differ.
+        """
+        st = self.series_style.get(column, self.plot_style)
+        line = self.series.get(column)
+        if st not in SURFACE_STYLES or line is None:
+            return None
+        cfg = self.surface_cfg.setdefault(column,
+                                          self.default_surface_cfg(line))
+        for key, value in self.default_surface_cfg(line).items():
+            cfg.setdefault(key, value)
+        x_arr, y_arr, z_arr = self.surface_points(column)
+        if len(z_arr) < 3:
+            return None
+        low, high, manual = self.surface_range(cfg, z_arr)
+        filled = st == "contourf"
+        return {
+            "style": st, "cfg": cfg, "x": x_arr, "y": y_arr, "z": z_arr,
+            "grid": self.surface_grid(x_arr, y_arr, z_arr),
+            "low": low, "high": high, "manual": manual,
+            "log": bool(cfg.get("log")),
+            "cmap": self.surface_cmap_name(cfg),
+            "alpha": self.surface_alpha(cfg),
+            "levels": (self.surface_levels(cfg, low, high, manual, filled)
+                       if st != "pcolor" else None),
+            "smooth": str(cfg.get("shading", "flat")) == "smooth",
+            "edges": bool(cfg.get("edges")),
+            "linewidth": max(0.0, float(cfg.get("linewidth", 1.2) or 0.0)),
+            "linestyle": (str(cfg.get("linestyle", "-"))
+                          if str(cfg.get("linestyle", "-")) in
+                          ("-", "--", "-.", ":") else "-"),
+            "color": safe_hex(cfg.get("color"), "#000000"),
+            # filled contours always draw their lines in one colour: a line
+            # in the colour of its own band could not be seen
+            "onecolor": bool(cfg.get("onecolor")) or filled,
+            "lines": (not filled) or bool(cfg.get("outline")),
+            "labels": bool(cfg.get("labels")),
+            "label_size": max(4, int(float(cfg.get("label_size", 9) or 9))),
+            "bar": bool(cfg.get("colorbar")) and not (
+                st == "contour" and cfg.get("onecolor")),
+            "bar_label": str(cfg.get("bar_label") or ""),
+        }
+
+    def refresh_surface(self, column):
+        """Draw the Z column of one curve over its X/Y plane."""
+        self._clear_surface(column)
+        line = self.series.get(column)
+        try:
+            plan = self.surface_plan(column)
+        except (TypeError, ValueError):
+            plan = None
+        if plan is None:
+            return None
+        target = line.axes if line.axes is not None else self.ax
+        base = float(line.get_zorder())
+        norm = (LogNorm if plan["log"] else Normalize)(plan["low"],
+                                                       plan["high"])
+        grid = plan["grid"]
+        where = grid[:3] if grid else (plan["x"], plan["y"], plan["z"])
+        artists, main = [], None
+        try:
+            if plan["style"] == "pcolor":
+                edge = dict(edgecolors="#000000", linewidth=0.3) \
+                    if plan["edges"] else dict(edgecolors="none")
+                if grid:
+                    main = target.pcolormesh(
+                        *where, shading="gouraud" if plan["smooth"]
+                        else "nearest", cmap=plan["cmap"], norm=norm,
+                        alpha=plan["alpha"], zorder=base - 0.3, **edge)
+                    if not plan["smooth"]:
+                        corners = np.asarray(main.get_coordinates(), float)
+                        main.aplot_extent = (
+                            float(corners[..., 0].min()),
+                            float(corners[..., 0].max()),
+                            float(corners[..., 1].min()),
+                            float(corners[..., 1].max()))
+                else:
+                    main = target.tripcolor(
+                        *where, shading="gouraud" if plan["smooth"]
+                        else "flat", cmap=plan["cmap"], norm=norm,
+                        alpha=plan["alpha"], zorder=base - 0.3, **edge)
+                artists.append(main)
+            else:
+                lines = None
+                if plan["style"] == "contourf":
+                    draw = target.contourf if grid else target.tricontourf
+                    main = draw(*where, levels=plan["levels"],
+                                cmap=plan["cmap"], norm=norm,
+                                alpha=plan["alpha"],
+                                extend="both" if plan["manual"] else "neither",
+                                zorder=base - 0.3)
+                    artists.append(main)
+                if plan["lines"]:
+                    draw = target.contour if grid else target.tricontour
+                    colour = (dict(colors=[plan["color"]]) if plan["onecolor"]
+                              else dict(cmap=plan["cmap"], norm=norm))
+                    lines = draw(*where, levels=plan["levels"],
+                                 linewidths=plan["linewidth"],
+                                 linestyles=plan["linestyle"],
+                                 alpha=(plan["alpha"] if main is None
+                                        else None),
+                                 zorder=base - 0.2, **colour)
+                    artists.append(lines)
+                    main = main if main is not None else lines
+                if lines is not None and plan["labels"]:
+                    for text in target.clabel(lines, inline=True,
+                                              fontsize=plan["label_size"],
+                                              zorder=base - 0.1) or ():
+                        artists.append(text)
+        except (ValueError, TypeError, RuntimeError, IndexError):
+            # points on one straight line, say, cannot be made a surface
+            for artist in artists:
+                try:
+                    artist.remove()
+                except (ValueError, AttributeError, NotImplementedError):
+                    pass
+            return None
+        shown = []
+        for artist in artists:
+            # matplotlib before 3.8 hands back a group of collections
+            for one in (getattr(artist, "collections", None) or [artist]):
+                one.aplot_series = str(column)
+                try:
+                    one.set_picker(True)
+                    one.set_label("_nolegend_")
+                except (AttributeError, TypeError):
+                    pass
+                shown.append(one)
+        self.surface_artists[column] = shown
+        if plan["bar"] and main is not None:
+            self._add_color_bar(column, main, target, plan["bar_label"])
+        return main
 
     # -- the values of one column as slices: ax.pie -------------------------
     def _clear_pie(self, column):
@@ -16582,16 +17232,29 @@ class PlotWindow(tk.Toplevel):
     # -- what every style draws beside (or instead of) its curve -----------
     # the styles that draw an artist of their own next to the curve
     EXTRA_ARTISTS = ("bar", "errorbar", "errorbar_pm", "histogram", "stairs",
-                     "hist2d", "pie")
+                     "hist2d", "pie") + SURFACE_STYLES
     # ... and those whose curve is not drawn at all: that artist is the plot
-    CARRIER_ONLY = ("bar", "histogram", "stairs", "hist2d", "pie")
+    CARRIER_ONLY = ("bar", "histogram", "stairs", "hist2d",
+                    "pie") + SURFACE_STYLES
+
+    @staticmethod
+    def artist_family(style):
+        """The name of the methods that draw (and clear) one plot style.
+
+        The two error bar styles are drawn by one method, and so are the
+        three surface styles: they differ only in what they read or call.
+        """
+        if style in ERROR_STYLES:
+            return "errorbar"
+        if style in SURFACE_STYLES:
+            return "surface"
+        return style
 
     def clear_extras(self, column, keep=None):
         """Remove what every other style drew beside this curve."""
-        keep = "errorbar" if keep in ERROR_STYLES else keep
-        for style in self.EXTRA_ARTISTS:
-            if style in ERROR_STYLES:
-                style = "errorbar"        # the two of them share one artist
+        keep = self.artist_family(keep)
+        for style in dict.fromkeys(self.artist_family(one)
+                                   for one in self.EXTRA_ARTISTS):
             if style != keep:
                 getattr(self, f"_clear_{style}")(column)
 
@@ -16627,8 +17290,7 @@ class PlotWindow(tk.Toplevel):
             if st in self.EXTRA_ARTISTS:
                 # both error bar styles are drawn by the same method: one
                 # of them simply reads a second column of error
-                name = "errorbar" if st in ERROR_STYLES else st
-                getattr(self, f"refresh_{name}")(column)
+                getattr(self, f"refresh_{self.artist_family(st)}")(column)
         self.refresh_fill(column)
 
     # -- filled area under a curve -----------------------------------------
@@ -16739,6 +17401,7 @@ class PlotWindow(tk.Toplevel):
         for store in (self.histogram_cfg, self.stairs_cfg,
                       self.hist2d_cfg, self.pie_cfg, self.stairs_patches,
                       self.hist2d_meshes, self.hist2d_bars,
+                      self.surface_cfg, self.surface_artists,
                       self.pie_wedges, self.pie_texts):
             if old in store:
                 store[new] = store.pop(old)
@@ -16796,7 +17459,7 @@ class PlotWindow(tk.Toplevel):
         if len(columns) < 2:
             return [], {}, {}
         rest = columns[1:]
-        if self.plot_style not in ERROR_STYLES:
+        if self.plot_style not in PAIRED_STYLES:
             return rest, {}, {}
         # one error column per curve, or two of them: upwards and downwards.
         #
@@ -16808,6 +17471,9 @@ class PlotWindow(tk.Toplevel):
         # which is how a fitted curve comes to be missing from a diagram.
         # A column of error bars is taken as it stands, full or empty: it
         # belongs to the curve before it wherever it is.
+        #
+        # The three surface styles read their columns the same way, in
+        # pairs: x, y, z, y, z, ... - the column after a curve is its Z.
         step = 3 if self.plot_style == "errorbar_pm" else 2
         curves, partner, lower = [], {}, {}
         index = 0
@@ -16859,6 +17525,7 @@ class PlotWindow(tk.Toplevel):
         self.histogram_cfg.pop(column, None)
         self.stairs_cfg.pop(column, None)
         self.hist2d_cfg.pop(column, None)
+        self.surface_cfg.pop(column, None)
         self.pie_cfg.pop(column, None)
         self.histogram_edges.pop(column, None)
         self.histogram_drawn.discard(column)
@@ -16958,7 +17625,9 @@ class PlotWindow(tk.Toplevel):
             value = float(value)
             if not math.isfinite(value):
                 return f"float({str(value)!r})"    # nan / inf / -inf
-            return repr(round(value, 6))
+            # twelve significant digits, not six decimals: a tick step of
+            # half a micrometre given in metres (5e-07) must not become 0.0
+            return repr(float(f"{value:.12g}"))
         if isinstance(value, (np.integer, int)) and not isinstance(value, bool):
             return repr(int(value))
         if isinstance(value, (list, tuple)):
@@ -16977,6 +17646,11 @@ class PlotWindow(tk.Toplevel):
         for mean, std in self.error_partner.items():      # the error columns
             if std not in columns:
                 columns.append(std)
+        for name in list(self.series):     # the Z values of the surfaces
+            if self.series_style.get(name, self.plot_style) in SURFACE_STYLES:
+                partner = self.surface_z_column(name)
+                if partner is not None and partner not in columns:
+                    columns.append(partner)
         for name in list(self.series):     # ... the ones only implied by it
             if self.series_style.get(name, self.plot_style) not in ERROR_STYLES:
                 continue
@@ -16993,7 +17667,7 @@ class PlotWindow(tk.Toplevel):
                 continue
             values = pd.to_numeric(self.df[name], errors="coerce").to_numpy(float)
             numbers = ", ".join("float('nan')" if not np.isfinite(one)
-                                else repr(round(float(one), 10))
+                                else repr(float(f"{float(one):.12g}"))
                                 for one in values)
             lines.append(f"    {name!r}: [{numbers}],")
         lines.append("}")
@@ -17022,7 +17696,9 @@ class PlotWindow(tk.Toplevel):
             "import math",
             "import numpy as np",
             "import matplotlib.pyplot as plt",
+            "from matplotlib.colors import LogNorm, Normalize",
             "from matplotlib.legend import Legend",
+            "from matplotlib.lines import Line2D",
             "from matplotlib.image import BboxImage",
             "from matplotlib.patches import Ellipse, Polygon, Rectangle",
             "from matplotlib.ticker import (AutoMinorLocator, FuncFormatter,",
@@ -17283,6 +17959,100 @@ class PlotWindow(tk.Toplevel):
                                % (name, lit(kind), lit(axis_name)))
         return out
 
+    def _script_surface(self, column, tag, target, x_data):
+        """One coloured surface or set of contours, as matplotlib calls."""
+        lit = self._literal
+        name = lit(str(column))
+        try:
+            plan = self.surface_plan(column)
+        except (TypeError, ValueError):
+            plan = None
+        z_col = self.surface_z_column(column)
+        if plan is None or z_col is None:
+            # nothing could be drawn of it: the curve keeps its place
+            return [f"curves[{name}], = {target}.plot([], [])"]
+
+        def exact(value):              # a Z value may be very small: no rounding
+            return repr(float(value))
+
+        heights = [float(one.get_zorder())
+                   for one in self.surface_artists.get(column, ())] or [1.7]
+        z_low, z_high = exact(min(heights)), exact(max(heights))
+        out = [f"sx_{tag} = np.asarray({x_data}, float)",
+               f"sy_{tag} = np.asarray(DATA[{name}], float)",
+               f"sz_{tag} = np.asarray(DATA[{lit(str(z_col))}], float)",
+               f"ok_{tag} = (np.isfinite(sx_{tag}) & np.isfinite(sy_{tag}) "
+               f"& np.isfinite(sz_{tag})"
+               + (f" & (sz_{tag} > 0))" if plan["log"] else ")"),
+               f"sx_{tag}, sy_{tag}, sz_{tag} = "
+               f"sx_{tag}[ok_{tag}], sy_{tag}[ok_{tag}], sz_{tag}[ok_{tag}]"]
+        grid = plan["grid"]
+        if grid:
+            out += [
+                "# the points stand on a grid: one row of Z for every Y",
+                f"gx_{tag}, ix_{tag} = np.unique(np.round(sx_{tag}, "
+                f"{grid[3][0]}), return_inverse=True)",
+                f"gy_{tag}, iy_{tag} = np.unique(np.round(sy_{tag}, "
+                f"{grid[3][1]}), return_inverse=True)",
+                f"gz_{tag} = np.full((len(gy_{tag}), len(gx_{tag})), np.nan)",
+                f"gz_{tag}[np.ravel(iy_{tag}), np.ravel(ix_{tag})] = sz_{tag}",
+                f"gz_{tag} = np.ma.masked_invalid(gz_{tag})"]
+            where = f"gx_{tag}, gy_{tag}, gz_{tag}"
+        else:
+            where = f"sx_{tag}, sy_{tag}, sz_{tag}"
+        out.append(f"norm_{tag} = {'LogNorm' if plan['log'] else 'Normalize'}"
+                   f"({exact(plan['low'])}, {exact(plan['high'])})")
+        colours = f"cmap={lit(plan['cmap'])}, norm=norm_{tag}"
+        main = f"surf_{tag}"
+        if plan["style"] == "pcolor":
+            call = "pcolormesh" if grid else "tripcolor"
+            shading = ("gouraud" if plan["smooth"]
+                       else ("nearest" if grid else "flat"))
+            edge = ("edgecolors='#000000', linewidth=0.3" if plan["edges"]
+                    else "edgecolors='none'")
+            out.append(f"{main} = {target}.{call}({where}, "
+                       f"shading={lit(shading)}, {colours}, "
+                       f"alpha={exact(plan['alpha'])}, {edge}, "
+                       f"zorder={z_low})")
+        else:
+            levels = "[" + ", ".join(exact(one) for one in plan["levels"]) + "]"
+            out.append(f"levels_{tag} = {levels}")
+            filled = plan["style"] == "contourf"
+            if filled:
+                call = "contourf" if grid else "tricontourf"
+                out.append(
+                    f"{main} = {target}.{call}({where}, levels=levels_{tag}, "
+                    f"{colours}, alpha={exact(plan['alpha'])}, "
+                    f"extend={lit('both' if plan['manual'] else 'neither')}, "
+                    f"zorder={z_low})")
+            if plan["lines"]:
+                call = "contour" if grid else "tricontour"
+                paint = (f"colors=[{lit(plan['color'])}]" if plan["onecolor"]
+                         else colours)
+                lines = f"lines_{tag}" if filled else main
+                out.append(
+                    f"{lines} = {target}.{call}({where}, levels=levels_{tag}, "
+                    f"{paint}, linewidths={exact(plan['linewidth'])}, "
+                    f"linestyles={lit(plan['linestyle'])}, "
+                    f"alpha={'None' if filled else exact(plan['alpha'])}, "
+                    f"zorder={z_high if filled else z_low})")
+                if plan["labels"]:
+                    out.append(f"{target}.clabel({lines}, inline=True, "
+                               f"fontsize={plan['label_size']}, "
+                               f"zorder={z_high})")
+        out.append(f"curves[{name}] = {main}")
+        if plan["bar"]:
+            out.append(f"cax_{tag} = {target}.inset_axes("
+                       f"[1.02, 0.0, 0.035, 1.0])")
+            out.append(f"bar_{tag} = fig.colorbar({main}, cax=cax_{tag})")
+            size = int(self.axis_cfg["y"].get("tick_size", 12))
+            out.append(f"cax_{tag}.tick_params(labelsize={size})")
+            if plan["bar_label"]:
+                out.append(
+                    f"bar_{tag}.set_label({lit(plan['bar_label'])}, fontsize="
+                    f"{int(self.axis_cfg['y'].get('label_size', size))})")
+        return out
+
     def _script_curves(self):
         """The curves, their filled areas and their legend boxes."""
         lit = self._literal
@@ -17409,6 +18179,8 @@ class PlotWindow(tk.Toplevel):
                     out.append(f"cax_{tag} = {target}.inset_axes("
                                f"[1.02, 0.0, 0.035, 1.0])")
                     out.append(f"fig.colorbar(mesh_{tag}, cax=cax_{tag})")
+            elif st in SURFACE_STYLES:
+                out += self._script_surface(column, tag, target, x_data)
             elif st == "pie":
                 p_cfg = self.pie_cfg.get(column, {})
                 values, labels = self.pie_values(column)
@@ -17507,7 +18279,8 @@ class PlotWindow(tk.Toplevel):
             if not line.get_visible():
                 out.append("curves[%s].set_visible(False)" % lit(str(column)))
             height = self.series_z.get(str(column))
-            if height is not None:        # where the user put this curve
+            if height is not None and st not in SURFACE_STYLES:
+                # where the user put this curve (a surface was drawn there)
                 out.append("in_front(%s, %s)"
                            % (("bars_%s" % tag) if st in STACK_CONTAINERS
                               else "curves[%s]" % lit(str(column)),
@@ -17545,6 +18318,21 @@ class PlotWindow(tk.Toplevel):
                     _handles, texts = self.legend_entries(column, line)
                     samples = f"list(bars_{tag})"
                     names = lit([str(one) for one in texts])
+                elif self.series_style.get(column,
+                                           self.plot_style) in SURFACE_STYLES:
+                    # a patch of the colour scale, or a piece of the lines
+                    sample = self.surface_sample(column)
+                    if isinstance(sample, Line2D):
+                        samples = ("[Line2D([0], [0], color=%s, linewidth=%s, "
+                                   "linestyle=%s)]"
+                                   % (lit(to_hex(sample.get_color())),
+                                      lit(float(sample.get_linewidth())),
+                                      lit(str(sample.get_linestyle()))))
+                    else:
+                        samples = ("[Rectangle((0, 0), 1, 1, facecolor=%s, "
+                                   "edgecolor='none')]"
+                                   % lit(to_hex(sample.get_facecolor())))
+                    names = "[%s]" % lit(str(line.get_label()))
                 else:
                     samples = "[curves[%s]]" % lit(str(column))
                     names = "[%s]" % lit(str(line.get_label()))
@@ -17749,6 +18537,7 @@ class PlotWindow(tk.Toplevel):
                 "histogram_cfg": dict(self.histogram_cfg.get(y_col, {})),
                 "stairs_cfg": dict(self.stairs_cfg.get(y_col, {})),
                 "hist2d_cfg": dict(self.hist2d_cfg.get(y_col, {})),
+                "surface_cfg": dict(self.surface_cfg.get(y_col, {})),
                 "pie_cfg": dict(self.pie_cfg.get(y_col, {})),
                 "legend_pos": [float(state["pos"][0]), float(state["pos"][1])],
                 "legend_loc": state["loc"], "legend_size": int(state["size"]),
@@ -17917,6 +18706,8 @@ class PlotWindow(tk.Toplevel):
                 self.stairs_cfg[column] = dict(entry["stairs_cfg"])
             if "hist2d_cfg" in entry:
                 self.hist2d_cfg[column] = dict(entry["hist2d_cfg"])
+            if "surface_cfg" in entry:
+                self.surface_cfg[column] = dict(entry["surface_cfg"])
             if "pie_cfg" in entry:
                 self.pie_cfg[column] = dict(entry["pie_cfg"])
             line.set_label(entry.get("label", line.get_label()))
@@ -18076,7 +18867,7 @@ class PlotWindow(tk.Toplevel):
                           color=safe_hex(self.fonts["title_color"], "#000000"),
                           pad=self.page_points(self.fonts["title_pad"]))
         self.ax.set_xlabel(x_col)
-        self.ax.set_ylabel(str(plot_cfg["y_label"]))
+        self.ax.set_ylabel(self.default_y_label(plot_cfg))
         for which in ("x", "y"):
             self.apply_axis(which, {**self.axis_cfg[which],
                                     "label": self.axis_label(which)}, redraw=False)
@@ -18264,6 +19055,8 @@ class PlotWindow(tk.Toplevel):
             colors = self.slice_colors(cfg.get("cmap", "viridis"), 3)
             return Rectangle((0, 0), 1, 1, facecolor=colors[len(colors) // 2],
                              edgecolor="none")
+        if style in SURFACE_STYLES:
+            return self.surface_sample(column)
         if style == "bar":
             container = self.bar_containers.get(column)
         elif style == "histogram":
@@ -18277,6 +19070,23 @@ class PlotWindow(tk.Toplevel):
             return line
         patches = list(getattr(container, "patches", ()) or ())
         return patches[0] if patches else line
+
+    def surface_sample(self, column):
+        """What stands for a surface in a legend box.
+
+        Neither a mesh nor a set of contours can be drawn there: a patch of
+        the middle colour of the scale stands for the coloured ones, and a
+        piece of line for the contour lines.
+        """
+        cfg = {**self.default_surface_cfg(), **(self.surface_cfg.get(column)
+                                                or {})}
+        middle = matplotlib.colormaps[self.surface_cmap_name(cfg)](0.5)
+        if self.series_style.get(column, self.plot_style) == "contour":
+            return Line2D([0], [0], linestyle=str(cfg.get("linestyle", "-")),
+                          linewidth=float(cfg.get("linewidth", 1.2) or 1.2),
+                          color=(safe_hex(cfg.get("color"), "#000000")
+                                 if cfg.get("onecolor") else middle))
+        return Rectangle((0, 0), 1, 1, facecolor=middle, edgecolor="none")
 
     def legend_entries(self, column, line):
         """The samples and the texts of one legend box.
@@ -23034,6 +23844,15 @@ class PlotWindow(tk.Toplevel):
                 self.hist2d_cfg[column] = cfg
                 self.refresh_series_visuals(column)
 
+        def set_surface_cfg(cfg):
+            if column is None or cfg == self.surface_cfg.get(column):
+                return               # a surface of many cells is not quick
+            self.surface_cfg[column] = cfg
+            if self.series_style.get(column,
+                                     self.plot_style) in SURFACE_STYLES:
+                self.refresh_series_visuals(column)
+                self._rescale()      # flat cells reach beyond their points
+
         def set_pie_cfg(cfg):
             if column is not None:
                 # merged, not replaced: the names typed into the legend rows
@@ -23072,6 +23891,8 @@ class PlotWindow(tk.Toplevel):
             on_hist2d_cfg=set_hist2d_cfg,
             pie_cfg=self.pie_cfg.get(column),
             on_pie_cfg=set_pie_cfg,
+            surface_cfg=self.surface_cfg.get(column),
+            on_surface_cfg=set_surface_cfg,
             error_cfg=self.error_cfg.get(column),
             on_error_cfg=set_error_cfg,
             available_columns=cols))
@@ -23207,7 +24028,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.3.10 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.0 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -23338,6 +24159,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
 | 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
 | 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
 | 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
@@ -23858,7 +24680,7 @@ sheets together:
 
 | Button | Row | What it does |
 | --- | --- | --- |
-| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 9 styles. |
+| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 13 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting.  The diagrams come to the front, and the one used last **gets the keyboard** as well - the arrow keys move its selected object at once (a click into the sheet gives the keyboard back to the sheet). |
 | Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
 | Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
@@ -24217,6 +25039,16 @@ an immediate action with a style menu:
     (`ax.hist2d`): where the points crowd together the cell is brighter.
     The number of bins across X and up Y, the colour scale, the opacity and
     an optional colour bar are all settings of the curve.
+  * **Colour Surface (pcolor)**: Three columns, **x, y, z**: the Z values
+    painted as coloured cells over the X/Y plane (`ax.pcolormesh`, the
+    `pcolor` of MATLAB) - a field over a cross-section, a map, a
+    spectrogram.  The first column is X, the second Y and the third Z;
+    further pairs of columns (`y`, `z`, `y`, `z`, ...) are further surfaces.
+  * **Contour Lines**: The same x, y, z columns as the **lines of equal
+    Z** (`ax.contour`), as the height lines of a map are drawn, with the
+    values written on them if wanted.
+  * **Filled Contours**: The **bands between** those lines, each in one
+    colour (`ax.contourf`), with or without the lines themselves.
   * **Pie Chart**: The values of **one** column as slices of a circle
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
@@ -25817,12 +26649,14 @@ and moves it (see `Moving the whole graph`), so the properties need the
 second click, exactly like a text box or a drawing.
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 10 styles: **Line +
+representation of any individual curve between all 13 styles: **Line +
 Symbol**, **Line**, **Scatter**, **Bar Chart**, **Error Bar (Median, SD)**,
 **Error Bar (Median, +error, -error)**, **Histogram**, **Stairs**,
-**2D Histogram** and **Pie Chart**.  A single curve switched to an error
+**2D Histogram**, **Colour Surface (pcolor)**, **Contour Lines**,
+**Filled Contours** and **Pie Chart**.  A single curve switched to an error
 bar style by hand reads the column after it (or the two columns after it)
-for its errors.  The dialog shows exactly
+for its errors, and one switched to a surface or contour style reads the
+column after it for its Z values.  The dialog shows exactly
 the sections that style can use, and nothing else:
 
 | Style | Sections |
@@ -25836,6 +26670,9 @@ the sections that style can use, and nothing else:
 | Histogram | Legend, Histogram properties |
 | Stairs | Legend, Stairs properties |
 | 2D Histogram | Legend, 2D histogram properties |
+| Colour Surface (pcolor) | Legend, Colour scale (Z values), Colour surface properties |
+| Contour Lines | Legend, Colour scale (Z values), Contour properties |
+| Filled Contours | Legend, Colour scale (Z values), Contour properties |
 | Pie Chart | Legend, Pie properties |
 
 The dialog sections each have **their own check button as the title**: switched
@@ -25871,7 +26708,10 @@ looks like in front of the text: a line with its marker for a curve, a
 **coloured bar** for a bar chart and a histogram, a marker with an
 **error bar** through it for an error bar plot, the **staircase** itself for
 a stairs plot, one **slice** for a pie and a patch of the **colour scale**
-for a 2D histogram.
+for a 2D histogram, a colour surface and filled contours (a piece of line
+for contour lines).  A diagram opened as a surface or as contours starts
+**without** a legend box - its colour bar is its legend - and the box can be
+switched on in `Curve properties` like any other.
 
 * **Bar properties** (visible for Bar Charts):
   * `Width`: the width of the bars in X-axis data units.
@@ -25942,6 +26782,46 @@ for a 2D histogram.
   * `Leave the empty cells white`: on (the default) a cell with nothing in
     it is not painted at all, so the background stays visible; off, it is
     painted with the lowest colour of the scale.
+* **Colour scale (Z values)** (visible for Colour Surfaces, Contour Lines
+  and Filled Contours - the three styles share these settings, so a
+  surface switched to contours keeps its colours):
+  * `Z values from`: the column that holds Z.  `(the next column)` - the
+    column standing right after this one in the table - to begin with; any
+    other column can be chosen.
+  * `Colour scale`: the same 21 colour maps, and `Turn the colour scale
+    round` to run any of them the other way.
+  * `Lowest Z` and `Highest Z`: the two ends of the colour scale.  An empty
+    field follows the data; a number typed in fixes that end, which is how
+    two diagrams are given the same scale.
+  * `Logarithmic colour scale`: for values that span several decades.
+    Values that are zero or negative have no logarithm and are left out.
+  * `Opacity (0-1)` with a `Colour bar` switch next to it (on to begin
+    with), and the `Colour bar label` written along the bar.
+* **Colour surface properties** (visible for Colour Surfaces):
+  * `Shading`: `Flat` paints one cell of one colour around every point,
+    `Smooth` blends the colours from point to point.
+  * `Draw the edges of the cells`: a thin black line around every cell.
+* **Contour properties** (visible for Contour Lines and Filled Contours):
+  * `Levels`: how many lines (or bands) are drawn, 10 to begin with.  They
+    stand at round numbers, as the ticks of an axis do - or exactly evenly
+    between `Lowest Z` and `Highest Z` when those are typed in.
+  * `Line width`, `Line style` and `Line colour`.
+  * `Draw every line in one colour` (Contour Lines): off, each line has
+    the colour of its level on the colour scale; on, all of them have the
+    `Line colour`.
+  * `Draw the lines between the bands` (Filled Contours): the contour
+    lines over the coloured bands, in the `Line colour`.
+  * `Values on the lines` with their `Font size`: the Z value of each line
+    written into a gap of the line itself.
+* **How the x, y, z points become a picture.**  Points that stand on a
+  **rectangular grid** - every Y for the first X, every Y for the second,
+  in any order of the rows - are drawn as that grid; a few missing points
+  stay empty cells.  Points **scattered freely** over the plane are joined
+  into triangles and drawn from those.  A column that holds one single
+  value cannot be an axis: of `x, y, z, value` data taken on the plane
+  `x = constant`, delete the `x` column so that `y`, `z` and the value
+  are left.  The automatic range of such a diagram ends at the edge of the
+  surface instead of on the next tick, so no white band is left around it.
 * **Pie properties** (visible for Pie Charts):
   * `Slice colours`: the colour map the slices are taken from - `Tab10` and
     `Tab20` give distinct colours, the others a smooth scale.
