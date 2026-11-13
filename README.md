@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.3 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.4 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
 | 1.4.3 | 2026-11-13 | The axes of the three **x, y, z** styles - `Colour Surface (pcolor)`, `Contour Lines` and `Filled Contours` - **begin and end on a major tick**, as the axes of every other plot style do: the automatic range is rounded out to the ticks around the surface instead of stopping at its edge.  Where the surface ends between two ticks a narrow strip of the plot area stays empty beside it; `Begin and end on a major tick` of `Axes properties` switches the rounding off for one axis, and the surface fills its plot area to the edge again.  A diagram saved by 1.4.0 - 1.4.2 opens as it was saved.  `Exchange the X and Y axes (turn the picture)` turns contour lines and filled contours exactly as it turns a colour surface - over a grid or over scattered points - and the ticks at the two ends of the axes change places with the rest. |
 | 1.4.2 | 2026-11-13 | The report at the first start after an update - *"APlot has been updated from ... to ..."*, what is new and what is left to do - is a window of its own with a **scroll bar** instead of a message box, which grew with its text until its button was below the screen: the window is never taller than the main (data sheet) window, the rest is reached by scrolling, and it lists every version since the one that was updated, not only the newest six; `OK`, `Return` or `Esc` closes it, and the program can be used while it is open.  The window that offers a newer version keeps within the height of the main window too, and shows up to 20 lines of what is new. |
 | 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
@@ -2440,8 +2441,9 @@ front.
 
 ### Writing a text in place
 
-The title, both axis labels, the legend boxes and the text boxes can be
-rewritten **on the diagram itself**, without opening any dialog.  It works
+The title, both axis labels, the label of a colour bar, the legend boxes
+and the text boxes can be rewritten **on the diagram itself**, without
+opening any dialog.  It works
 exactly like renaming a file in the Finder of macOS or in a file manager:
 
 1. **click** the text once - it is selected and turns blue,
@@ -2489,7 +2491,9 @@ Two texts are special, in the same way as in their dialogs:
 
 * writing **nothing** into a text box deletes that box,
 * writing **nothing** into a legend box hides that legend, exactly as an
-  empty text does in the legend dialog.
+  empty text does in the legend dialog,
+* writing **nothing** into the label of a colour bar takes the label away;
+  `Colour bar label` of the curve properties brings it back.
 
 Writing in place is a command like any other: `Undo` takes it back.  A
 property window that is open at the same time shows the new text at once
@@ -2783,6 +2787,8 @@ switched on in `Curve properties` like any other.
   * `Opacity (0-1)` with a `Colour bar` switch next to it.  The colour bar
     is drawn **beside the plot area, in axes of its own**, so it follows the
     frame wherever it is dragged and never takes room away from the diagram.
+    It can be moved and resized with the pointer, as described under
+    `Colour scale (Z values)` below.
   * `Leave the empty cells white`: on (the default) a cell with nothing in
     it is not painted at all, so the background stays visible; off, it is
     painted with the lowest colour of the scale.
@@ -2801,6 +2807,23 @@ switched on in `Curve properties` like any other.
     Values that are zero or negative have no logarithm and are left out.
   * `Opacity (0-1)` with a `Colour bar` switch next to it (on to begin
     with), and the `Colour bar label` written along the bar.
+  * **The colour bar** is an object of the diagram, like a legend box:
+    * **one click** selects it and shows its control points; **dragging**
+      it moves it to any place of the page, and the arrow keys move it by
+      small steps,
+    * dragging a **control point** resizes it.  A narrow bar shows the
+      four corners and the two ends only, so that its middle is free to be
+      grabbed; a bar made **wider than it is tall lies down** - a
+      horizontal bar, with its numbers and its label under it,
+    * a **double click** on the bar opens these curve properties,
+    * its **label** is edited like an axis label: one click selects it, a
+      slow second click (within 1.5 seconds) writes it in place, a double
+      click opens a window with its text, font size and colour.  Dragging
+      the label carries the whole bar.
+    The place and the size of the bar are fractions of the plot area, so
+    the bar follows the graph when that is moved or resized; they are
+    saved with the diagram, taken back by `Undo`, and the exported
+    matplotlib program draws the bar in the same place.
   * `Exchange the X and Y axes (turn the picture)`: the Y column runs
     across and the X column runs up.  The labels, the ranges and the steps
     of the two axes change places with it, and every surface of the

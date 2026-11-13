@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.4.3 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
+1.4.4 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -263,7 +263,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 APP_VERSION_DATE = "2026-11-13"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -505,7 +505,8 @@ MIN_AXIS_SIZE = 0.08        # smallest plot area, as a fraction of the figure
 # copy / paste and the keyboard
 OBJECT_NAMES = {"shape": "Drawing", "arrow": "Arrow", "note": "Text box",
                 "legend": "Legend box", "text": "Text", "frame": "Frame",
-                "axis": "Axis"}
+                "axis": "Axis", "colorbar": "Colour bar",
+                "barlabel": "Colour bar label"}
 COPYABLE = ("shape", "arrow", "note")   # a legend or an axis label is not copied
 
 # which object hides which: the stack, from the very back to the very front.
@@ -586,7 +587,16 @@ SNAP_ANGLE = np.pi / 4      # arrows snap to 45 degrees while Shift is held
 # texts that can be rewritten in place, the way a file is renamed in the
 # Finder: one click selects, a second - slower than a double click - opens a
 # little editor with the cursor where the pointer was
-EDITABLE_KINDS = ("text", "note", "legend")
+EDITABLE_KINDS = ("text", "note", "legend", "barlabel")
+# a colour bar: where it stands to begin with - left, bottom, width and
+# height as fractions of the plot area - and how small it can be made.  It
+# is dragged and resized like a drawing, and lies down (a horizontal bar)
+# as soon as it is wider than it is tall
+BAR_BOX = (1.02, 0.0, 0.035, 1.0)
+MIN_BAR_SIZE = 0.01
+# what the pointer sets on a colour bar is kept in the settings of its
+# curve, beside what the curve dialog sets there
+BAR_KEEP = ("bar_box", "bar_label_size", "bar_label_color")
 RENAME_DELAY = 1500         # milliseconds allowed between the two clicks
 INLINE_PAD = 3              # pixels of air around the text in the editor
 INLINE_MIN_WIDTH = 48       # pixels: an empty editor is still usable
@@ -5985,6 +5995,24 @@ class SettingsDialog(ToolDialog):
 # --------------------------------------------------------------------------
 # text + font size (title, axis labels, legend entries)
 # --------------------------------------------------------------------------
+
+class BarLocator:
+    """Keeps a colour bar on its box, given in fractions of the plot area.
+
+    matplotlib asks it where the axes of the bar are at every drawing, so
+    the bar follows the plot area - and moving or resizing the bar is only
+    a matter of changing `bounds`.
+    """
+
+    def __init__(self, host, bounds):
+        self.host = host
+        self.bounds = tuple(float(one) for one in bounds)
+
+    def __call__(self, ax, renderer):
+        return TransformedBbox(
+            Bbox.from_bounds(*self.bounds),
+            self.host.transAxes - ax.figure.transFigure)
+
 
 class TextStyleDialog(DiagramMirror, ToolDialog):
     """One text with its font size and colour: `on_apply(text, size, colour)`.
@@ -16865,22 +16893,265 @@ class PlotWindow(tk.Toplevel):
 
         It is an inset of the plot area, so it follows it wherever the
         frame is dragged and never takes room away from the diagram.
+
+        The bar can be dragged to another place and resized by its control
+        points (see `set_color_bar_box`): its box is kept with the settings
+        of the curve, so it is saved with the diagram.
         """
         try:
-            cax = target.inset_axes([1.02, 0.0, 0.035, 1.0])
-            bar = self.fig.colorbar(mesh, cax=cax)
+            box = self.color_bar_box(column)
+            flat = self.color_bar_flat(box)
+            cax = target.inset_axes(list(box))
+            cax.set_axes_locator(BarLocator(self.ax, box))
+            bar = self.fig.colorbar(
+                mesh, cax=cax,
+                orientation="horizontal" if flat else "vertical")
             bar.outline.set_linewidth(float(self.frame_cfg.get("width", 1.0)))
             size = int(self.axis_cfg["y"].get("tick_size", 12))
             cax.tick_params(labelsize=size)
             if label:
-                bar.set_label(str(label), fontsize=int(
-                    self.axis_cfg["y"].get("label_size", size)))
+                font, colour = self.bar_label_style(column)
+                bar.set_label(str(label), fontsize=font, color=colour)
             for artist in (cax, bar.outline):
                 artist.set_in_layout(True)
+            # what is needed to draw it again where the pointer puts it
+            bar.aplot_host, bar.aplot_label = target, str(label or "")
+            bar.aplot_flat = flat
             self.hist2d_bars[column] = bar
             return bar
         except (ValueError, TypeError, AttributeError):
             return None
+
+    # -- the colour bar as an object: moved, resized, its label written ----
+    def color_bar_cfg(self, column, create=False):
+        """The settings of the curve a colour bar belongs to."""
+        flat = self.series_style.get(column, self.plot_style) == "hist2d"
+        store = self.hist2d_cfg if flat else self.surface_cfg
+        if create and column not in store:
+            line = self.series.get(column)
+            store[column] = (self.default_hist2d_cfg(line) if flat
+                             else self.default_surface_cfg(line))
+        return store.get(column) or {}
+
+    def color_bar_box(self, column):
+        """(left, bottom, width, height) of a colour bar, in fractions of
+        the plot area."""
+        box = self.color_bar_cfg(column).get("bar_box")
+        try:
+            box = tuple(float(one) for one in box)
+            if (len(box) == 4 and all(np.isfinite(box))
+                    and box[2] > 0 and box[3] > 0):
+                return box
+        except (TypeError, ValueError):
+            pass
+        return tuple(BAR_BOX)
+
+    def color_bar_flat(self, box):
+        """True when the box is wider than tall on the screen: the bar
+        lies down then, and its numbers go under it."""
+        try:
+            aspect = float(self._axes_aspect() or 1.0)
+        except (TypeError, ValueError, AttributeError):
+            aspect = 1.0
+        return float(box[2]) * aspect > float(box[3])
+
+    def bar_label_style(self, column):
+        """Font size and colour of the label of a colour bar.
+
+        Until they are set in its own dialog the label is written like the
+        label of the Y axis.
+        """
+        cfg = self.color_bar_cfg(column)
+        base = self.axis_cfg["y"]
+        fallback = base.get("label_size", base.get("tick_size", 12))
+        size = cfg.get("bar_label_size")
+        return (max(1, to_int(fallback if size is None else size, 12)),
+                safe_hex(cfg.get("bar_label_color"), "#000000"))
+
+    def rebuild_color_bar(self, column):
+        """Draw one colour bar again: at its box, with its label."""
+        bar = self.hist2d_bars.get(column)
+        if bar is None:
+            return None
+        mesh, target = bar.mappable, bar.aplot_host
+        label = bar.aplot_label
+        self._clear_color_bar(column)
+        made = self._add_color_bar(column, mesh, target, label)
+        self._check_bar_selection(column)
+        return made
+
+    def _check_bar_selection(self, column):
+        """A bar that was drawn again - or taken away - while it, or its
+        label, was selected: the marks go to the new one, or go away."""
+        kind, key = getattr(self, "selection", None) or (None, None)
+        if kind in ("colorbar", "barlabel") and key == column:
+            self.select_object(kind, key)
+            return True
+        return False
+
+    def set_color_bar_box(self, column, box):
+        """Put a colour bar on another box of the plot area."""
+        bar = self.hist2d_bars.get(column)
+        if bar is None:
+            return False
+        try:
+            x, y, w, h = (float(one) for one in box)
+        except (TypeError, ValueError):
+            return False
+        if not all(np.isfinite((x, y, w, h))):
+            return False
+        box = (x, y, max(MIN_BAR_SIZE, w), max(MIN_BAR_SIZE, h))
+        self.color_bar_cfg(column, create=True)["bar_box"] = list(box)
+        locator = bar.ax.get_axes_locator()
+        if (self.color_bar_flat(box) != bool(bar.aplot_flat)
+                or not isinstance(locator, BarLocator)):
+            self.rebuild_color_bar(column)   # it stands up, or lies down
+        else:
+            locator.bounds = box
+            bar.ax.stale = True
+        return True
+
+    def color_bar_handles(self, column):
+        """The control points of a colour bar, as (number, place) pairs.
+
+        The numbers are those of the eight points of a drawing.  A bar is
+        narrow: the two points in the middle of its long sides would lie
+        over its own middle, where it is grabbed to be moved - so across a
+        narrow bar only the corners and the two ends are offered.
+        """
+        x, y, w, h = self.color_bar_box(column)
+        points = list(enumerate(self.handle_positions(
+            {"x": x, "y": y, "w": w, "h": h})))
+        low = self.ax.transAxes.transform((x, y))
+        high = self.ax.transAxes.transform((x + w, y + h))
+        narrow = 36.0 * self.screen_ratio()
+        left_out = set()
+        if abs(high[0] - low[0]) < narrow:
+            left_out |= {5, 7}             # the middles of the upright sides
+        if abs(high[1] - low[1]) < narrow:
+            left_out |= {4, 6}             # ... and of the level ones
+        return [(index, point) for index, point in points
+                if index not in left_out]
+
+    def _resize_color_bar(self, column, index, point):
+        """Drag one of the eight control points of a colour bar."""
+        x0, y0, w, h = self.color_bar_box(column)
+        x1, y1 = x0 + w, y0 + h
+        if index in (0, 3, 7):
+            x0 = point[0]
+        elif index in (1, 2, 5):
+            x1 = point[0]
+        if index in (0, 1, 4):
+            y0 = point[1]
+        elif index in (2, 3, 6):
+            y1 = point[1]
+        return self.set_color_bar_box(
+            column, (min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)))
+
+    def bar_label_artist(self, column):
+        """The text written along a colour bar, or None when it has none."""
+        bar = self.hist2d_bars.get(column)
+        if bar is None:
+            return None
+        try:
+            axis = bar.ax.xaxis if bar.aplot_flat else bar.ax.yaxis
+            label = axis.label
+        except AttributeError:
+            return None
+        return label if label.get_text() else None
+
+    def bar_label_at(self, x, y):
+        """The curve whose colour bar label is under the pointer, or None."""
+        if x is None or y is None:
+            return None
+        renderer = self._renderer()
+        for column in reversed(list(self.hist2d_bars)):
+            label = self.bar_label_artist(column)
+            if label is None or not label.get_visible():
+                continue
+            try:
+                box = label.get_window_extent(renderer)
+            except (RuntimeError, ValueError, AttributeError):
+                continue
+            if box.expanded(1.2, 1.5).contains(x, y):
+                return column
+        return None
+
+    def color_bar_at(self, x, y):
+        """The curve whose colour bar - the bar or its numbers - is under
+        the pointer, or None."""
+        if x is None or y is None:
+            return None
+        renderer = self._renderer()
+        for column in reversed(list(self.hist2d_bars)):
+            bar = self.hist2d_bars[column]
+            try:
+                body = bar.ax.get_window_extent(renderer)
+                if Bbox.from_extents(body.x0 - 4, body.y0 - 4, body.x1 + 4,
+                                     body.y1 + 4).contains(x, y):
+                    return column
+                # the numbers are a part of it; they are never far away, so
+                # they are only measured when the pointer is near the bar
+                reach = 150.0 * self.screen_ratio()
+                if not (body.x0 - reach <= x <= body.x1 + reach
+                        and body.y0 - reach <= y <= body.y1 + reach):
+                    continue
+                whole = bar.ax.get_tightbbox(renderer)
+            except (RuntimeError, ValueError, AttributeError, TypeError):
+                continue
+            if whole is not None and whole.contains(x, y):
+                return column
+        return None
+
+    def set_bar_label(self, column, text=None, size=None, color=None):
+        """Another text, font size or colour for the label of a bar."""
+        cfg = self.color_bar_cfg(column, create=True)
+        if text is not None:
+            cfg["bar_label"] = str(text).strip()
+        if size is not None:
+            cfg["bar_label_size"] = max(1, to_int(size, 12))
+        if color is not None:
+            cfg["bar_label_color"] = safe_hex(color, "#000000")
+        bar = self.hist2d_bars.get(column)
+        if bar is None:
+            return False
+        bar.aplot_label = str(cfg.get("bar_label") or "")
+        self.rebuild_color_bar(column)
+        # an open curve dialog shows the text that is on the diagram
+        dialog = self._dialogs.get(id(self.series.get(column)))
+        field = getattr(dialog, "sf_bar_label_var", None)
+        try:
+            if field is not None and dialog.winfo_exists() \
+                    and field.get().strip() != bar.aplot_label:
+                field.set(bar.aplot_label)
+        except tk.TclError:
+            pass
+        return True
+
+    def _start_bar_drag(self, column, event):
+        box = self.color_bar_box(column)
+        self._shape_drag = {"key": column, "mode": "bar-move", "moved": False,
+                            "x": float(event.x), "y": float(event.y),
+                            "origin": (box[0], box[1])}
+        return self._shape_drag
+
+    def edit_bar_label(self, column):
+        """The window of the label of a colour bar: text, size, colour."""
+        def apply(text, size, color, _distance):
+            self.set_bar_label(column, text, size, color)
+            self.draw()
+
+        def now():
+            return (str(self.color_bar_cfg(column).get("bar_label") or ""),
+                    *self.bar_label_style(column), None)
+
+        text, size, color, _none = now()
+        name = f"bar-label-{column}"
+        return self._show_dialog(name, lambda: TextStyleDialog(
+            self, "Colour bar label", text, size, apply, color=color,
+            hint="An empty text takes the label away; the curve\n"
+                 "properties of the surface bring it back.",
+            on_close=lambda _d: self._dialogs.pop(name, None), source=now))
 
     # -- x, y, z: a coloured surface, contour lines, filled contours -------
     def _clear_surface(self, column):
@@ -17510,6 +17781,7 @@ class PlotWindow(tk.Toplevel):
                 # of them simply reads a second column of error
                 getattr(self, f"refresh_{self.artist_family(st)}")(column)
         self.refresh_fill(column)
+        self._check_bar_selection(column)   # its bar is a new one, or gone
 
     # -- filled area under a curve -----------------------------------------
     @staticmethod
@@ -18298,16 +18570,24 @@ class PlotWindow(tk.Toplevel):
                                f"zorder={z_high})")
         out.append(f"curves[{name}] = {main}")
         if plan["bar"]:
-            out.append(f"cax_{tag} = {target}.inset_axes("
-                       f"[1.02, 0.0, 0.035, 1.0])")
-            out.append(f"bar_{tag} = fig.colorbar({main}, cax=cax_{tag})")
+            out += self._script_bar(column, tag, target, main)
             size = int(self.axis_cfg["y"].get("tick_size", 12))
             out.append(f"cax_{tag}.tick_params(labelsize={size})")
             if plan["bar_label"]:
+                font, colour = self.bar_label_style(column)
                 out.append(
                     f"bar_{tag}.set_label({lit(plan['bar_label'])}, fontsize="
-                    f"{int(self.axis_cfg['y'].get('label_size', size))})")
+                    f"{font}, color={lit(colour)})")
         return out
+
+    def _script_bar(self, column, tag, target, main):
+        """The lines that draw a colour bar where it stands in the diagram."""
+        box = self.color_bar_box(column)
+        flat = self.color_bar_flat(box)
+        where = ", ".join(f"{float(one):.6g}" for one in box)
+        return [f"cax_{tag} = {target}.inset_axes([{where}])",
+                f"bar_{tag} = fig.colorbar({main}, cax=cax_{tag}, orientation="
+                f"{'horizontal' if flat else 'vertical'!r})"]
 
     def _script_curves(self):
         """The curves, their filled areas and their legend boxes."""
@@ -18432,9 +18712,8 @@ class PlotWindow(tk.Toplevel):
                 )
                 out.append(f"curves[{lit(str(column))}] = mesh_{tag}")
                 if g_cfg.get("colorbar"):
-                    out.append(f"cax_{tag} = {target}.inset_axes("
-                               f"[1.02, 0.0, 0.035, 1.0])")
-                    out.append(f"fig.colorbar(mesh_{tag}, cax=cax_{tag})")
+                    out += self._script_bar(column, tag, target,
+                                            f"mesh_{tag}")
             elif st in SURFACE_STYLES:
                 out += self._script_surface(column, tag, target, x_data)
             elif st == "pie":
@@ -20058,7 +20337,9 @@ class PlotWindow(tk.Toplevel):
     def _selection_store(self, kind):
         return {"shape": self.shape_state, "arrow": self.arrow_state,
                 "note": self.note_state, "legend": self.legend_state,
-                "text": self.text_offset, "axis": self.frame_sides}.get(kind)
+                "text": self.text_offset, "axis": self.frame_sides,
+                "colorbar": self.hist2d_bars,
+                "barlabel": self.hist2d_bars}.get(kind)
 
     def select_object(self, kind, key):
         """Remember the object the keyboard commands work on."""
@@ -20068,6 +20349,8 @@ class PlotWindow(tk.Toplevel):
                 kind = None             # only a text that is really there
             if kind == "axis" and not self.ax.spines[key].get_visible():
                 kind = None             # only a line that is really drawn
+            if kind == "barlabel" and self.bar_label_artist(key) is None:
+                kind = None             # a bar without a label
         if store is not None and key in store and kind is not None:
             self.selection = (kind, key)
             if self.group:              # one object chosen: the group lets go
@@ -20093,6 +20376,8 @@ class PlotWindow(tk.Toplevel):
             return self.legends.get(key)
         if kind == "text":
             return self.text_artist(key) if self.text_shown(key) else None
+        if kind == "barlabel":
+            return self.bar_label_artist(key)
         return None
 
     def is_marked(self):
@@ -20104,6 +20389,10 @@ class PlotWindow(tk.Toplevel):
         kind, key = marked
         if kind == "text":
             artist = self.text_artist(key)
+            if artist is not None:
+                artist.set_bbox(None)
+        elif kind == "barlabel":
+            artist = self.bar_label_artist(key)
             if artist is not None:
                 artist.set_bbox(None)
         elif kind == "note":
@@ -20125,7 +20414,8 @@ class PlotWindow(tk.Toplevel):
         wherever matplotlib puts it - no stale pixel coordinates.
         """
         kind, key = self.selection or (None, None)
-        wanted = (kind, key) if kind in ("text", "note", "legend") else None
+        wanted = (kind, key) if kind in ("text", "note", "legend",
+                                         "barlabel") else None
         if self._marked is not None and self._marked != wanted:
             self._plain_look(self._marked)
             self._marked = None
@@ -20134,6 +20424,11 @@ class PlotWindow(tk.Toplevel):
         if kind == "text":
             artist = self.text_artist(key)
             if artist is None or not self.text_shown(key):
+                return None
+            artist.set_bbox(dict(SELECT_BOX))
+        elif kind == "barlabel":
+            artist = self.bar_label_artist(key)
+            if artist is None:
                 return None
             artist.set_bbox(dict(SELECT_BOX))
         elif kind == "note":
@@ -20167,6 +20462,8 @@ class PlotWindow(tk.Toplevel):
             return "" if state is None else str(state.get("text", ""))
         if kind == "text":
             return self.ax.get_title() if key == "title" else self.axis_label(key)
+        if kind == "barlabel":
+            return str(self.color_bar_cfg(key).get("bar_label") or "")
         if kind == "legend":
             line = self.series.get(key)
             if line is None:
@@ -20221,6 +20518,8 @@ class PlotWindow(tk.Toplevel):
                 line.set_label(text.strip() if text.strip() else "_nolegend_")
                 self._marked = None
                 self.refresh_legend()
+        elif kind == "barlabel":
+            self.set_bar_label(key, text)      # an empty one takes it away
         else:
             return None
         self._refresh_highlight()
@@ -20232,6 +20531,8 @@ class PlotWindow(tk.Toplevel):
             return self.notes.get(key)
         if kind == "text":
             return self.text_artist(key) if self.text_shown(key) else None
+        if kind == "barlabel":
+            return self.bar_label_artist(key)
         if kind == "legend":
             legend = self.legends.get(key)
             if legend is None:
@@ -21616,6 +21917,11 @@ class PlotWindow(tk.Toplevel):
         if state is None:
             return False
         dx, dy = self._axes_delta(dx_pixels, dy_pixels)
+        if kind in ("colorbar", "barlabel"):
+            # the label belongs to its bar: the arrow keys carry both
+            box = self.color_bar_box(key)
+            return self.set_color_bar_box(
+                key, (box[0] + dx, box[1] + dy, box[2], box[3]))
         if kind == "text":
             # the title and the axis labels keep their shift in points
             offset = self.text_offset[key]
@@ -21861,6 +22167,8 @@ class PlotWindow(tk.Toplevel):
             return self.shape_handle_positions(state)
         if kind == "arrow" and key in self.arrow_state:
             return self.arrow_handle_positions(self.arrow_state[key])
+        if kind == "colorbar" and key in self.hist2d_bars:
+            return [point for _index, point in self.color_bar_handles(key)]
         return None
 
     @staticmethod
@@ -22517,8 +22825,8 @@ class PlotWindow(tk.Toplevel):
         drag = self._shape_drag
         if drag is not None:
             mode = str(drag.get("mode", ""))
-            if mode == "axis-end":
-                return None
+            if mode == "axis-end" or mode.startswith("bar-"):
+                return None              # a bar is axes of its own
             if mode.startswith("arrow"):
                 return [("arrow", drag["key"])]
             if mode == "rotate":
@@ -22748,6 +23056,29 @@ class PlotWindow(tk.Toplevel):
                 self.rotate_selection(drag["angle"] + pointer - drag["pointer"],
                                       snap=self._shift_active(event))
                 return
+            if mode.startswith("bar-"):        # a colour bar: moved, resized
+                if key not in self.hist2d_bars:
+                    self._shape_drag = None
+                    return
+                if mode == "bar-resize":
+                    self._resize_color_bar(key, drag["index"],
+                                           self._grabbed_point(event, drag))
+                else:
+                    dx = float(event.x) - drag["x"]
+                    dy = float(event.y) - drag["y"]
+                    if not drag["moved"] and max(abs(dx), abs(dy)) \
+                            <= PLOT_DRAG_START:
+                        return                 # still a click, not a drag
+                    drag["moved"] = True
+                    dx, dy = self._axes_delta(dx, dy)
+                    box = self.color_bar_box(key)
+                    self.set_color_bar_box(
+                        key, (drag["origin"][0] + dx, drag["origin"][1] + dy,
+                              box[2], box[3]))
+                self._refresh_handles()
+                self._refresh_highlight()
+                self.draw()
+                return
             if mode.startswith("arrow"):
                 if key not in self.arrow_state:
                     self._shape_drag = None
@@ -22865,6 +23196,9 @@ class PlotWindow(tk.Toplevel):
             self._finish_band()
         dragged = (self._shape_drag is not None or self._drag is not None
                    or moved_plot or moved_group)
+        if (self._shape_drag or {}).get("mode") == "bar-move" \
+                and not self._shape_drag.get("moved"):
+            dragged = False                    # the bar was only clicked
         self._plot_drag = None
         self._finish_drag(event)
         self._open_pending_rename()
@@ -22895,7 +23229,8 @@ class PlotWindow(tk.Toplevel):
                         self._refresh_handles()
                 self.draw()
             return
-        if shape_drag is not None and shape_drag["mode"] in ("rotate", "axis-end"):
+        if shape_drag is not None and shape_drag["mode"] in (
+                "rotate", "axis-end", "bar-move", "bar-resize"):
             self._refresh_handles()
             self.draw()
             return
@@ -22957,6 +23292,9 @@ class PlotWindow(tk.Toplevel):
             cursor = "fleur"
         elif legend is not None:
             cursor = "fleur"           # one click selects it, then it is moved
+        elif (self.bar_label_at(event.x, event.y) is not None
+              or self.color_bar_at(event.x, event.y) is not None):
+            cursor = "fleur"           # a colour bar is carried the same way
         elif (self.frame_hit(event.x, event.y)
               or self.series_at(event) is not None
               or self.numbers_at(event.x, event.y) is not None):
@@ -23373,6 +23711,12 @@ class PlotWindow(tk.Toplevel):
         column, legend = self.legend_at(x, y)
         if legend is not None:
             return ("legend", column)
+        column = self.bar_label_at(x, y)
+        if column is not None:
+            return ("barlabel", column)
+        column = self.color_bar_at(x, y)
+        if column is not None:
+            return ("colorbar", column)
         if self.frame_hit(x, y):
             return ("frame", "frame")
         return (None, None)
@@ -23401,6 +23745,11 @@ class PlotWindow(tk.Toplevel):
         if kind == "text":
             return (self.edit_title() if key == "title"
                     else self.edit_axis_label(key))
+        if kind == "barlabel":
+            return self.edit_bar_label(key)
+        if kind == "colorbar":             # its settings are those of the curve
+            line = self.series.get(key)
+            return None if line is None else self.open_series_dialog(line)
         if kind in ("frame", "axis"):
             return self.open_axes_dialog("frame")
         return None
@@ -23527,11 +23876,16 @@ class PlotWindow(tk.Toplevel):
                 mode = "axis-end"
             elif kind == "arrow":
                 mode = "arrow-end"
+            elif kind == "colorbar":
+                mode = "bar-resize"
             elif (kind == "shape"
                   and self.shape_state[key]["kind"] in OPEN_SHAPES):
                 mode = "line-end"         # a line is dragged by its two ends
             self._shape_drag = {"key": key, "index": index, "mode": mode,
                                 "grab": self._grab_offset(index, event)}
+            if mode == "bar-resize":       # a narrow bar shows fewer points
+                self._shape_drag["index"] = \
+                    self.color_bar_handles(key)[index][0]
             if mode == "resize" and kind == "shape":
                 state = self.shape_state[key]
                 self._shape_drag["ratio"] = self.shape_ratio(state)
@@ -23598,6 +23952,23 @@ class PlotWindow(tk.Toplevel):
             self.announce_selection()
             self.draw()
             self._start_legend_drag(y_col, event)
+            return
+        column = self.bar_label_at(event.x, event.y)
+        if column is not None:            # the label of a colour bar
+            self._arm_inline_edit("barlabel", column, event)
+            self.select_object("barlabel", column)
+            self.announce_selection()
+            self.draw()
+            self._start_bar_drag(column, event)   # dragged, it carries the bar
+            return
+        column = self.color_bar_at(event.x, event.y)
+        if column is not None:            # select a colour bar and drag it
+            self.select_object("colorbar", column)
+            self.flash("Colour bar selected - drag it to move it, drag a "
+                       "control point to resize it, double click for the "
+                       "colour scale")
+            self.draw()
+            self._start_bar_drag(column, event)
             return
         side = self.frame_axis_at(event.x, event.y)
         if side is not None:              # an axis line: select it to resize
@@ -24157,12 +24528,22 @@ class PlotWindow(tk.Toplevel):
                 self.refresh_series_visuals(column)
                 self._rescale()      # other edges, other range
 
+        def keep_bar(cfg, old):
+            # where the bar was dragged to and how its label is written are
+            # not fields of the dialog: they survive what is set there
+            old = old or {}
+            return {**{name: old[name] for name in BAR_KEEP if name in old},
+                    **cfg}
+
         def set_hist2d_cfg(cfg):
             if column is not None:
-                self.hist2d_cfg[column] = cfg
+                self.hist2d_cfg[column] = keep_bar(
+                    cfg, self.hist2d_cfg.get(column))
                 self.refresh_series_visuals(column)
 
         def set_surface_cfg(cfg):
+            if column is not None:
+                cfg = keep_bar(cfg, self.surface_cfg.get(column))
             if column is None or cfg == self.surface_cfg.get(column):
                 return               # a surface of many cells is not quick
             turned = bool(cfg.get("swap")) != self.surface_swapped(column)
@@ -24360,7 +24741,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.3 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.4 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -24491,6 +24872,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
 | 1.4.3 | 2026-11-13 | The axes of the three **x, y, z** styles - `Colour Surface (pcolor)`, `Contour Lines` and `Filled Contours` - **begin and end on a major tick**, as the axes of every other plot style do: the automatic range is rounded out to the ticks around the surface instead of stopping at its edge.  Where the surface ends between two ticks a narrow strip of the plot area stays empty beside it; `Begin and end on a major tick` of `Axes properties` switches the rounding off for one axis, and the surface fills its plot area to the edge again.  A diagram saved by 1.4.0 - 1.4.2 opens as it was saved.  `Exchange the X and Y axes (turn the picture)` turns contour lines and filled contours exactly as it turns a colour surface - over a grid or over scattered points - and the ticks at the two ends of the axes change places with the rest. |
 | 1.4.2 | 2026-11-13 | The report at the first start after an update - *"APlot has been updated from ... to ..."*, what is new and what is left to do - is a window of its own with a **scroll bar** instead of a message box, which grew with its text until its button was below the screen: the window is never taller than the main (data sheet) window, the rest is reached by scrolling, and it lists every version since the one that was updated, not only the newest six; `OK`, `Return` or `Esc` closes it, and the program can be used while it is open.  The window that offers a newer version keeps within the height of the main window too, and shows up to 20 lines of what is new. |
 | 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
@@ -26771,8 +27153,9 @@ front.
 
 ### Writing a text in place
 
-The title, both axis labels, the legend boxes and the text boxes can be
-rewritten **on the diagram itself**, without opening any dialog.  It works
+The title, both axis labels, the label of a colour bar, the legend boxes
+and the text boxes can be rewritten **on the diagram itself**, without
+opening any dialog.  It works
 exactly like renaming a file in the Finder of macOS or in a file manager:
 
 1. **click** the text once - it is selected and turns blue,
@@ -26820,7 +27203,9 @@ Two texts are special, in the same way as in their dialogs:
 
 * writing **nothing** into a text box deletes that box,
 * writing **nothing** into a legend box hides that legend, exactly as an
-  empty text does in the legend dialog.
+  empty text does in the legend dialog,
+* writing **nothing** into the label of a colour bar takes the label away;
+  `Colour bar label` of the curve properties brings it back.
 
 Writing in place is a command like any other: `Undo` takes it back.  A
 property window that is open at the same time shows the new text at once
@@ -27114,6 +27499,8 @@ switched on in `Curve properties` like any other.
   * `Opacity (0-1)` with a `Colour bar` switch next to it.  The colour bar
     is drawn **beside the plot area, in axes of its own**, so it follows the
     frame wherever it is dragged and never takes room away from the diagram.
+    It can be moved and resized with the pointer, as described under
+    `Colour scale (Z values)` below.
   * `Leave the empty cells white`: on (the default) a cell with nothing in
     it is not painted at all, so the background stays visible; off, it is
     painted with the lowest colour of the scale.
@@ -27132,6 +27519,23 @@ switched on in `Curve properties` like any other.
     Values that are zero or negative have no logarithm and are left out.
   * `Opacity (0-1)` with a `Colour bar` switch next to it (on to begin
     with), and the `Colour bar label` written along the bar.
+  * **The colour bar** is an object of the diagram, like a legend box:
+    * **one click** selects it and shows its control points; **dragging**
+      it moves it to any place of the page, and the arrow keys move it by
+      small steps,
+    * dragging a **control point** resizes it.  A narrow bar shows the
+      four corners and the two ends only, so that its middle is free to be
+      grabbed; a bar made **wider than it is tall lies down** - a
+      horizontal bar, with its numbers and its label under it,
+    * a **double click** on the bar opens these curve properties,
+    * its **label** is edited like an axis label: one click selects it, a
+      slow second click (within 1.5 seconds) writes it in place, a double
+      click opens a window with its text, font size and colour.  Dragging
+      the label carries the whole bar.
+    The place and the size of the bar are fractions of the plot area, so
+    the bar follows the graph when that is moved or resized; they are
+    saved with the diagram, taken back by `Undo`, and the exported
+    matplotlib program draws the bar in the same place.
   * `Exchange the X and Y axes (turn the picture)`: the Y column runs
     across and the X column runs up.  The labels, the ranges and the steps
     of the two axes change places with it, and every surface of the
