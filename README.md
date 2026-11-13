@@ -8,6 +8,11 @@ Start it with:
 
     python3 aplot.py
 
+The first start on a Mac or on Linux opens a small window that offers to
+**install APlot - only for you, or for every user of the computer** (see
+`Installing APlot` below).  It is asked once; `Install APlot...` in the
+menu does it at any time.
+
 It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
@@ -15,15 +20,16 @@ It also answers a few questions on the command line:
     python3 aplot.py --check-update  is there a newer one on GitHub?
     python3 aplot.py --update        download and install it
     python3 aplot.py FILE.aplt       start with that graph open
-    python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
-    python3 aplot.py --install-desktop   Linux: icons, thumbnails and
-                                         "open with" for .aplt (see below)
+    python3 aplot.py --make-app      macOS: install APlot.app without the
+                                     window (for scripts, see below)
+    python3 aplot.py --install-desktop   Linux: the same without the
+                                         window (for scripts, see below)
 
 
 ## Version
 
-This is **APlot 1.3.8 (2026-11-04)**.  The number is written in one place
+This is **APlot 1.3.10 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -114,8 +120,9 @@ the version is the newest, nothing is said at all.
 
 #### The installed APlot and the aplot.py you edit
 
-`APlot.app` on a Mac (`--make-app`) and the menu entry on Linux
-(`--install-desktop`) hold **a copy of their own** of the program - inside
+`APlot.app` on a Mac and the menu entry on Linux (installed from the
+`Install APlot` window, or with `--make-app` and `--install-desktop`) hold
+**a copy of their own** of the program - inside
 the bundle, `APlot.app/Contents/Resources/aplot.py`, and
 `~/.local/share/aplot/aplot.py` on Linux - and start that copy.  The
 installed APlot and the `aplot.py` it was made from are therefore **two
@@ -125,9 +132,9 @@ of the program that asked for it.  `Help > About APlot` names the file
 that runs, and the update window says it too.
 
 * **Installing a version by hand** - the one being worked on, say - is
-  running the same command with it: `python3 aplot.py --make-app` or
-  `python3 aplot.py --install-desktop` copies *that* file into the
-  installed APlot.
+  starting it and choosing `Install APlot...` in the menu (or running
+  `python3 aplot.py --make-app` or `python3 aplot.py --install-desktop`
+  with it): that copies *that* file into the installed APlot.
 * **Trying the updates out**: install an older `aplot.py` that way (any
   version from 1.3.0 on), start the installed APlot and use `Help > Check
   for updates...`: it finds the version on GitHub, whatever the file in
@@ -153,6 +160,8 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
+| 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
 | 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
 | 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
 | 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
@@ -367,8 +376,8 @@ is old and comes with an old Tk that macOS itself calls deprecated.
     sudo apt install python3-tk python3-numpy python3-pandas python3-matplotlib
     sudo apt install python3-pil python3-pil.imagetk python3-openpyxl    # optional
 
-then `python3 aplot.py`, or `python3 aplot.py --install-desktop` to install
-it with its menu entry.
+then `python3 aplot.py` - its first start offers to install it, with its
+menu entry (see `Installing APlot`).
 
 **Any system - a Python of APlot's own (a virtual environment).**  For a
 Homebrew Python (`brew install python python-tk`), for `tkinterdnd2` on
@@ -468,17 +477,10 @@ inside a running program changes that - the name comes from the application
 the system thinks it launched.
 
 The cure is a small **application bundle**, and APlot builds one for
-itself.  The first time it is started on a Mac it offers to do so, and the
-offer is made **once**, whatever the answer.  It can also be asked at any
-time:
-
-* the **`APlot > Install APlot in the Dock...`** menu item (it is there
-  only while the name is still borrowed), or
-* from a terminal:
-
-        python3 aplot.py --make-app
-
-Either way `~/Applications/APlot.app` is written.  It is a folder that
+itself: installing APlot on a Mac is exactly that (see `Installing APlot`
+below - the window of the first start, or `APlot > Install APlot...`).
+Only for you it is `~/Applications/APlot.app`, for every user
+`/Applications/APlot.app`.  It is a folder that
 holds the icon, the name, **a copy of `aplot.py`**
 (`Contents/Resources/aplot.py`) and a short launcher that starts that
 copy - nothing is compiled.  Start APlot from there (and keep it in the
@@ -486,10 +488,11 @@ Dock) and the label says `APlot`.  The app is an **installed program of
 its own**: the `aplot.py` it was made from can be edited, moved or
 deleted, and the app does not change; the updates replace the copy inside
 it (see `The installed APlot and the aplot.py you edit`).  Running the
-command again installs the `aplot.py` it is run with.  Give the command a
-folder of your own to put the bundle somewhere else:
+command again installs the `aplot.py` it is run with.  Without the window
+(in a script, say) the same is done by
 
-    python3 aplot.py --make-app /Applications
+    python3 aplot.py --make-app                  # ~/Applications
+    python3 aplot.py --make-app /Applications    # or a folder of your own
 
 The app itself may be moved as well; it finds its copy wherever it is.
 
@@ -538,15 +541,13 @@ picture as well: run `sh build.sh` and `sh install.sh` once more.
 
 #### The graph files on a Linux desktop
 
-On Linux one command does it all - nothing is compiled:
-
-    python3 aplot.py --install-desktop
-
-It **installs APlot** - a copy of the `aplot.py` it is run with, which the
-menu entry and the `aplot` command start (so the file it came from can be
-edited, moved or deleted afterwards, and the updates replace the copy) -
-and writes the few small files the freedesktop.org standards ask for, all
-under `~/.local` for the user who runs it:
+Installing APlot on Linux (see `Installing APlot` below - the window of the
+first start, or `Help > Install APlot...`) **installs APlot** - a copy of
+the `aplot.py` that was started, which the menu entry and the `aplot`
+command start (so the file it came from can be edited, moved or deleted
+afterwards, and the updates replace the copy) - and writes the few small
+files the freedesktop.org standards ask for - nothing is compiled.  Only
+for you they all lie under `~/.local`; for every user under `/usr/local`:
 
 | File | What it does |
 | --- | --- |
@@ -575,13 +576,10 @@ The file managers that follow the standard - **GNOME Files** (Nautilus),
 **Nemo**, **Caja**, **Thunar** (with its `tumbler` service) and others -
 then show the picture of every graph as its icon.  GNOME Files runs a
 thumbnailer in a sandbox that cannot look into the home folder, so if the
-pictures do not appear there, install it for every user of the computer
-instead:
-
-    sudo python3 aplot.py --install-desktop --system
-
-which writes the same files under `/usr/local` - the installed APlot is
-then `/usr/local/share/aplot/aplot.py`, and an update asks for the
+pictures do not appear there, install it **for every user of the
+computer** instead (the second choice of the window), which writes the
+same files under `/usr/local` - the installed APlot is then
+`/usr/local/share/aplot/aplot.py`, and an update asks for the
 administrator's password to replace it.  KDE's Dolphin has a
 thumbnail system of its own and may need a plugin of its own.
 
@@ -600,10 +598,10 @@ GNOME Files (the previewer called Sushi) shows every diagram of the graph
 as well, one page each, with the page buttons and the `Open With APlot`
 button of Sushi; a graph with only a picture shows the picture, and a
 plain JSON graph what Sushi shows for any file.  Sushi takes extra viewers
-from the home folder of each user only, so `--install-desktop` writes one
-there, `~/.local/share/sushi/viewers/aplot.js`; with `sudo ... --system`
-it goes into the home of the user who ran `sudo` (anyone else runs
-`python3 aplot.py --install-desktop` once as themselves).  Close a Space
+from the home folder of each user only, so the install writes one there,
+`~/.local/share/sushi/viewers/aplot.js`; installed for every user it goes
+into the home of the user who installed it (anyone else installs APlot
+once more, only for themselves).  Close a Space
 bar preview that is still open after the install, so that Sushi starts
 again with the new viewer.  It is tried with the Sushi of Ubuntu 20.04
 (3.34) and 24.04 (46); the one of 22.04 (41) reads viewers the same way.  The
@@ -613,7 +611,37 @@ stored picture itself.
 
 `python3 aplot.py --uninstall-desktop` (with `--system` for the other
 kind) takes every one of these files away again, the installed copy too.
-Running the install again installs the `aplot.py` it is run with.
+Installing again installs the `aplot.py` that was started.
+
+Without the window - in a script - the same is
+
+    python3 aplot.py --install-desktop                 # only for you
+    sudo python3 aplot.py --install-desktop --system   # for every user
+
+#### Installing APlot
+
+The first start of a plain `aplot.py` - on a Mac and on Linux alike -
+opens the window **`Install APlot`** with two choices:
+
+| Choice | macOS | Linux |
+| --- | --- | --- |
+| **Only for me** (no password) | `~/Applications/APlot.app` | `~/.local` (`~/.local/share/aplot/aplot.py`, the menu entry, the `aplot` command...) |
+| **For every user of this computer** | `/Applications/APlot.app` | `/usr/local` (the same files) |
+
+For every user the system asks for the password of an administrator in a
+window of its own - the usual dialog on a Mac, `pkexec` on Linux (an
+administrator on a Mac who may write `/Applications` anyway is not asked).
+`Install` installs, then says where and offers to **start the installed
+APlot** at once (on a Mac that is what gives it its name in the Dock);
+`Not now` leaves everything as it is.
+
+The window comes **once**, whatever the answer, and not at all when APlot
+is installed already or runs as the installed copy or from a package.
+`Install APlot...` - in the `APlot` menu on a Mac, in the `Help` menu on
+Linux - opens it at any time while a plain `aplot.py` is running, and
+installing again puts that file in place of the installed one.  If the
+password cannot be asked for (no `pkexec`, no desktop), the message gives
+the `sudo` command that does the same in a terminal.
 
 
 ## 0. The name
@@ -2936,6 +2964,23 @@ place on the page.
   (how many minor ones sit between two major ones) on the next line.  On a
   **logarithmic** axis the interval counts powers of the base, and a short
   line under the box says which base; see `Direction and Scale` above,
+* **Begin and end on a major tick** (on): the automatic range is rounded
+  out to the major ticks around the data, so the **first and the last
+  number stand exactly at the two ends of the axis** - the way diagrams
+  for print are drawn, and the values are easier to read.  On a linear
+  axis it is the next whole step (data from 3.2 to 47.9 gives 0 ... 50,
+  from 0.3 to 9.7 gives 0 ... 10), on a logarithmic one a whole power of
+  its base (0.37 ... 4200 gives 0.1 ... 10000 on `Log 10`, 0.25 ... 8192
+  on `Log 2`; with `Major ticks interval` 2, the powers of 100).  No extra
+  air is added around the data: a value that is itself a tick touches the
+  end.  It holds for both Y axes and a reversed axis, and the ticks are
+  chosen again when the window changes size so that the ends keep their
+  numbers.  A range **typed in** that is a whole number of a nice step
+  (`From` 0, `To` 7) gets that step, with both numbers; any other range
+  is left exactly as typed.  Switched **off**, the axis is matplotlib's
+  own: the data plus five per cent on both sides, the ticks wherever they
+  fall.  The switch is saved with the graph; new diagrams take it from
+  the setting `Axes begin and end on a tick` (`Plot` tab, on),
 
   **`From` and `To` always say what the axis says.**  While the range is
   automatic the two boxes are a *report*, not a setting: the axis works
@@ -3257,7 +3302,7 @@ The picture is what a file manager needs to show the graph instead of a
 blank page.  The file managers do not look into an unknown container by
 themselves: a small viewer extension on macOS (the `APlotQuickLook`
 folder, see `The picture of the graph in the Finder`), a thumbnailer entry
-on Linux (`python3 aplot.py --install-desktop`, see `The graph files on a
+on Linux (installed with APlot, see `The graph files on a
 Linux desktop`) or a thumbnail handler on Windows has to be installed, and each of
 them only has to copy this one picture out.  It is drawn 2048 pixels
 along its longer side: the Space bar preview shows it 1024 points wide -
@@ -3355,7 +3400,7 @@ less room than a title.
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows, whether the property windows stay above the diagram, and the size of the text in the windows (85 % on a Mac, 100 % elsewhere). |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
-| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, the marker of the first curve and whether every curve gets a different one, marker size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
+| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, the marker of the first curve and whether every curve gets a different one, marker size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, the default fill under the curves (colour, opacity, pattern, baseline), and whether the axes of a new diagram begin and end on a tick (`Axes begin and end on a tick`, on - see `Axes properties`). |
 | Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the page). |

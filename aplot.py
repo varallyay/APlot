@@ -78,6 +78,15 @@ Plot window
                               drag one to make that axis longer or shorter
 * two clicks on the frame   -> the "Frame and origin" tab of that dialog
 * Plot menu                 -> axes dialog, title and font sizes, legend
+* every axis begins and ends exactly on a major tick, with its number -
+  linear and logarithmic alike (EndTickLocator, EndTickLogLocator); the
+  switch "Begin and end on a major tick" of each axis page turns it off
+
+Installing
+----------
+The first start of a plain aplot.py on macOS and Linux offers, once, to
+install it - only for this user or for every user (install_program,
+InstallDialog); "Install APlot..." in the menu does it at any time.
 
 Settings
 --------
@@ -99,7 +108,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.3.8 (2026-11-04) - see `APP_VERSION` below and "Version history" in the
+1.3.10 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -234,8 +243,9 @@ from matplotlib.patches import (Ellipse, FancyBboxPatch, Polygon,
 from matplotlib.text import Text
 from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
                                Formatter, FuncFormatter, LogFormatterSciNotation,
-                               LogLocator, MultipleLocator, NullFormatter,
-                               NullLocator)
+                               LogLocator, MaxNLocator, MultipleLocator,
+                               NullFormatter, NullLocator)
+from matplotlib import transforms as mtransforms
 from matplotlib.transforms import (Affine2D, Bbox, BboxTransformTo,
                                    IdentityTransform, ScaledTranslation,
                                    TransformedBbox)
@@ -251,8 +261,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.3.8"
-APP_VERSION_DATE = "2026-11-04"
+APP_VERSION = "1.3.10"
+APP_VERSION_DATE = "2026-11-13"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -1204,7 +1214,11 @@ DEFAULTS = {
     },
     # not shown in the settings window: what the program remembers by itself
     "macos": {
-        "ask_app_bundle": True,      # offer to build APlot.app in the Dock
+        "ask_app_bundle": True,      # (up to 1.3.8) offer to build APlot.app
+    },
+    # not shown: the first start offers to install APlot, once
+    "install": {
+        "ask_at_start": True,
     },
     # not shown either: which edition of these settings the file holds
     "about": {
@@ -1241,6 +1255,9 @@ DEFAULTS = {
         "fill_pattern": "None (plain colour)",
         "fill_base": "Bottom of the axes",
         "fill_follows_line": True,
+        # the automatic range of every axis begins and ends on a major
+        # tick, with its number, as diagrams for print are drawn
+        "ends_on_ticks": True,
     },
     "fonts": {
         "family": DEFAULT_FONT_FAMILY,
@@ -1329,6 +1346,7 @@ SETTINGS_SPEC = [
          ("fill_alpha", "Fill opacity (0-1)", "float")],
         ("fill_pattern", "Fill pattern", "choice", names(HATCH_PATTERNS)),
         ("fill_base", "Fill down to", "choice", names(FILL_BASES)),
+        ("ends_on_ticks", "Axes begin and end on a tick (new diagrams)", "bool"),
     ]),
     ("fonts", "Fonts", [
         ("family", "Font of the diagrams", "font"),
@@ -2266,14 +2284,19 @@ def desktop_quote(argument):
 
 
 def _sudo_user():
-    """(home, uid, gid) of the user who ran `sudo`, or None."""
+    """(home, uid, gid) of the user who ran `sudo` - or `pkexec`, which the
+    install window of APlot uses for every user - or None."""
     name = os.environ.get("SUDO_USER")
-    if not name or name == "root":
-        return None
     try:
         import pwd
-        entry = pwd.getpwnam(name)
-    except (ImportError, KeyError):
+        if name and name != "root":
+            entry = pwd.getpwnam(name)
+        else:
+            uid = int(os.environ.get("PKEXEC_UID", ""))
+            if uid == 0:
+                return None
+            entry = pwd.getpwuid(uid)
+    except (ImportError, KeyError, ValueError):
         return None
     return Path(entry.pw_dir), entry.pw_uid, entry.pw_gid
 
@@ -4748,6 +4771,147 @@ class NaturalLogFormatter(Formatter):
         return e_power_text(value)
 
 
+# --------------------------------------------------------------------------
+# an axis that begins and ends on a major tick
+# --------------------------------------------------------------------------
+# matplotlib's automatic range is the data plus five per cent on each side,
+# so the axis begins and ends somewhere between two ticks.  A diagram for
+# print wants the first and the last number of every axis exactly at its two
+# ends.  The two locators below do that: the automatic range is widened to
+# the next major tick outside the data (`view_limits`, which matplotlib asks
+# while it autoscales), and the ticks are then chosen so that both ends are
+# among them (`tick_values`), also after the window has been resized.
+
+END_TICK_STEPS = (1.0, 2.0, 2.5, 5.0)   # the "nice" steps, times 10**n
+END_TICK_SLACK = 1e-6                    # how near a whole step counts as on it
+
+
+def _whole_steps(value, step):
+    """True when `value` is a whole number of `step`s from zero."""
+    count = value / step
+    return abs(count - round(count)) <= END_TICK_SLACK
+
+
+def _nice_step(step):
+    """A tick step without the error matplotlib's arithmetic leaves in it
+    (0.0499999999999545 for 0.05 near 1000): a nice step is 1, 2, 2.5 or
+    5 times a power of ten, so six significant digits hold it exactly."""
+    return float(f"{float(step):.6g}")
+
+
+def _clean_tick(value, step):
+    """k * step without the 0.30000000000000004 of floating point."""
+    digits = max(0, min(15, 12 - int(math.floor(math.log10(abs(step))))))
+    return round(value, digits)
+
+
+class EndTickLocator(AutoLocator):
+    """The usual automatic ticks of a linear axis, with a tick at both ends.
+
+    The automatic range is rounded outwards to the major ticks around the
+    data; a range set by hand that is a whole number of some nice step gets
+    that step, so its two ends carry numbers too.  Any other range (the zoom
+    tool, a range typed in that fits no nice step) gets the ordinary ticks.
+    """
+
+    def _bins(self):
+        """How many intervals matplotlib would allow on this axis."""
+        nbins = getattr(self, "_nbins", "auto")
+        if nbins == "auto":
+            least = max(1, int(getattr(self, "_min_n_ticks", 2)) - 1)
+            try:
+                return int(np.clip(self.axis.get_tick_space(), least, 9))
+            except (AttributeError, TypeError, ValueError):
+                return 9
+        return max(1, int(nbins))
+
+    def view_limits(self, dmin, dmax):
+        low, high = sorted((float(dmin), float(dmax)))
+        if not (np.isfinite(low) and np.isfinite(high)):
+            return super().view_limits(dmin, dmax)
+        low, high = mtransforms.nonsingular(low, high)
+        ticks = MaxNLocator.tick_values(self, low, high)
+        if len(ticks) < 2:
+            return low, high
+        step = float(ticks[1] - ticks[0])
+        if not np.isfinite(step) or step <= 0:
+            return low, high
+        step = _nice_step(step)
+        start = _clean_tick(math.floor(low / step + END_TICK_SLACK) * step, step)
+        end = _clean_tick(math.ceil(high / step - END_TICK_SLACK) * step, step)
+        if end <= start:
+            end = _clean_tick(start + step, step)
+        return start, end
+
+    def end_step(self, vmin, vmax):
+        """The nice step that puts a tick on both ends, or None."""
+        low, high = sorted((float(vmin), float(vmax)))
+        span = high - low
+        if not (np.isfinite(span) and span > 0):
+            return None
+        bins = self._bins()
+        least = max(1, int(getattr(self, "_min_n_ticks", 2)) - 1)
+        top = 10.0 ** math.floor(math.log10(span))
+        candidates = sorted(nice * top * 10.0 ** shift
+                            for shift in (-3, -2, -1, 0)
+                            for nice in END_TICK_STEPS)
+        # as many ticks as matplotlib would draw; if no step fits, a few
+        # more are still better than an axis without its two numbers
+        for most in (bins + 1, 2 * bins + 2):
+            for step in candidates:
+                count = span / step
+                if not (least <= round(count) <= most):
+                    continue
+                if _whole_steps(low, step) and _whole_steps(high, step):
+                    return step
+        return None
+
+    def tick_values(self, vmin, vmax):
+        ticks = super().tick_values(vmin, vmax)
+        low, high = sorted((float(vmin), float(vmax)))
+        if len(ticks) >= 2:
+            step = _nice_step(ticks[1] - ticks[0])
+            if (step > 0 and _whole_steps(low - ticks[0], step)
+                    and _whole_steps(high - ticks[0], step)):
+                return ticks                   # the ends are ticks already
+        step = self.end_step(low, high)
+        if step is None:
+            return ticks
+        count = int(round((high - low) / step))
+        first = round(low / step)
+        return np.array([_clean_tick((first + one) * step, step)
+                         for one in range(count + 1)])
+
+
+class EndTickLogLocator(LogLocator):
+    """The ticks of a logarithmic axis whose automatic range runs from one
+    power of the base to another (1 ... 1000 rather than 0.7 ... 1500)."""
+
+    def __init__(self, base=10.0, subs=(1.0,), numticks=None):
+        super().__init__(base=base, subs=subs, numticks=numticks)
+        self.end_base = float(base)
+
+    def view_limits(self, vmin, vmax):
+        base = self.end_base
+        try:
+            low, high = sorted((float(vmin), float(vmax)))
+            if not (0.0 < low < high and np.isfinite(high)):
+                # zero, negative or a single value: matplotlib mends it
+                low, high = sorted(float(one)
+                                   for one in self.nonsingular(vmin, vmax))
+        except (AttributeError, TypeError, ValueError):
+            return super().view_limits(vmin, vmax)
+        if not (base > 1.0 and np.isfinite(base) and low > 0
+                and np.isfinite(low) and np.isfinite(high)):
+            return super().view_limits(vmin, vmax)
+        scale = math.log(base)
+        first = math.floor(math.log(low) / scale + END_TICK_SLACK)
+        last = math.ceil(math.log(high) / scale - END_TICK_SLACK)
+        if last <= first:
+            last = first + 1
+        return base ** first, base ** last
+
+
 def gestures_reach_tk():
     """Whether the system hands pinch gestures to Tk.  It does not.
 
@@ -5385,8 +5549,8 @@ class ShapeDialog(DiagramMirror, ToolDialog):
 class UpdateProgress(ToolDialog):
     """A small window that says what the update is doing just now."""
 
-    def __init__(self, master, text):
-        super().__init__(master, "Updates")
+    def __init__(self, master, text, title="Updates"):
+        super().__init__(master, title)
         ttk.Label(self.body, text=text).pack(anchor="w")
         self.bar = ttk.Progressbar(self.body, mode="indeterminate", length=320)
         self.bar.pack(fill="x", pady=(10, 0))
@@ -5458,6 +5622,66 @@ class UpdateDialog(ToolDialog):
         self.close()
         if self.on_skip is not None:
             self.on_skip()
+
+
+class InstallDialog(ToolDialog):
+    """Install APlot - only for this user, or for every user of the
+    computer?  The same window on a Mac and on Linux; it comes at the
+    first start of a plain aplot.py and from `Install APlot...`."""
+
+    def __init__(self, master, on_install, platform=None, first_start=False):
+        super().__init__(master, f"Install {APP_NAME}")
+        self.on_install = on_install
+        platform = platform or sys.platform
+        self.choice = tk.StringVar(value="user")
+        ttk.Label(self.body, font=("TkDefaultFont", 0, "bold"),
+                  text=f"Install {APP_NAME} {APP_VERSION} on this computer?"
+                  ).pack(anchor="w")
+        if platform == "darwin":
+            what = (f"{APP_NAME}.app gets its own name and icon in the Dock, "
+                    f"the graph files get their icon and open in {APP_NAME} "
+                    f"with a double click.")
+        else:
+            what = (f"{APP_NAME} gets its entry in the applications menu and "
+                    f"the command {DESKTOP_ID}; the graph files get their "
+                    f"icon, their picture as thumbnail, and open in "
+                    f"{APP_NAME} with a double click.")
+        what += (f"  The installed {APP_NAME} is a copy of {program_place()}, "
+                 f"which can then be edited, moved or deleted; the updates "
+                 f"replace the installed copy.")
+        ttk.Label(self.body, text=what, wraplength=460, justify="left"
+                  ).pack(anchor="w", pady=(6, 10))
+        options = ttk.Frame(self.body)
+        options.pack(fill="x")
+        for value, title, place, note in (
+                ("user", "Only for me", install_folder(False, platform),
+                 "no password needed"),
+                ("system", "For every user of this computer",
+                 install_folder(True, platform),
+                 "asks for the password of an administrator")):
+            ttk.Radiobutton(options, text=title, value=value,
+                            variable=self.choice).pack(anchor="w")
+            ttk.Label(options, text=f"{place}  ({note})", foreground="#555"
+                      ).pack(anchor="w", padx=(24, 0), pady=(0, 6))
+        menu = "the APlot menu" if platform == "darwin" else "the Help menu"
+        later = (f"This is asked once.  `Install {APP_NAME}...` in {menu} "
+                 f"does it at any time." if first_start
+                 else f"Installing again puts this {APP_NAME} in place of the "
+                      f"installed one.")
+        ttk.Label(self.body, text=later, wraplength=460, justify="left",
+                  foreground="#555").pack(anchor="w", pady=(4, 0))
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(12, 0))
+        self.install_button = ttk.Button(bar, text="Install", command=self._install)
+        self.install_button.pack(side="left")
+        ttk.Button(bar, text="Not now", command=self.close).pack(side="left",
+                                                                 padx=(6, 0))
+        self.bind("<Return>", lambda _e: self._install())
+
+    def _install(self):
+        system = self.choice.get() == "system"
+        self.close()
+        self.on_install(system)
 
 
 class SettingsDialog(ToolDialog):
@@ -6665,6 +6889,7 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
         self.label_pad_var = tk.StringVar(value=f"{cfg['label_pad']:g}")
         self.tick_pad_var = tk.StringVar(value=f"{cfg['tick_pad']:g}")
         self.auto_var = tk.BooleanVar(value=cfg["auto"])
+        self.ends_var = tk.BooleanVar(value=bool(cfg.get("ends_on_ticks", True)))
         self.min_var = tk.StringVar(value=f"{low:g}")
         self.max_var = tk.StringVar(value=f"{high:g}")
         self.step_var = tk.StringVar(
@@ -6723,6 +6948,7 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
             "tick_pad": (self.tick_pad_var,
                          field_number(cfg.get("tick_pad"), None)),
             "auto": (self.auto_var, bool(cfg.get("auto", True))),
+            "ends_on_ticks": (self.ends_var, bool(cfg.get("ends_on_ticks", True))),
             "step": (self.step_var, "" if step in (None, 0)
                      else field_number(step, None)),
             "minor": (self.minor_var, field_number(cfg.get("minor"), None)),
@@ -6888,16 +7114,19 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
         self._wide(ttk.Separator(box, orient="horizontal"), 2, pady=(8, 6))
         self._wide(ttk.Checkbutton(box, text="Automatic range and ticks",
                                    variable=self.auto_var,
-                                   command=self._toggle_auto), 3, pady=(0, 4))
+                                   command=self._toggle_auto), 3, pady=(0, 2))
+        # the first and the last number stand exactly at the two ends
+        self._wide(ttk.Checkbutton(box, text="Begin and end on a major tick",
+                                   variable=self.ends_var), 4, pady=(0, 4))
         # the two ends of the range share one line
         self.min_entry, self.max_entry = self._pair(
-            box, 4,
+            box, 5,
             "From:", ttk.Entry(box, textvariable=self.min_var, width=ENTRY_WIDTH),
             "To:", ttk.Entry(box, textvariable=self.max_var, width=ENTRY_WIDTH))
         # the interval of the major ticks and the number of minor ones
         # between them belong together: one line
         self.step_entry, _minor = self._pair(
-            box, 5,
+            box, 6,
             "Major ticks interval:",
             ttk.Entry(box, textvariable=self.step_var, width=ENTRY_WIDTH),
             "Minor ticks:",
@@ -6906,11 +7135,11 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
         # what that number counts: nothing on a linear axis, powers on a
         # logarithmic one - which is the one thing a reader cannot guess
         self.step_note = ttk.Label(box, textvariable=self.step_note_var)
-        self.step_note.grid(row=6, column=1, columnspan=3, sticky="w",
+        self.step_note.grid(row=7, column=1, columnspan=3, sticky="w",
                             pady=(0, 2))
-        self._wide(ttk.Separator(box, orient="horizontal"), 7, pady=(8, 6))
+        self._wide(ttk.Separator(box, orient="horizontal"), 8, pady=(8, 6))
         self.axis_color = ColorSwatch(box, self._axis_color)
-        ToolDialog.field(box, 8, "Axis colour:", self.axis_color)
+        ToolDialog.field(box, 9, "Axis colour:", self.axis_color)
 
     def _build_grid_box(self, color):
         """The grid: the section title switches the major lines on."""
@@ -6991,6 +7220,7 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
         low, high = self.plot.current_limits(self.which)
         return {
             "auto": self.auto_var.get(),
+            "ends_on_ticks": bool(self.ends_var.get()),
             "min": to_float(self.min_var.get(), low),
             "max": to_float(self.max_var.get(), high),
             "step": to_float(self.step_var.get(), None),
@@ -9862,7 +10092,8 @@ class DataTable(ttk.Frame):
         """Put the two check buttons of every column over its middle, and column letter below."""
         if not self._checks:
             return
-        rows = self.tree.get_children()
+        shown = self._first_shown_row()
+        rows = [] if shown is None else [str(shown)]
         offset = 0
         try:
             offset = int(self.tree.winfo_rootx() - self.check_bar.winfo_rootx())
@@ -10325,23 +10556,76 @@ class DataTable(ttk.Frame):
         editing one cell quiet.
         """
         bounds = self.block_bounds()
-        rows = set()
-        if bounds is not None and self.covers_whole_rows():
-            rows = set(range(bounds[0], bounds[2] + 1))
-        for item in self.tree.get_children():
-            wanted = ("block",) if int(item) in rows else ()
-            if tuple(self.tree.item(item, "tags")) != wanted:
-                self.tree.item(item, tags=wanted)
-
+        active = range(0)
+        if bounds is not None:
+            active = range(bounds[0], bounds[2] + 1)
+        tinted = active if bounds is not None and self.covers_whole_rows() \
+            else range(0)
+        self._tag_rows(self.tree, "_tinted_rows", "block", tinted)
         if hasattr(self, "row_tree"):
-            active_rows = set(range(bounds[0], bounds[2] + 1)) if bounds is not None else set()
-            for item in self.row_tree.get_children():
-                wanted = ("active_row",) if int(item) in active_rows else ()
-                if tuple(self.row_tree.item(item, "tags")) != wanted:
-                    self.row_tree.item(item, tags=wanted)
+            self._tag_rows(self.row_tree, "_active_rows", "active_row", active)
 
         self._refresh_letters(bounds)
         self._refresh_outline()
+
+    def _tag_rows(self, widget, memory, tag, wanted):
+        """Give `tag` to the rows of `wanted` (a range) and to no other row.
+
+        Which rows carry the tag is remembered (in the attribute `memory`),
+        so only the rows that change are touched.  Asking every row of the
+        table for its tags at every move of the selection made a sheet of
+        some ten thousand rows falter.
+        """
+        old = getattr(self, memory, None) or range(0)
+        if old == wanted:
+            return
+        rows = len(self.df)
+        try:
+            for row in old:
+                if row not in wanted and row < rows:
+                    widget.item(str(row), tags=())
+            for row in wanted:
+                if row not in old:
+                    widget.item(str(row), tags=(tag,))
+        except tk.TclError:
+            pass
+        setattr(self, memory, wanted)
+
+    def _forget_row_tags(self, rows=0):
+        """The rows from `rows` on are new or gone: they carry no tag."""
+        for memory in ("_tinted_rows", "_active_rows"):
+            old = getattr(self, memory, None)
+            if old:
+                setattr(self, memory, range(old.start, min(old.stop, rows)))
+
+    def _first_shown_row(self):
+        """The row at the top of the table on the screen (its number)."""
+        rows = len(self.df)
+        if not rows:
+            return None
+        try:
+            row = min(rows - 1,
+                      max(0, int(round(self.tree.yview()[0] * rows))))
+            # (while the table is being filled again it has no rows yet)
+            return row if self.tree.exists(str(row)) else None
+        except (tk.TclError, ValueError, IndexError):
+            return None
+
+    def _show_rows(self, first, last):
+        """Write the rows `first`..`last` of the data into the table widget
+        again - one call a row instead of one call a cell."""
+        first, last = max(0, int(first)), min(len(self.df) - 1, int(last))
+        if last < first:
+            return
+        part = self.df.iloc[first:last + 1]
+        item = self.tree.item
+        try:
+            for index, row in enumerate(part.itertuples(index=False, name=None),
+                                        start=first):
+                item(str(index),
+                     values=["" if pd.isna(v) else str(v) for v in row])
+        except tk.TclError:
+            pass
 
     def _refresh_letters(self, bounds=None):
         """Tint the letter of every column the block touches."""
@@ -10552,7 +10836,7 @@ class DataTable(ttk.Frame):
         """Draw the blue rectangle around the visible part of the block and the fill handle."""
         self._draw_gridlines()
         bounds = self.block_bounds()
-        if bounds is None or not self.tree.get_children():
+        if bounds is None or not len(self.df):
             self._hide_outline()
             return
         r0, c0, r1, c1 = bounds
@@ -10607,6 +10891,22 @@ class DataTable(ttk.Frame):
         """bbox of a cell, walking towards `other` until one is on screen."""
         step = -1 if row > other else 1
         current = row
+        if abs(other - row) > 64:
+            # a long block: only the rows on the screen can answer, so the
+            # walk starts there (walking 26 000 rows at every step of the
+            # scroll bar is what made scrolling falter)
+            rows = len(self.df)
+            try:
+                top, bottom = self.tree.yview()
+                top = int(top * rows) - 2
+                bottom = int(math.ceil(bottom * rows)) + 2
+            except (tk.TclError, ValueError, IndexError):
+                top, bottom = 0, rows
+            low, high = min(row, other), max(row, other)
+            top, bottom = max(low, top), min(high, bottom)
+            if top > bottom:
+                return None
+            current, other = (top, bottom) if step == 1 else (bottom, top)
         while True:
             if self.tree.exists(str(current)):
                 bbox = self.tree.bbox(str(current), f"#{col + 1}")
@@ -11690,6 +11990,7 @@ class DataTable(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         if hasattr(self, "row_tree"):
             self.row_tree.delete(*self.row_tree.get_children())
+        self._forget_row_tags()
         self._configure_columns()
         self.update_idletasks()
         for index, row in enumerate(self.df.itertuples(index=False, name=None)):
@@ -11787,6 +12088,7 @@ class DataTable(ttk.Frame):
                         if widget is not None and widget.exists(str(index)):
                             widget.delete(str(index))
                 self.df = self.df.iloc[:keep].reset_index(drop=True)
+                self._forget_row_tags(keep)
                 taken = True
         if columns is not None and len(self.df.columns) > columns >= 1:
             names = list(self.df.columns)
@@ -12070,9 +12372,8 @@ class DataTable(ttk.Frame):
 
     def _header_height(self):
         """Where the rows start: the heading is above that."""
-        children = self.tree.get_children()
-        if children:
-            bbox = self.tree.bbox(children[0], "#1")
+        if len(self.df) and self.tree.exists("0"):
+            bbox = self.tree.bbox("0", "#1")
             if bbox:
                 return int(bbox[1])
         return 20
@@ -12211,10 +12512,10 @@ class DataTable(ttk.Frame):
     # -- column names ------------------------------------------------------
     def _heading_geometry(self, column_id):
         """Position of a column heading: (x, y, width, height)."""
-        children = self.tree.get_children()
-        if not children:
+        shown = self._first_shown_row()
+        if shown is None:
             return None
-        bbox = self.tree.bbox(children[0], column_id)
+        bbox = self.tree.bbox(str(shown), column_id)
         if not bbox:
             return None
         x, y, width, _height = bbox
@@ -12353,14 +12654,10 @@ class DataTable(ttk.Frame):
         if bounds is None:
             return ""
         r0, c0, r1, c1 = bounds
-        lines = []
-        for row in range(r0, r1 + 1):
-            values = []
-            for col in range(c0, c1 + 1):
-                value = self.df.iat[row, col]
-                values.append("" if pd.isna(value) else str(value))
-            lines.append("\t".join(values))
-        return "\n".join(lines)
+        part = self.df.iloc[r0:r1 + 1, c0:c1 + 1]
+        return "\n".join(
+            "\t".join("" if pd.isna(value) else str(value) for value in row)
+            for row in part.itertuples(index=False, name=None))
 
     def copy_block(self, _event=None):
         """Ctrl/Cmd+C: the whole highlighted block, rows and columns."""
@@ -12379,7 +12676,10 @@ class DataTable(ttk.Frame):
         the column would look empty and come back from the dead as soon as
         anything else in the sheet was touched.
         """
-        gone = [key for key in self.cell_formulas if key in set(cells)]
+        if not self.cell_formulas:
+            return 0
+        cells = set(cells)
+        gone = [key for key in self.cell_formulas if key in cells]
         for key in gone:
             del self.cell_formulas[key]
         return len(gone)
@@ -12397,10 +12697,8 @@ class DataTable(ttk.Frame):
             column = self.df.columns[col]
             if self.df[column].dtype != object:
                 self.df[column] = self.df[column].astype(object)
-            for row in range(r0, r1 + 1):
-                self.df.iat[row, col] = ""
-                if self.tree.exists(str(row)):
-                    self.tree.set(str(row), column, "")
+            self.df.iloc[r0:r1 + 1, col] = ""
+        self._show_rows(r0, r1)
         # the formulas of those cells are gone with their values, and what
         # the rest of the sheet reads from them is worked out again
         self.forget_formulas([(row, col) for row in range(r0, r1 + 1)
@@ -12429,8 +12727,8 @@ class DataTable(ttk.Frame):
             return False
         r0, c0, r1, _c1 = bounds
         rows = r1 - r0 + 1
-        while len(self.df) < r1 + rows + 1:      # room for the second copy
-            self.add_row()
+        if len(self.df) < r1 + rows + 1:         # room for the second copy
+            self.grow_rows(r1 + rows + 1 - len(self.df))
         self.select_cell(r1 + 1, c0)
         self.paste_block(text)
         return True
@@ -12457,33 +12755,33 @@ class DataTable(ttk.Frame):
         needed = r0 + len(rows)
         if needed > len(self.df):
             if self.config_obj.get("table", "auto_extend"):
-                while len(self.df) < needed:
-                    self.add_row()
+                # all the missing rows at once, and unannounced: the paste
+                # is one step for Undo, not one step for every new row
+                self.grow_rows(needed - len(self.df))
             else:
                 rows = rows[:len(self.df) - r0]
+        if not rows:
+            return False
         columns = len(self.df.columns)
-        written = []
-        for offset, line in enumerate(rows):
-            row = r0 + offset
-            if row >= len(self.df):
-                break
-            for shift, cell in enumerate(line):
-                col = c0 + shift
-                if col >= columns:
-                    break
-                column = self.df.columns[col]
-                value = coerce(cell.strip())
-                try:
-                    self.df.iat[row, col] = value
-                except (ValueError, TypeError):
-                    self.df[column] = self.df[column].astype(object)
-                    self.df.iat[row, col] = value
-                if self.tree.exists(str(row)):
-                    self.tree.set(str(row), column,
-                                  "" if value == "" else str(value))
-                written.append((row, col))
+        names = list(self.df.columns)
+        # Written a whole column at a time: writing 100 000 cells one by one
+        # into the data frame and into the table widget takes minutes.
+        width = min(max(len(line) for line in rows), columns - c0)
+        for shift in range(width):
+            col = c0 + shift
+            values = self.df.iloc[:, col].tolist()
+            for offset, line in enumerate(rows):
+                if shift < len(line):
+                    values[r0 + offset] = coerce(line[shift].strip())
+            self.df[names[col]] = pd.Series(values, index=self.df.index,
+                                            dtype=object)
+        self._show_rows(r0, r0 + len(rows) - 1)
         # a pasted value replaces a formula that stood in that cell
-        self.forget_formulas(written)
+        if self.cell_formulas:
+            self.forget_formulas(
+                (r0 + offset, c0 + shift)
+                for offset, line in enumerate(rows)
+                for shift in range(min(len(line), columns - c0)))
         self.recalculate_all()
         last_row = min(len(self.df) - 1, r0 + len(rows) - 1)
         last_col = min(columns - 1, c0 + max(len(line) for line in rows) - 1)
@@ -13087,19 +13385,24 @@ class DataTable(ttk.Frame):
             self.status_label.configure(text="")
             return
 
+        # (the cells are read a row at a time: asking the data frame for
+        # every single cell makes a large selection crawl)
         nums = []
-        for r in range(r0, r1 + 1):
-            for c in range(c0, c1 + 1):
-                val = self.df.iat[r, c]
-                if isinstance(val, (int, float)) and np.isfinite(val):
-                    nums.append(float(val))
-                else:
-                    try:
-                        n = float(str(val).strip().replace(",", "."))
-                        if np.isfinite(n):
-                            nums.append(n)
-                    except (ValueError, TypeError):
-                        pass
+        part = self.df.iloc[r0:r1 + 1, c0:c1 + 1]
+        for line in part.itertuples(index=False, name=None):
+            for val in line:
+                if isinstance(val, (int, float)):
+                    if math.isfinite(val):
+                        nums.append(float(val))
+                    continue
+                if val == "":
+                    continue
+                try:
+                    n = float(str(val).strip().replace(",", "."))
+                    if math.isfinite(n):
+                        nums.append(n)
+                except (ValueError, TypeError, OverflowError):
+                    pass
 
         if nums:
             count = len(nums)
@@ -13519,6 +13822,8 @@ class PlotWindow(tk.Toplevel):
                     "label_on": True, "ticks_on": True, "tick_labels_on": True,
                     # which way the axis runs, and how its numbers are spread
                     "direction": "standard", "scale": "linear",
+                    # the automatic range begins and ends on a major tick
+                    "ends_on_ticks": bool(plot_cfg.get("ends_on_ticks", True)),
                     # where the axis stands in the stack: in front of the
                     # diagram to begin with, each of the three on its own
                     # step so that none of them is tied with another
@@ -15117,6 +15422,7 @@ class PlotWindow(tk.Toplevel):
                   if getattr(fill, "axes", None) is ax and fill.get_visible()]
         for fill in hidden:
             fill.set_visible(False)
+        self.apply_end_margins(ax)
         try:
             ax.relim(visible_only=True)
             ax.autoscale_view(scalex=scalex, scaley=scaley)
@@ -15124,6 +15430,60 @@ class PlotWindow(tk.Toplevel):
             for fill in hidden:
                 fill.set_visible(True)
         return None
+
+    def ends_on_ticks(self, which):
+        """True when the automatic range of that axis ends on major ticks."""
+        cfg = self.axis_cfg.get(which) or {}
+        return bool(cfg.get("ends_on_ticks", True))
+
+    def apply_end_margins(self, ax):
+        """The air the automatic range leaves around the data of `ax`.
+
+        An axis that ends on its ticks is rounded out to the next tick
+        anyway: the five per cent matplotlib adds first would only push
+        it one tick further.  Any other axis keeps matplotlib's margin.
+        """
+        y_which = "y2" if ax is not None and ax is self.ax2 else "y"
+        wanted = []
+        for which, key in (("x", "axes.xmargin"), (y_which, "axes.ymargin")):
+            wanted.append(0.0 if self.ends_on_ticks(which)
+                          else float(matplotlib.rcParams[key]))
+        try:
+            if ax.get_xmargin() != wanted[0]:
+                ax.set_xmargin(wanted[0])
+            if ax.get_ymargin() != wanted[1]:
+                ax.set_ymargin(wanted[1])
+        except (AttributeError, ValueError):
+            return False
+        return True
+
+    def major_locator(self, which, log_base=None):
+        """The locator of the major ticks: ends on ticks, or matplotlib's."""
+        ends = self.ends_on_ticks(which)
+        if log_base is None:
+            return EndTickLocator() if ends else AutoLocator()
+        kind = EndTickLogLocator if ends else LogLocator
+        return kind(base=log_base, subs=(1.0,), numticks=LOG_TICK_LIMIT)
+
+    def end_tick_spacing(self, which):
+        """The distance of the major ticks of a linear axis whose two ends
+        are ticks, or None (for the matplotlib script of the diagram)."""
+        if which == "y2" and self.ax2 is None:
+            return None
+        _ax, axis, _name = self._axis_pair(which)
+        low, high = sorted(self.current_limits(which))
+        try:
+            ticks = np.asarray(axis.get_major_locator().tick_values(low, high),
+                               dtype=float)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if len(ticks) < 2:
+            return None
+        spacing = _nice_step(ticks[1] - ticks[0])
+        if not (spacing > 0 and _whole_steps(low, spacing)
+                and _whole_steps(high, spacing)):
+            return None
+        return _clean_tick(spacing, spacing)
 
     def _rescale(self):
         """Let the automatic ranges follow the data of both Y axes."""
@@ -16897,6 +17257,13 @@ class PlotWindow(tk.Toplevel):
                 if not axis_cfg.get("auto", True) and step:
                     out.append("%s.%saxis.set_major_locator(MultipleLocator(%s))"
                                % (name, axis_name, lit(float(step))))
+                elif self.ends_on_ticks(which):
+                    # the ticks the diagram shows: both ends are among them
+                    spacing = self.end_tick_spacing(which)
+                    if spacing:
+                        out.append("%s.%saxis.set_major_locator("
+                                   "MultipleLocator(%s))"
+                                   % (name, axis_name, lit(float(spacing))))
                 out.append("%s.%saxis.set_minor_locator(%s)"
                            % (name, axis_name,
                               f"AutoMinorLocator({minor + 1})" if minor
@@ -17367,6 +17734,7 @@ class PlotWindow(tk.Toplevel):
                 "tick_labels_on": bool(cfg.get("tick_labels_on", True)),
                 "direction": self.axis_direction(which),
                 "scale": self.axis_scale(which),
+                "ends_on_ticks": self.ends_on_ticks(which),
                 "grid": dict(cfg["grid"]),
             }
         series = []
@@ -21807,9 +22175,13 @@ class PlotWindow(tk.Toplevel):
         log = scale != "linear"
         step = cfg.get("step")
         log_base = None
+        # whether the range begins and ends on a tick is known before the
+        # range is measured: it decides how the range is rounded
+        self.axis_cfg[which]["ends_on_ticks"] = bool(cfg.get(
+            "ends_on_ticks", stored.get("ends_on_ticks", True)))
         if cfg["auto"]:
             if not log:
-                axis.set_major_locator(AutoLocator())
+                axis.set_major_locator(self.major_locator(which))
             ax.autoscale(enable=True, axis=axis_name)
             self.measure_data(ax)
             if log:
@@ -21817,8 +22189,10 @@ class PlotWindow(tk.Toplevel):
                 # and it is measured against the range the data gave
                 log_base = self.log_major_base(LOG_BASES.get(scale, 10.0),
                                                step, self.current_limits(which))
-                axis.set_major_locator(LogLocator(base=log_base, subs=(1.0,),
-                                                  numticks=LOG_TICK_LIMIT))
+                axis.set_major_locator(self.major_locator(which, log_base))
+                if self.ends_on_ticks(which):
+                    # measured again: the ends go to the powers of that step
+                    self.measure_data(ax)
         else:
             now_low, now_high = self.current_limits(which)
             low = cfg.get("min") if cfg.get("min") is not None else now_low
@@ -21831,8 +22205,7 @@ class PlotWindow(tk.Toplevel):
             if log:
                 log_base = self.log_major_base(LOG_BASES.get(scale, 10.0),
                                                step, (low, high))
-                axis.set_major_locator(LogLocator(base=log_base, subs=(1.0,),
-                                                  numticks=LOG_TICK_LIMIT))
+                axis.set_major_locator(self.major_locator(which, log_base))
             elif step and step > 0:
                 count = int(round((high - low) / step)) + 1
                 if 1 < count <= 1000:
@@ -21840,7 +22213,7 @@ class PlotWindow(tk.Toplevel):
                 else:
                     axis.set_major_locator(MultipleLocator(step))
             else:
-                axis.set_major_locator(AutoLocator())
+                axis.set_major_locator(self.major_locator(which))
 
         minor = max(0, int(cfg.get("minor", 0)))
         if log:
@@ -21881,6 +22254,7 @@ class PlotWindow(tk.Toplevel):
             "axis_color": axis_color, "label_on": label_on,
             "ticks_on": ticks_on, "tick_labels_on": tick_labels_on,
             "direction": direction, "scale": scale,
+            "ends_on_ticks": self.ends_on_ticks(which),
             # the place of the axis in the stack is not this page's to set:
             # it comes from the file, or from where the user put it
             "z": float(Z_DEFAULT["axis"] if height is None else height),
@@ -22812,6 +23186,11 @@ Start it with:
 
     python3 aplot.py
 
+The first start on a Mac or on Linux opens a small window that offers to
+**install APlot - only for you, or for every user of the computer** (see
+`Installing APlot` below).  It is asked once; `Install APlot...` in the
+menu does it at any time.
+
 It also answers a few questions on the command line:
 
     python3 aplot.py --help          what these are
@@ -22819,15 +23198,16 @@ It also answers a few questions on the command line:
     python3 aplot.py --check-update  is there a newer one on GitHub?
     python3 aplot.py --update        download and install it
     python3 aplot.py FILE.aplt       start with that graph open
-    python3 aplot.py --make-app      build APlot.app on macOS (see below)
     python3 aplot.py --icon FILE     write the icon into a PNG file
-    python3 aplot.py --install-desktop   Linux: icons, thumbnails and
-                                         "open with" for .aplt (see below)
+    python3 aplot.py --make-app      macOS: install APlot.app without the
+                                     window (for scripts, see below)
+    python3 aplot.py --install-desktop   Linux: the same without the
+                                         window (for scripts, see below)
 
 
 ## Version
 
-This is **APlot 1.3.8 (2026-11-04)**.  The number is written in one place
+This is **APlot 1.3.10 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -22918,8 +23298,9 @@ the version is the newest, nothing is said at all.
 
 #### The installed APlot and the aplot.py you edit
 
-`APlot.app` on a Mac (`--make-app`) and the menu entry on Linux
-(`--install-desktop`) hold **a copy of their own** of the program - inside
+`APlot.app` on a Mac and the menu entry on Linux (installed from the
+`Install APlot` window, or with `--make-app` and `--install-desktop`) hold
+**a copy of their own** of the program - inside
 the bundle, `APlot.app/Contents/Resources/aplot.py`, and
 `~/.local/share/aplot/aplot.py` on Linux - and start that copy.  The
 installed APlot and the `aplot.py` it was made from are therefore **two
@@ -22929,9 +23310,9 @@ of the program that asked for it.  `Help > About APlot` names the file
 that runs, and the update window says it too.
 
 * **Installing a version by hand** - the one being worked on, say - is
-  running the same command with it: `python3 aplot.py --make-app` or
-  `python3 aplot.py --install-desktop` copies *that* file into the
-  installed APlot.
+  starting it and choosing `Install APlot...` in the menu (or running
+  `python3 aplot.py --make-app` or `python3 aplot.py --install-desktop`
+  with it): that copies *that* file into the installed APlot.
 * **Trying the updates out**: install an older `aplot.py` that way (any
   version from 1.3.0 on), start the installed APlot and use `Help > Check
   for updates...`: it finds the version on GitHub, whatever the file in
@@ -22957,6 +23338,8 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
+| 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
 | 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
 | 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
 | 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
@@ -23171,8 +23554,8 @@ is old and comes with an old Tk that macOS itself calls deprecated.
     sudo apt install python3-tk python3-numpy python3-pandas python3-matplotlib
     sudo apt install python3-pil python3-pil.imagetk python3-openpyxl    # optional
 
-then `python3 aplot.py`, or `python3 aplot.py --install-desktop` to install
-it with its menu entry.
+then `python3 aplot.py` - its first start offers to install it, with its
+menu entry (see `Installing APlot`).
 
 **Any system - a Python of APlot's own (a virtual environment).**  For a
 Homebrew Python (`brew install python python-tk`), for `tkinterdnd2` on
@@ -23272,17 +23655,10 @@ inside a running program changes that - the name comes from the application
 the system thinks it launched.
 
 The cure is a small **application bundle**, and APlot builds one for
-itself.  The first time it is started on a Mac it offers to do so, and the
-offer is made **once**, whatever the answer.  It can also be asked at any
-time:
-
-* the **`APlot > Install APlot in the Dock...`** menu item (it is there
-  only while the name is still borrowed), or
-* from a terminal:
-
-        python3 aplot.py --make-app
-
-Either way `~/Applications/APlot.app` is written.  It is a folder that
+itself: installing APlot on a Mac is exactly that (see `Installing APlot`
+below - the window of the first start, or `APlot > Install APlot...`).
+Only for you it is `~/Applications/APlot.app`, for every user
+`/Applications/APlot.app`.  It is a folder that
 holds the icon, the name, **a copy of `aplot.py`**
 (`Contents/Resources/aplot.py`) and a short launcher that starts that
 copy - nothing is compiled.  Start APlot from there (and keep it in the
@@ -23290,10 +23666,11 @@ Dock) and the label says `APlot`.  The app is an **installed program of
 its own**: the `aplot.py` it was made from can be edited, moved or
 deleted, and the app does not change; the updates replace the copy inside
 it (see `The installed APlot and the aplot.py you edit`).  Running the
-command again installs the `aplot.py` it is run with.  Give the command a
-folder of your own to put the bundle somewhere else:
+command again installs the `aplot.py` it is run with.  Without the window
+(in a script, say) the same is done by
 
-    python3 aplot.py --make-app /Applications
+    python3 aplot.py --make-app                  # ~/Applications
+    python3 aplot.py --make-app /Applications    # or a folder of your own
 
 The app itself may be moved as well; it finds its copy wherever it is.
 
@@ -23342,15 +23719,13 @@ picture as well: run `sh build.sh` and `sh install.sh` once more.
 
 #### The graph files on a Linux desktop
 
-On Linux one command does it all - nothing is compiled:
-
-    python3 aplot.py --install-desktop
-
-It **installs APlot** - a copy of the `aplot.py` it is run with, which the
-menu entry and the `aplot` command start (so the file it came from can be
-edited, moved or deleted afterwards, and the updates replace the copy) -
-and writes the few small files the freedesktop.org standards ask for, all
-under `~/.local` for the user who runs it:
+Installing APlot on Linux (see `Installing APlot` below - the window of the
+first start, or `Help > Install APlot...`) **installs APlot** - a copy of
+the `aplot.py` that was started, which the menu entry and the `aplot`
+command start (so the file it came from can be edited, moved or deleted
+afterwards, and the updates replace the copy) - and writes the few small
+files the freedesktop.org standards ask for - nothing is compiled.  Only
+for you they all lie under `~/.local`; for every user under `/usr/local`:
 
 | File | What it does |
 | --- | --- |
@@ -23379,13 +23754,10 @@ The file managers that follow the standard - **GNOME Files** (Nautilus),
 **Nemo**, **Caja**, **Thunar** (with its `tumbler` service) and others -
 then show the picture of every graph as its icon.  GNOME Files runs a
 thumbnailer in a sandbox that cannot look into the home folder, so if the
-pictures do not appear there, install it for every user of the computer
-instead:
-
-    sudo python3 aplot.py --install-desktop --system
-
-which writes the same files under `/usr/local` - the installed APlot is
-then `/usr/local/share/aplot/aplot.py`, and an update asks for the
+pictures do not appear there, install it **for every user of the
+computer** instead (the second choice of the window), which writes the
+same files under `/usr/local` - the installed APlot is then
+`/usr/local/share/aplot/aplot.py`, and an update asks for the
 administrator's password to replace it.  KDE's Dolphin has a
 thumbnail system of its own and may need a plugin of its own.
 
@@ -23404,10 +23776,10 @@ GNOME Files (the previewer called Sushi) shows every diagram of the graph
 as well, one page each, with the page buttons and the `Open With APlot`
 button of Sushi; a graph with only a picture shows the picture, and a
 plain JSON graph what Sushi shows for any file.  Sushi takes extra viewers
-from the home folder of each user only, so `--install-desktop` writes one
-there, `~/.local/share/sushi/viewers/aplot.js`; with `sudo ... --system`
-it goes into the home of the user who ran `sudo` (anyone else runs
-`python3 aplot.py --install-desktop` once as themselves).  Close a Space
+from the home folder of each user only, so the install writes one there,
+`~/.local/share/sushi/viewers/aplot.js`; installed for every user it goes
+into the home of the user who installed it (anyone else installs APlot
+once more, only for themselves).  Close a Space
 bar preview that is still open after the install, so that Sushi starts
 again with the new viewer.  It is tried with the Sushi of Ubuntu 20.04
 (3.34) and 24.04 (46); the one of 22.04 (41) reads viewers the same way.  The
@@ -23417,7 +23789,37 @@ stored picture itself.
 
 `python3 aplot.py --uninstall-desktop` (with `--system` for the other
 kind) takes every one of these files away again, the installed copy too.
-Running the install again installs the `aplot.py` it is run with.
+Installing again installs the `aplot.py` that was started.
+
+Without the window - in a script - the same is
+
+    python3 aplot.py --install-desktop                 # only for you
+    sudo python3 aplot.py --install-desktop --system   # for every user
+
+#### Installing APlot
+
+The first start of a plain `aplot.py` - on a Mac and on Linux alike -
+opens the window **`Install APlot`** with two choices:
+
+| Choice | macOS | Linux |
+| --- | --- | --- |
+| **Only for me** (no password) | `~/Applications/APlot.app` | `~/.local` (`~/.local/share/aplot/aplot.py`, the menu entry, the `aplot` command...) |
+| **For every user of this computer** | `/Applications/APlot.app` | `/usr/local` (the same files) |
+
+For every user the system asks for the password of an administrator in a
+window of its own - the usual dialog on a Mac, `pkexec` on Linux (an
+administrator on a Mac who may write `/Applications` anyway is not asked).
+`Install` installs, then says where and offers to **start the installed
+APlot** at once (on a Mac that is what gives it its name in the Dock);
+`Not now` leaves everything as it is.
+
+The window comes **once**, whatever the answer, and not at all when APlot
+is installed already or runs as the installed copy or from a package.
+`Install APlot...` - in the `APlot` menu on a Mac, in the `Help` menu on
+Linux - opens it at any time while a plain `aplot.py` is running, and
+installing again puts that file in place of the installed one.  If the
+password cannot be asked for (no `pkexec`, no desktop), the message gives
+the `sudo` command that does the same in a terminal.
 
 
 ## 0. The name
@@ -25740,6 +26142,23 @@ place on the page.
   (how many minor ones sit between two major ones) on the next line.  On a
   **logarithmic** axis the interval counts powers of the base, and a short
   line under the box says which base; see `Direction and Scale` above,
+* **Begin and end on a major tick** (on): the automatic range is rounded
+  out to the major ticks around the data, so the **first and the last
+  number stand exactly at the two ends of the axis** - the way diagrams
+  for print are drawn, and the values are easier to read.  On a linear
+  axis it is the next whole step (data from 3.2 to 47.9 gives 0 ... 50,
+  from 0.3 to 9.7 gives 0 ... 10), on a logarithmic one a whole power of
+  its base (0.37 ... 4200 gives 0.1 ... 10000 on `Log 10`, 0.25 ... 8192
+  on `Log 2`; with `Major ticks interval` 2, the powers of 100).  No extra
+  air is added around the data: a value that is itself a tick touches the
+  end.  It holds for both Y axes and a reversed axis, and the ticks are
+  chosen again when the window changes size so that the ends keep their
+  numbers.  A range **typed in** that is a whole number of a nice step
+  (`From` 0, `To` 7) gets that step, with both numbers; any other range
+  is left exactly as typed.  Switched **off**, the axis is matplotlib's
+  own: the data plus five per cent on both sides, the ticks wherever they
+  fall.  The switch is saved with the graph; new diagrams take it from
+  the setting `Axes begin and end on a tick` (`Plot` tab, on),
 
   **`From` and `To` always say what the axis says.**  While the range is
   automatic the two boxes are a *report*, not a setting: the axis works
@@ -26061,7 +26480,7 @@ The picture is what a file manager needs to show the graph instead of a
 blank page.  The file managers do not look into an unknown container by
 themselves: a small viewer extension on macOS (the `APlotQuickLook`
 folder, see `The picture of the graph in the Finder`), a thumbnailer entry
-on Linux (`python3 aplot.py --install-desktop`, see `The graph files on a
+on Linux (installed with APlot, see `The graph files on a
 Linux desktop`) or a thumbnail handler on Windows has to be installed, and each of
 them only has to copy this one picture out.  It is drawn 2048 pixels
 along its longer side: the Space bar preview shows it 1024 points wide -
@@ -26159,7 +26578,7 @@ less room than a title.
 | --- | --- |
 | Windows | Start size of the main window and of the diagram windows, whether the property windows stay above the diagram, and the size of the text in the windows (85 % on a Mac, 100 % elsewhere). |
 | Spreadsheet | Number of rows and column names at start, column width, font size, automatic row adding. |
-| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, the marker of the first curve and whether every curve gets a different one, marker size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, and the default fill under the curves (colour, opacity, pattern, baseline). |
+| Plot | **Page size** (the size of the diagram itself - see `The page`) and resolution, the title pattern (`{x}` is the name of the X column), default Y label, default line style and width, the marker of the first curve and whether every curve gets a different one, marker size and edge width, hollow markers, legend visibility, starting corner, frame and background of the legend boxes, the default fill under the curves (colour, opacity, pattern, baseline), and whether the axes of a new diagram begin and end on a tick (`Axes begin and end on a tick`, on - see `Axes properties`). |
 | Fonts | **The font of the diagrams** (first line), then the size and colour of the title, the axis labels, the axis numbers and the legend boxes, and the starting distance (in pixels) of the title, the axis labels and the axis numbers. |
 | Grid | Default grid: major and minor lines, colour, style, width, number of minor ticks. |
 | Frame | Default frame style, thickness, colour, tick lengths, background colours, and the default size and origin of the axes (as fractions of the page). |
@@ -26288,6 +26707,7 @@ class App:
         # `main`), never a window built by a test or by another program
         self._update_busy = False
         self._update_window = None
+        self.install_result = None     # what the last `Install APlot` did
         # the text of the windows at the size of the settings (smaller on
         # a Mac): before anything is built, so all of it is drawn so
         scale_interface_fonts(self.root, self.settings.get("window", "ui_scale"))
@@ -26360,10 +26780,11 @@ class App:
         self.root.bind("<Key>", self._stray_key, add="+")
         self._saved_signature = self.project_signature()
         self.root.after_idle(self._focus)
-        # macOS calls a plain script after its interpreter: asked once,
-        # the program can build the little bundle that carries its own name
-        self.root.after(600, self._offer_app_bundle)
         if check_updates:
+            # the first start of a plain aplot.py offers, once, to install
+            # it - for this user or for every user, on a Mac and on Linux
+            # alike (on a Mac that also gives it its own name in the Dock)
+            self.root.after(600, self._offer_installation)
             # an APlot.app or menu entry of an older APlot that starts this
             # very file gets a copy of its own; the first start of a new
             # version says what is new; then, once a week, GitHub is asked
@@ -27261,11 +27682,10 @@ class App:
             # so no separate APlot cascade is added on macOS
             apple = tk.Menu(menubar, name="apple", tearoff=0)
             apple.add_command(label=f"About {APP_NAME}", command=self.show_about)
-            if macos_name_is_borrowed():
-                # the Dock is calling this program after the interpreter
-                apple.add_command(
-                    label=f"Install {APP_NAME} in the Dock...",
-                    command=lambda: self.install_app_bundle(ask_first=True))
+            if self.install_offered():
+                # a plain aplot.py: the Dock calls it after the interpreter
+                apple.add_command(label=f"Install {APP_NAME}...",
+                                  command=self.install_application)
             apple.add_separator()
             menubar.add_cascade(menu=apple)
             try:  # interpreter wide, so only the first window registers it
@@ -27405,6 +27825,10 @@ class App:
         help_menu.add_command(label="Documentation", command=self.show_documentation)
         help_menu.add_command(label="Check for updates...",
                               command=self.check_for_updates)
+        if sys.platform != "darwin" and self.install_offered():
+            # on a Mac it is in the APlot menu
+            help_menu.add_command(label=f"Install {APP_NAME}...",
+                                  command=self.install_application)
         help_menu.add_separator()
         help_menu.add_command(label=f"About {APP_NAME}", command=self.show_about)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -27421,73 +27845,95 @@ class App:
         self._help_window = HelpWindow(self.root, load_documentation())
         return self._help_window
 
-    # -- the name macOS shows under the icon -------------------------------
-    def install_app_bundle(self, ask_first=False):
-        """Build `APlot.app`, so that the Dock says APlot and not python3.
+    # -- installing APlot: for this user or for every user ----------------
+    def install_offered(self):
+        """True while this APlot is a plain aplot.py that can be installed
+        (the `Install APlot...` menu item is there only then)."""
+        try:
+            return can_be_installed()
+        except Exception:
+            return False
 
-        A program started as `python3 aplot.py` belongs to the interpreter
-        as far as macOS is concerned, and the label under its Dock icon is
-        the interpreter's name.  The only thing that changes that is a real
-        application bundle - a folder holding the name, the icon, a copy of
-        this program and a short launcher that starts the copy.  Nothing is
-        compiled; the bundle is an installed APlot of its own.
-        """
-        if sys.platform != "darwin":
+    def install_application(self, first_start=False):
+        """The window that installs APlot - only for this user, or for
+        every user of the computer.  The same on a Mac and on Linux."""
+        if not (sys.platform == "darwin" or sys.platform.startswith("linux")):
             messagebox.showinfo(
                 APP_NAME,
-                "An application bundle belongs to macOS; on this system the "
-                "task bar shows the icon and the name already.",
-                parent=self.root)
+                f"{APP_NAME} installs itself on macOS and Linux; on this "
+                f"system an installable package does it (see the "
+                f"documentation).", parent=self.root)
             return None
-        if ask_first and not messagebox.askyesno(
-                f"{APP_NAME} in the Dock",
-                f"macOS is calling this program {Path(sys.executable).name}, "
-                f"because it was started as a plain script.\n\n"
-                f"Shall I install {APP_NAME}.app in your Applications "
-                f"folder?  It holds a copy of this {APP_NAME} "
-                f"({APP_VERSION}) and gives it its own name and icon in the "
-                f"Dock.  It is a program of its own: this aplot.py can be "
-                f"edited, moved or deleted without changing it, and the "
-                f"updates from GitHub replace the copy inside the app.",
-                parent=self.root):
-            return None
-        bundle = make_macos_app()
-        if bundle is None:
-            messagebox.showerror(
-                APP_NAME, f"{APP_NAME}.app could not be built.",
-                parent=self.root)
-            return None
-        if messagebox.askyesno(
-                f"{APP_NAME} in the Dock",
-                f"{bundle} is ready.\n\n"
-                f"Start {APP_NAME} from it now?  This one closes, and the "
-                f"new window carries the name {APP_NAME} in the Dock - where "
-                f"you can keep it.",
-                parent=self.root):
-            try:
-                subprocess.Popen(["open", "-a", str(bundle)])
-            except (OSError, subprocess.SubprocessError):
-                pass
-            else:
-                self.root.after(400, self.root.destroy)
-        return bundle
+        return InstallDialog(self.root, self.perform_install,
+                             first_start=first_start)
 
-    def _offer_app_bundle(self):
-        """Ask once whether the Dock should say APlot instead of python3."""
-        if not macos_name_is_borrowed():
+    def perform_install(self, system=False):
+        """Install it (in the background: the password window of the
+        system may take its time), say where, and offer to start the
+        installed APlot."""
+        if self._update_busy:
+            return False
+        self._update_busy = True
+        self._update_note(f"Installing {APP_NAME}...", title=f"Install {APP_NAME}")
+
+        def done(result, error):
+            self._update_busy = False
+            self._update_note(None)
+            if error is not None:
+                messagebox.showerror(f"Install {APP_NAME}", str(error),
+                                     parent=self.root)
+                return
+            self.install_result = result
+            self._installed(result, system)
+
+        self._in_background(lambda: install_program(system=system), done)
+        return True
+
+    def _installed(self, result, system):
+        who = "every user of this computer" if system else "you"
+        # the menu item goes on offering it: installing again renews it
+        if not messagebox.askyesno(
+                f"Install {APP_NAME}",
+                f"{APP_NAME} {APP_VERSION} is installed for {who}:\n"
+                f"{short_path(result['where'])}\n\n"
+                f"From now on start it from {result['start']}.\n\n"
+                f"Start the installed {APP_NAME} now?  This window closes "
+                f"and the installed one opens.", parent=self.root):
+            return False
+        if not self._may_discard(f"Start the installed {APP_NAME}"):
             return False
         try:
-            if not self.settings.get("macos", "ask_app_bundle"):
-                return False
+            subprocess.Popen([str(one) for one in result["command"]],
+                             start_new_session=True)
+        except (OSError, subprocess.SubprocessError) as error:
+            messagebox.showerror(f"Install {APP_NAME}",
+                                 f"It could not be started: {error}",
+                                 parent=self.root)
+            return False
+        self.root.after(400, self.root.destroy)
+        return True
+
+    def _offer_installation(self):
+        """The first start of a plain aplot.py: offer, once, to install it
+        (on a Mac that also gives it its own name in the Dock)."""
+        if not self.install_offered() or existing_installations():
+            return False
+        try:
+            asked = (not self.settings.get("install", "ask_at_start")
+                     or (sys.platform == "darwin"
+                         and not self.settings.get("macos", "ask_app_bundle")))
         except KeyError:
             return False
+        if asked:
+            return False
         # it is asked exactly once, whatever the answer
+        self.settings.set("install", "ask_at_start", False)
         self.settings.set("macos", "ask_app_bundle", False)
         try:
             self.settings.save()
         except OSError:
             pass
-        self.install_app_bundle(ask_first=True)
+        self.install_application(first_start=True)
         return True
 
     # -- new versions ------------------------------------------------------
@@ -27521,7 +27967,7 @@ class App:
 
         self.root.after(100, poll)
 
-    def _update_note(self, text=None):
+    def _update_note(self, text=None, title="Updates"):
         """A small window that says what is being done (None closes it)."""
         window = self._update_window
         if window is not None:
@@ -27532,7 +27978,7 @@ class App:
             self._update_window = None
         if text is None:
             return None
-        self._update_window = UpdateProgress(self.root, text)
+        self._update_window = UpdateProgress(self.root, text, title)
         return self._update_window
 
     def auto_check_for_updates(self):
@@ -29400,6 +29846,181 @@ def install_own_copy(new_program, platform=None):
     return None
 
 
+# --------------------------------------------------------------------------
+# installing APlot: for this user, or for every user of the computer
+# --------------------------------------------------------------------------
+# The first start of a plain aplot.py - on a Mac and on Linux alike - opens
+# a small window that offers to install APlot, either for the user who runs
+# it or for every user of the computer (which asks for the password of an
+# administrator, in the system's own window).  `Install APlot...` in the
+# menu does the same at any time.  The command line switches
+# (--make-app, --install-desktop [--system]) are still there for scripts
+# and packages, but nobody has to know them.
+
+MACOS_SYSTEM_APPLICATIONS = Path("/Applications")
+
+
+class InstallError(Exception):
+    """APlot could not be installed; the text says why."""
+
+
+def install_folder(system=False, platform=None):
+    """Where an installation goes, as the user would write it."""
+    platform = platform or sys.platform
+    if platform == "darwin":
+        folder = (MACOS_SYSTEM_APPLICATIONS if system
+                  else Path.home() / "Applications")
+        return short_path(folder / f"{APP_NAME}.app")
+    if platform.startswith("linux"):
+        return short_path(linux_desktop_paths(system=system)["root"])
+    return ""
+
+
+def existing_installations(platform=None):
+    """The installed APlots found on this computer (paths)."""
+    platform = platform or sys.platform
+    if platform == "darwin":
+        found = []
+        for folder in (Path.home() / "Applications", MACOS_SYSTEM_APPLICATIONS):
+            program = folder / f"{APP_NAME}.app" / "Contents" / "Resources" / INSTALLED_PROGRAM
+            if program.is_file():
+                found.append(program)
+        return found
+    return installed_copies(platform)
+
+
+def can_be_installed(program=None, platform=None):
+    """True when this APlot is a plain aplot.py that could be installed -
+    not an installed copy, not part of a package, on macOS or Linux."""
+    platform = platform or sys.platform
+    if not (platform == "darwin" or platform.startswith("linux")):
+        return False
+    if os.environ.get(FROZEN_MARK) or package_kind(program):
+        return False
+    if platform == "darwin" and program is None and running_from_bundle():
+        return False
+    return not is_installed_copy(program, platform)
+
+
+def run_as_administrator(command, platform=None, timeout=600):
+    """Run `command` (a list) as an administrator: the system asks for the
+    password in a window of its own (`pkexec` on Linux, the usual dialog
+    on a Mac).  (True, "") or (False, why not)."""
+    platform = platform or sys.platform
+    if platform.startswith("linux"):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            full = list(command)                 # root already
+        else:
+            pkexec = shutil.which("pkexec")
+            if pkexec is None:
+                return False, "pkexec, which asks for the password, is not installed"
+            if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                return False, "there is no desktop to ask for the password on"
+            full = [pkexec] + list(command)
+    elif platform == "darwin":
+        line = " ".join(shlex.quote(str(one)) for one in command)
+        full = ["/usr/bin/osascript",
+                "-e", "on run argv",
+                "-e", "do shell script (item 1 of argv) with administrator privileges",
+                "-e", "end run", line]
+    else:
+        return False, "this system has no way to ask for the password"
+    try:
+        done = subprocess.run([str(one) for one in full], capture_output=True,
+                              text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as error:
+        return False, f"the password could not be asked for ({error})"
+    if done.returncode != 0:
+        # pkexec: 126 = the password window was closed, 127 = not allowed
+        said = (done.stderr or "").strip().splitlines()
+        if done.returncode in (126, 127) or "cancel" in " ".join(said).lower():
+            return False, "the password of an administrator was not given"
+        return False, said[-1] if said else f"it ended with code {done.returncode}"
+    return True, ""
+
+
+def install_program(system=False, platform=None, program=None):
+    """Install APlot - a copy of `program` (this file by default) - for
+    this user or, with `system`, for every user of the computer.
+
+    macOS: `~/Applications/APlot.app`, or `/Applications/APlot.app`.
+    Linux: the copy, the menu entry, the icons, the thumbnails and the
+    previews under `~/.local`, or under `/usr/local`.
+    Writing for every user asks for the password of an administrator when
+    this user may not write there.  Returns {"where", "command", "start"}
+    (the installed APlot, how to start it, where the user finds it), or
+    raises InstallError.
+    """
+    platform = platform or sys.platform
+    program = Path(program or __file__).resolve()
+    if platform == "darwin":
+        folder = MACOS_SYSTEM_APPLICATIONS if system else Path.home() / "Applications"
+        bundle = None
+        if not system or os.access(folder, os.W_OK):
+            bundle = make_macos_app(folder, program=program, platform=platform)
+        if bundle is None and system:
+            bundle = _install_macos_app_as_administrator(folder, program, platform)
+        if bundle is None:
+            raise InstallError(f"{short_path(folder / (APP_NAME + '.app'))} "
+                               f"could not be written.")
+        return {"where": bundle,
+                # opened as an application, so that the Dock says APlot
+                "command": ["/usr/bin/open", "-n", "-a", str(bundle), "--args"],
+                "start": f"{APP_NAME} in the Applications folder"
+                         + (" of the computer" if system else "")
+                         + " (keep it in the Dock)"}
+    if platform.startswith("linux"):
+        root_now = hasattr(os, "geteuid") and os.geteuid() == 0
+        if system and not root_now:
+            done, why = run_as_administrator(
+                [sys.executable or "python3", str(program),
+                 "--install-desktop", "--system"], platform)
+            if not done:
+                raise InstallError(
+                    f"{APP_NAME} could not be installed for every user: {why}."
+                    f"\n\nIn a terminal it can be done with\n    sudo "
+                    f"{shlex.quote(sys.executable or 'python3')} "
+                    f"{shlex.quote(str(program))} --install-desktop --system")
+        else:
+            try:
+                install_linux_desktop(system=system, program=program)
+            except OSError as error:
+                raise InstallError(f"{APP_NAME} could not be installed: {error}")
+        installed = linux_desktop_paths(system=system)["program"]
+        if not installed.is_file():
+            raise InstallError(f"{short_path(installed)} was not written.")
+        return {"where": installed,
+                "command": [sys.executable or "python3", str(installed)],
+                "start": f"the applications menu, a double click on a graph, "
+                         f"or the command {DESKTOP_ID}"}
+    raise InstallError(f"{APP_NAME} installs itself on macOS and Linux; "
+                       f"this system is {platform}.")
+
+
+def _install_macos_app_as_administrator(folder, program, platform="darwin"):
+    """Build APlot.app in a folder of this user, then let an administrator
+    put it into `folder` (the Applications folder of the computer)."""
+    work = Path(tempfile.mkdtemp(prefix="aplot-install-"))
+    try:
+        built = make_macos_app(work, program=program, platform=platform)
+        if built is None:
+            return None
+        target = folder / built.name
+        fresh = folder / (built.name + ".aplot-new")
+        script = (f"rm -rf {shlex.quote(str(fresh))} && "
+                  f"cp -R {shlex.quote(str(built))} {shlex.quote(str(fresh))} && "
+                  f"chmod -R go+rX {shlex.quote(str(fresh))} && "
+                  f"rm -rf {shlex.quote(str(target))} && "
+                  f"mv {shlex.quote(str(fresh))} {shlex.quote(str(target))}")
+        done, why = run_as_administrator(["/bin/sh", "-c", script], platform)
+        if not done:
+            raise InstallError(f"{short_path(target)} could not be written: {why}.")
+        register_with_launch_services(target)
+        return target
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _keep_old(program):
     """A copy of the program file `program` in the backups; its path."""
     old = program_facts(Path(program).read_text(encoding="utf-8", errors="replace"))
@@ -29647,12 +30268,18 @@ def after_update(settings, platform=None):
 
 USAGE = f"""{APP_NAME} {APP_VERSION} - plotting and editing tabular data
 
-  python3 aplot.py                 start the program
+  python3 aplot.py                 start the program; the first start on
+                                   macOS and Linux offers, in a window, to
+                                   install it - only for you, or for every
+                                   user (`Install {APP_NAME}...` in the menu
+                                   does it at any time)
   python3 aplot.py FILE.aplt       start the program with that graph
-  python3 aplot.py --make-app      install {APP_NAME}.app (macOS) with a copy of
-                                   this file: its own icon and name in the
-                                   Dock, and it updates itself
   python3 aplot.py --icon FILE     write the icon into a PNG file
+
+  The same without the window, for scripts and packages:
+  python3 aplot.py --make-app [FOLDER]
+                                   macOS: install {APP_NAME}.app with a copy
+                                   of this file in ~/Applications (or FOLDER)
   python3 aplot.py --install-desktop [--system]
                                    Linux: install a copy of this file, with
                                    the menu entry, icon, thumbnails and
