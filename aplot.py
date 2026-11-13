@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.4.1 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
+1.4.2 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -263,7 +263,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 APP_VERSION_DATE = "2026-11-13"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -5623,6 +5623,104 @@ class UpdateProgress(ToolDialog):
         self.bar.start(12)
 
 
+def scrolled_news(master, width=60):
+    """(frame, text) - a read-only text with a scroll bar at its side, for
+    what is new: the frame is to be packed, the text filled by `fill_news`."""
+    frame = ttk.Frame(master)
+    text = tk.Text(frame, width=width, height=4, wrap="word", relief="solid",
+                   borderwidth=1, padx=6, pady=4, font="TkDefaultFont",
+                   state="disabled")
+    scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+    text.configure(yscrollcommand=scroll.set)
+    scroll.pack(side="right", fill="y")
+    text.pack(side="left", fill="both", expand=True)
+    text.tag_configure("head", font=("TkDefaultFont", 0, "bold"))
+    return frame, text
+
+
+def fill_news(text, parts):
+    """Write `parts` - (words, tag or None) each - into a read-only text."""
+    text.configure(state="normal")
+    text.delete("1.0", "end")
+    for words, tag in parts:
+        text.insert("end", words, (tag,) if tag else ())
+    text.configure(state="disabled")
+
+
+def news_lines(text):
+    """About how many lines the words of a text take with their wrapping
+    (the widget cannot say before it is on the screen)."""
+    try:
+        font = tkfont.nametofont("TkDefaultFont")
+        room = max(1, int(text.cget("width")) * font.measure("0"))
+        lines = 0
+        for line in text.get("1.0", "end-1c").split("\n"):
+            # a little over: words wrap before the end of the line
+            lines += max(1, math.ceil(font.measure(line) * 1.08 / room))
+        return lines + 1
+    except (tk.TclError, TypeError, ValueError):
+        return 12
+
+
+def fit_news(window, text, most=None):
+    """Give a text of news as many lines as it has (at most `most`) - but
+    no more than keep its window within the height of the main (data sheet)
+    window and of the screen; the rest is reached with the scroll bar."""
+    try:
+        wanted = news_lines(text)
+        if most is not None:
+            wanted = min(wanted, int(most))
+        text.configure(height=1)
+        window.update_idletasks()
+        others = window.winfo_reqheight() - text.winfo_reqheight()
+        line = max(1, tkfont.nametofont("TkDefaultFont").metrics("linespace"))
+        one = text.winfo_reqheight()            # a text of one line
+        parent = window.master.winfo_toplevel()
+        parent.update_idletasks()
+        limit = int(parent.winfo_height())
+        if limit <= 1:                          # not on the screen yet
+            limit = int(parent.winfo_reqheight())
+        _left, top, _right, bottom = usable_screen(window)
+        limit = min(limit, bottom - top - TITLE_BAR)
+        room = 1 + (limit - others - one) // line
+        text.configure(height=max(3, min(wanted, room)))
+        return int(text.cget("height"))
+    except (tk.TclError, TypeError, ValueError):
+        return None
+
+
+class UpdateNewsDialog(ToolDialog):
+    """The first start after an update: what is new and what is left to
+    do, in a text with a scroll bar - the window is never taller than the
+    main (data sheet) window, however much there is to tell."""
+
+    def __init__(self, master, heading, history=(), notes=(), on_close=None):
+        super().__init__(master, f"{APP_NAME} {APP_VERSION}", on_close=on_close)
+        ttk.Label(self.body, font=("TkDefaultFont", 0, "bold"), text=heading,
+                  wraplength=460, justify="left").pack(anchor="w")
+        parts = []
+        if history:
+            parts.append(("What is new:\n\n", None))
+            for version, when, what in history:
+                parts.append((f"{version} ({when})\n", "head"))
+                parts.append((f"{what}\n\n", None))
+        parts.extend((f"{note}\n\n", None) for note in notes)
+        self.news = None
+        if parts:
+            parts[-1] = (parts[-1][0].rstrip("\n"), parts[-1][1])
+            frame, self.news = scrolled_news(self.body)
+            fill_news(self.news, parts)
+        bar = ttk.Frame(self.body)
+        bar.pack(side="bottom", fill="x", pady=(12, 0))
+        button = ttk.Button(bar, text="OK", command=self.close)
+        button.pack(side="right")
+        if self.news is not None:
+            frame.pack(fill="both", expand=True, pady=(8, 0))
+            fit_news(self, self.news)
+        self.bind("<Return>", lambda _e: self.close())
+        button.focus_set()
+
+
 class UpdateDialog(ToolDialog):
     """A newer APlot is on GitHub: what is new, and install it now?"""
 
@@ -5641,20 +5739,14 @@ class UpdateDialog(ToolDialog):
         history = facts.get("history") or []
         if history:
             ttk.Label(self.body, text="What is new:").pack(anchor="w")
-            frame = ttk.Frame(self.body)
+            frame, news = scrolled_news(self.body)
             frame.pack(fill="both", expand=True)
-            news = tk.Text(frame, width=60, height=min(12, 2 + 4 * len(history)),
-                           wrap="word", relief="solid", borderwidth=1,
-                           padx=6, pady=4, font="TkDefaultFont")
-            scroll = ttk.Scrollbar(frame, orient="vertical", command=news.yview)
-            news.configure(yscrollcommand=scroll.set)
-            scroll.pack(side="right", fill="y")
+            parts = []
             for version, when, what in history:
-                news.insert("end", f"{version} ({when})\n", "head")
-                news.insert("end", f"{what}\n\n")
-            news.tag_configure("head", font=("TkDefaultFont", 0, "bold"))
-            news.configure(state="disabled")
-            news.pack(side="left", fill="both", expand=True)
+                parts.append((f"{version} ({when})\n", "head"))
+                parts.append((f"{what}\n\n", None))
+            parts[-1] = (parts[-1][0].rstrip("\n"), None)
+            fill_news(news, parts)
             self.news = news
         kept = str(UPDATE_BACKUPS).replace(str(Path.home()), "~", 1)
         what = (f"Update now downloads it from {UPDATE_PAGE}, keeps a copy of "
@@ -5679,6 +5771,10 @@ class UpdateDialog(ToolDialog):
         if on_skip is not None:
             ttk.Button(bar, text="Skip this version",
                        command=self._skip).pack(side="right")
+        if history:
+            # as tall as the news (20 lines at most), never taller than
+            # the main window: the scroll bar reaches the rest
+            fit_news(self, self.news, most=20)
 
     def _update(self):
         self.close()
@@ -24245,7 +24341,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.1 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.2 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -24376,6 +24472,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.2 | 2026-11-13 | The report at the first start after an update - *"APlot has been updated from ... to ..."*, what is new and what is left to do - is a window of its own with a **scroll bar** instead of a message box, which grew with its text until its button was below the screen: the window is never taller than the main (data sheet) window, the rest is reached by scrolling, and it lists every version since the one that was updated, not only the newest six; `OK`, `Return` or `Esc` closes it, and the program can be used while it is open.  The window that offers a newer version keeps within the height of the main window too, and shows up to 20 lines of what is new. |
 | 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
 | 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
 | 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
@@ -27809,6 +27906,7 @@ class App:
         # `main`), never a window built by a test or by another program
         self._update_busy = False
         self._update_window = None
+        self._news_window = None
         self.install_result = None     # what the last `Install APlot` did
         # the text of the windows at the size of the settings (smaller on
         # a Mac): before anything is built, so all of it is drawn so
@@ -29236,14 +29334,12 @@ class App:
         if not info:
             return None
         rows = version_history(DOCUMENTATION, info["from"])
-        news = "\n".join(f"{version} ({date}): {what}"
-                         for version, date, what in rows[:6])
-        text = f"{APP_NAME} has been updated from {info['from']} to {APP_VERSION}."
-        if news:
-            text += "\n\nWhat is new:\n" + news
-        if info["notes"]:
-            text += "\n\n" + "\n\n".join(info["notes"])
-        messagebox.showinfo(f"{APP_NAME} {APP_VERSION}", text, parent=self.root)
+        heading = (f"{APP_NAME} has been updated from {info['from']} to "
+                   f"{APP_VERSION}.")
+        # a window of its own, with a scroll bar: a message box grows with
+        # its text until its buttons are below the screen
+        self._news_window = UpdateNewsDialog(self.root, heading, rows,
+                                             info["notes"])
         return info
 
     def show_about(self):
