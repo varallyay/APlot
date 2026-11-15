@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.4.4 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
+1.4.5 (2026-11-13) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -263,7 +263,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.4.5"
 APP_VERSION_DATE = "2026-11-13"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -596,7 +596,11 @@ BAR_BOX = (1.02, 0.0, 0.035, 1.0)
 MIN_BAR_SIZE = 0.01
 # what the pointer sets on a colour bar is kept in the settings of its
 # curve, beside what the curve dialog sets there
-BAR_KEEP = ("bar_box", "bar_label_size", "bar_label_color")
+BAR_KEEP = ("bar_box", "bar_label", "bar_label_size", "bar_label_color",
+            "bar_label_offset")
+# the label of a colour bar is dragged like the label of an axis: this is
+# the name its drag goes by
+BAR_LABEL_DRAG = "barlabel"
 RENAME_DELAY = 1500         # milliseconds allowed between the two clicks
 INLINE_PAD = 3              # pixels of air around the text in the editor
 INLINE_MIN_WIDTH = 48       # pixels: an empty editor is still usable
@@ -6083,6 +6087,110 @@ class TextStyleDialog(DiagramMirror, ToolDialog):
         self.close()
 
 
+class ColorBarDialog(DiagramMirror, ToolDialog):
+    """A colour bar: the range of its colours, and its label.
+
+    `source()` tells what the diagram says now - a dictionary with the two
+    ends of the colour scale as texts (`low`, `high`), the range of the
+    data (`auto`), the logarithmic switch (`log`, None where there is
+    none) and the `label` - or None once the bar is gone.
+    `on_apply(low, high, log, label)` takes what the fields say.
+    """
+
+    def __init__(self, master, source, on_apply, on_curve=None,
+                 unit="Z value", on_close=None):
+        super().__init__(master, "Colour bar", on_close=on_close)
+        self.source = source
+        self.on_apply = on_apply
+        now = source() or {}
+        self.low_var = tk.StringVar(value=str(now.get("low", "")))
+        self.high_var = tk.StringVar(value=str(now.get("high", "")))
+        self.log_var = tk.BooleanVar(value=bool(now.get("log")))
+        self.label_var = tk.StringVar(value=str(now.get("label", "")))
+        self.has_log = now.get("log") is not None
+
+        box = ttk.LabelFrame(self.body, text="Range of the colours",
+                             padding=8)
+        box.pack(fill="x")
+        entry = self.field(box, 0, f"Lowest {unit}:",
+                           ttk.Entry(box, textvariable=self.low_var, width=16))
+        self.field(box, 1, f"Highest {unit}:",
+                   ttk.Entry(box, textvariable=self.high_var, width=16))
+        self.range_hint = ttk.Label(box, foreground="#666", justify="left")
+        self.range_hint.grid(row=2, column=0, columnspan=2, sticky="w",
+                             pady=(4, 2))
+        ttk.Button(box, text="Whole range of the data",
+                   command=self.whole_range).grid(row=3, column=0,
+                                                  columnspan=2, sticky="w",
+                                                  pady=(2, 0))
+        if self.has_log:
+            ttk.Checkbutton(box, text="Logarithmic colour scale",
+                            variable=self.log_var,
+                            command=self.apply).grid(row=4, column=0,
+                                                     columnspan=2, sticky="w",
+                                                     pady=(6, 0))
+
+        text = ttk.Frame(self.body)
+        text.pack(fill="x", pady=(10, 0))
+        self.field(text, 0, "Label:",
+                   ttk.Entry(text, textvariable=self.label_var, width=28))
+        ttk.Label(self.body, foreground="#666", justify="left",
+                  text="The whole colour scale is laid over this range.\n"
+                       "The label is dragged on the diagram, on its own.").pack(
+            anchor="w", pady=(6, 0))
+
+        bar = ttk.Frame(self.body)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Apply", command=self.apply).pack(side="left")
+        if on_curve is not None:
+            ttk.Button(bar, text="Curve properties...",
+                       command=on_curve).pack(side="left", padx=(6, 0))
+        ttk.Button(bar, text="Close", command=self.close).pack(side="right")
+        ttk.Button(bar, text="OK", command=self._ok).pack(side="right",
+                                                          padx=(6, 6))
+        self.bind("<Return>", lambda _e: self.apply())
+        entry.focus_set()
+        entry.select_range(0, "end")
+        self.mirror(force=True)
+
+    def _diagram_fields(self):
+        now = self.source()
+        if not now:
+            return {}
+        auto = now.get("auto")
+        try:
+            self.range_hint.configure(
+                text=("The data run from %s to %s." % (
+                    PlotWindow.range_text(auto[0]),
+                    PlotWindow.range_text(auto[1])) if auto
+                      else "An empty field follows the data."))
+        except tk.TclError:
+            pass
+        fields = {"low": (self.low_var, str(now.get("low", ""))),
+                  "high": (self.high_var, str(now.get("high", ""))),
+                  "label": (self.label_var, str(now.get("label", "")))}
+        if self.has_log and now.get("log") is not None:
+            fields["log"] = (self.log_var, bool(now["log"]))
+        return fields
+
+    def apply(self):
+        self.mirror()           # catch up with the diagram first
+        self.on_apply(self.low_var.get(), self.high_var.get(),
+                      bool(self.log_var.get()) if self.has_log else None,
+                      self.label_var.get().strip())
+        self.mirror(force=True)  # the fields show what the diagram took
+
+    def whole_range(self):
+        """Both ends follow the data again."""
+        self.low_var.set("")
+        self.high_var.set("")
+        self.apply()
+
+    def _ok(self):
+        self.apply()
+        self.close()
+
+
 # --------------------------------------------------------------------------
 # curve (line + marker) properties
 # --------------------------------------------------------------------------
@@ -6611,6 +6719,8 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self.h2_bar_var = tk.BooleanVar(value=bool(cfg.get("colorbar", False)))
         self.h2_empty_var = tk.BooleanVar(
             value=bool(cfg.get("hide_empty", True)))
+        self.h2_vmin_var = tk.StringVar(value=self._limit_text(cfg.get("vmin")))
+        self.h2_vmax_var = tk.StringVar(value=self._limit_text(cfg.get("vmax")))
 
         self._pair(box, 0,
                    "Bins across X:",
@@ -6644,6 +6754,20 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                                    variable=self.h2_empty_var,
                                    command=self._apply), 3, pady=(4, 0))
 
+        self._pair(box, 4,
+                   "Lowest count:",
+                   ttk.Entry(box, width=SPIN_WIDTH + 3,
+                             textvariable=self.h2_vmin_var),
+                   "Highest count:",
+                   ttk.Entry(box, width=SPIN_WIDTH + 3,
+                             textvariable=self.h2_vmax_var))
+        self.h2_vmin_var.trace_add("write", self._apply)
+        self.h2_vmax_var.trace_add("write", self._apply)
+        self._wide(ttk.Label(box, foreground="#666",
+                             text="The range of the colours: an empty field "
+                                  "follows the data."),
+                   5, pady=(0, 2))
+
     # -- x, y, z: a coloured surface, contour lines, filled contours -------
     @staticmethod
     def _limit_text(value):
@@ -6662,6 +6786,21 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         except (TypeError, ValueError):
             return None
         return number if math.isfinite(number) else None
+
+    def show_color_range(self, cfg):
+        """The range of the colours was set on the diagram itself - in the
+        window of the colour bar: the fields here show it."""
+        loading, self._loading = self._loading, True
+        try:
+            if self.style_code() == "hist2d":
+                low, high = self.h2_vmin_var, self.h2_vmax_var
+            else:
+                low, high = self.sf_vmin_var, self.sf_vmax_var
+                self.sf_log_var.set(bool(cfg.get("log")))
+            low.set(self._limit_text(cfg.get("vmin")))
+            high.set(self._limit_text(cfg.get("vmax")))
+        finally:
+            self._loading = loading
 
     def _build_surface_box(self):
         """What the three x, y, z styles share: Z, the colours, the bar."""
@@ -6712,7 +6851,8 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self.sf_vmin_var.trace_add("write", self._apply)
         self.sf_vmax_var.trace_add("write", self._apply)
         self._wide(ttk.Label(box, foreground="#666",
-                             text="An empty field follows the data."),
+                             text="The range of the colours: an empty field "
+                                  "follows the data."),
                    4, pady=(0, 2))
 
         self._wide(ttk.Checkbutton(box, text="Logarithmic colour scale",
@@ -7220,6 +7360,8 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                 "alpha": to_float(self.h2_alpha_var.get(), 1.0),
                 "colorbar": bool(self.h2_bar_var.get()),
                 "hide_empty": bool(self.h2_empty_var.get()),
+                "vmin": self._limit_value(self.h2_vmin_var.get()),
+                "vmax": self._limit_value(self.h2_vmax_var.get()),
             })
         if self.on_surface_cfg:
             zcol = self.sf_zcol_var.get()
@@ -16836,7 +16978,25 @@ class PlotWindow(tk.Toplevel):
     @staticmethod
     def default_hist2d_cfg(_line=None):
         return {"xbins": HIST2D_BINS, "ybins": HIST2D_BINS, "cmap": "viridis",
-                "alpha": 1.0, "colorbar": False, "hide_empty": True}
+                "alpha": 1.0, "colorbar": False, "hide_empty": True,
+                "vmin": None, "vmax": None}
+
+    @staticmethod
+    def typed_range(cfg):
+        """The two ends of a colour scale as they were typed in: a number,
+        or None for an end that follows the data."""
+        ends = []
+        for key in ("vmin", "vmax"):
+            try:
+                value = float(cfg.get(key))
+            except (TypeError, ValueError):
+                value = None
+            ends.append(value if value is not None and math.isfinite(value)
+                        else None)
+        low, high = ends
+        if low is not None and high is not None and high < low:
+            low, high = high, low
+        return low, high
 
     def hist2d_bins(self, column, which="xbins"):
         cfg = self.hist2d_cfg.get(column) or {}
@@ -16872,11 +17032,13 @@ class PlotWindow(tk.Toplevel):
         target = line.axes if line.axes is not None else self.ax
         bins = [self.hist2d_bins(column, "xbins"),
                 self.hist2d_bins(column, "ybins")]
+        low, high = self.typed_range(cfg)
         try:
             _counts, _xe, _ye, mesh = target.hist2d(
                 x_arr, y_arr, bins=bins, cmap=str(cfg.get("cmap", "viridis")),
                 alpha=float(cfg.get("alpha", 1.0)),
                 cmin=(1 if cfg.get("hide_empty", True) else None),
+                vmin=low, vmax=high,
                 zorder=line.get_zorder() - 0.3)
         except (ValueError, TypeError):
             return None
@@ -16885,7 +17047,8 @@ class PlotWindow(tk.Toplevel):
         mesh.set_label("_nolegend_")
         self.hist2d_meshes[column] = mesh
         if cfg.get("colorbar"):
-            self._add_color_bar(column, mesh, target)
+            self._add_color_bar(column, mesh, target,
+                                str(cfg.get("bar_label") or ""))
         return mesh
 
     def _add_color_bar(self, column, mesh, target, label=""):
@@ -16918,6 +17081,7 @@ class PlotWindow(tk.Toplevel):
             bar.aplot_host, bar.aplot_label = target, str(label or "")
             bar.aplot_flat = flat
             self.hist2d_bars[column] = bar
+            self.apply_bar_label_offset(column)
             return bar
         except (ValueError, TypeError, AttributeError):
             return None
@@ -16967,6 +17131,188 @@ class PlotWindow(tk.Toplevel):
         size = cfg.get("bar_label_size")
         return (max(1, to_int(fallback if size is None else size, 12)),
                 safe_hex(cfg.get("bar_label_color"), "#000000"))
+
+    # -- the label of a bar: a text of its own, dragged like an axis label --
+    def bar_label_offset(self, column):
+        """How far the label of a bar was dragged from its automatic place
+        along the bar: (right, up) in points of the page."""
+        value = self.color_bar_cfg(column).get("bar_label_offset")
+        try:
+            dx, dy = (float(one) for one in value)
+        except (TypeError, ValueError):
+            return (0.0, 0.0)
+        if not (math.isfinite(dx) and math.isfinite(dy)):
+            return (0.0, 0.0)
+        return (dx, dy)
+
+    def apply_bar_label_offset(self, column):
+        """Shift the label of a bar by its dragged offset.
+
+        The automatic place - along the bar, beyond its numbers - is kept
+        underneath, exactly as for the labels of the axes: the label goes
+        on following its bar wherever that is moved, and stays as far from
+        it as it was put.
+        """
+        bar = self.hist2d_bars.get(column)
+        if bar is None:
+            return False
+        try:
+            label = (bar.ax.xaxis if bar.aplot_flat else bar.ax.yaxis).label
+            base = getattr(bar, "aplot_label_base", None)
+            if base is None:
+                base = bar.aplot_label_base = label.get_transform()
+            dx, dy = self.bar_label_offset(column)
+            if dx or dy:
+                label.set_transform(base + ScaledTranslation(
+                    dx / 72.0, dy / 72.0, self.fig.dpi_scale_trans))
+            else:
+                label.set_transform(base)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return True
+
+    def set_bar_label_offset(self, column, offset):
+        """Put the label of a bar (dx, dy) points from its automatic place."""
+        try:
+            dx, dy = (float(one) for one in offset)
+        except (TypeError, ValueError):
+            return False
+        if not (math.isfinite(dx) and math.isfinite(dy)):
+            return False
+        cfg = self.color_bar_cfg(column, create=True)
+        if dx or dy:
+            cfg["bar_label_offset"] = [dx, dy]
+        else:
+            cfg.pop("bar_label_offset", None)
+        return self.apply_bar_label_offset(column)
+
+    def _start_bar_label_drag(self, column, event):
+        self._text_drag = {"name": BAR_LABEL_DRAG, "bar": column,
+                           "x": event.x, "y": event.y, "moved": False,
+                           "offset": self.bar_label_offset(column)}
+        return self._text_drag
+
+    # -- the range of the colours: the two ends of the colour scale --------
+    @staticmethod
+    def range_text(value):
+        """One end of a colour scale as a field shows it."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return ""
+        return f"{number:.6g}" if math.isfinite(number) else ""
+
+    def color_data_range(self, column):
+        """(lowest, highest) value the colours of one curve stand for when
+        nothing is typed in: the whole range of its data.  None when there
+        is nothing to measure."""
+        try:
+            if self.series_style.get(column, self.plot_style) == "hist2d":
+                mesh = self.hist2d_meshes.get(column)
+                if mesh is None:
+                    return None
+                values = np.ma.masked_invalid(
+                    np.ma.asarray(mesh.get_array(), dtype=float)).compressed()
+            else:
+                values = self.surface_points(column)[2]
+            if len(values) == 0:
+                return None
+            return float(np.min(values)), float(np.max(values))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    def set_color_range(self, column, low=None, high=None, log=None):
+        """Give the colour scale of one curve other ends.
+
+        The whole colour scale is laid over `low` ... `high`: a narrower
+        range than the data spreads the colours over the part that matters
+        (what lies outside it wears the first or the last colour), a wider
+        one squeezes them.  None leaves an end with the data.  `log`, when
+        given, switches the logarithmic scale of a surface.
+        """
+        def number(value):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        if self.series.get(column) is None:
+            return False
+        surface = self.series_style.get(column, self.plot_style) != "hist2d"
+        cfg = self.color_bar_cfg(column, create=True)
+        new = {"vmin": number(low), "vmax": number(high)}
+        if log is not None and surface:
+            new["log"] = bool(log)
+        if all(cfg.get(key) == value for key, value in new.items()):
+            return False
+        scale = "log" in new and bool(cfg.get("log")) != new["log"]
+        cfg.update(new)
+        self.refresh_series_visuals(column)
+        if scale:
+            self._rescale()            # other points are left out now
+        # an open curve dialog shows the range that is on the diagram
+        dialog = self._dialogs.get(id(self.series.get(column)))
+        show = getattr(dialog, "show_color_range", None)
+        try:
+            if show is not None and dialog.winfo_exists():
+                show(cfg)
+        except tk.TclError:
+            pass
+        return True
+
+    def edit_color_bar(self, column):
+        """The window of a colour bar: the range of its colours, its label."""
+        if column not in self.hist2d_bars:
+            return None
+        surface = self.series_style.get(column, self.plot_style) != "hist2d"
+
+        def now():
+            if column not in self.hist2d_bars:
+                return None
+            cfg = self.color_bar_cfg(column)
+            auto = self.color_data_range(column)
+            typed = self.typed_range(cfg)
+            ends = [self.range_text(typed[end]) if typed[end] is not None
+                    else (self.range_text(auto[end]) if auto else "")
+                    for end in (0, 1)]
+            return {"low": ends[0], "high": ends[1], "auto": auto,
+                    "log": bool(cfg.get("log")) if surface else None,
+                    "label": str(cfg.get("bar_label") or "")}
+
+        def apply(low, high, log, label):
+            if column not in self.hist2d_bars:
+                return
+            cfg = self.color_bar_cfg(column)
+            auto = self.color_data_range(column)
+
+            def end(text, own, key):
+                # an end that still shows what the data gives was not
+                # typed in: it goes on following the data
+                value = SeriesStyleDialog._limit_value(text)
+                if value is None:
+                    return None
+                if cfg.get(key) is None and auto is not None \
+                        and str(text).strip() == self.range_text(auto[own]):
+                    return None
+                return value
+
+            with self.changed("the colour scale"):
+                self.set_color_range(column, end(low, 0, "vmin"),
+                                     end(high, 1, "vmax"), log)
+                if str(label).strip() != str(cfg.get("bar_label") or ""):
+                    self.set_bar_label(column, label)
+            self.draw()
+
+        def curve():
+            line = self.series.get(column)
+            return None if line is None else self.open_series_dialog(line)
+
+        name = f"bar-{column}"
+        return self._show_dialog(name, lambda: ColorBarDialog(
+            self, now, apply, on_curve=curve,
+            unit="Z value" if surface else "count",
+            on_close=lambda _d: self._dialogs.pop(name, None)))
 
     def rebuild_color_bar(self, column):
         """Draw one colour bar again: at its box, with its label."""
@@ -17096,12 +17442,47 @@ class PlotWindow(tk.Toplevel):
                 if not (body.x0 - reach <= x <= body.x1 + reach
                         and body.y0 - reach <= y <= body.y1 + reach):
                     continue
-                whole = bar.ax.get_tightbbox(renderer)
+                whole = self._bar_numbers_extent(bar, body, renderer)
             except (RuntimeError, ValueError, AttributeError, TypeError):
                 continue
             if whole is not None and whole.contains(x, y):
                 return column
         return None
+
+    @staticmethod
+    def _bar_numbers_extent(bar, body, renderer):
+        """The box around a bar and its numbers.
+
+        The label is not counted: it is a text of its own, which may have
+        been dragged far from the bar.
+        """
+        axis = bar.ax.xaxis if bar.aplot_flat else bar.ax.yaxis
+        boxes = [body]
+        low, high = sorted(axis.get_view_interval())
+        span = abs(high - low) * 1e-6
+        texts = []
+        for tick in axis.get_major_ticks():
+            try:
+                where = float(tick.get_loc())
+            except (TypeError, ValueError):
+                continue
+            if low - span <= where <= high + span:
+                texts += [tick.label1, tick.label2]
+        texts.append(axis.get_offset_text())
+        for text in texts:
+            if text.get_visible() and text.get_text():
+                box = text.get_window_extent(renderer)
+                if np.all(np.isfinite(box.get_points())):
+                    boxes.append(box)
+        return Bbox.union(boxes)
+
+    def reset_bar_label_offsets(self):
+        """Every label of a colour bar goes back beside its bar."""
+        moved = False
+        for column in list(self.hist2d_bars):
+            if any(self.bar_label_offset(column)):
+                moved = self.set_bar_label_offset(column, (0.0, 0.0)) or moved
+        return moved
 
     def set_bar_label(self, column, text=None, size=None, color=None):
         """Another text, font size or colour for the label of a bar."""
@@ -17149,8 +17530,9 @@ class PlotWindow(tk.Toplevel):
         name = f"bar-label-{column}"
         return self._show_dialog(name, lambda: TextStyleDialog(
             self, "Colour bar label", text, size, apply, color=color,
-            hint="An empty text takes the label away; the curve\n"
-                 "properties of the surface bring it back.",
+            hint="Drag the label on the diagram to move it.  An empty\n"
+                 "text takes it away; the window of the colour bar\n"
+                 "(a double click on the bar) brings it back.",
             on_close=lambda _d: self._dialogs.pop(name, None), source=now))
 
     # -- x, y, z: a coloured surface, contour lines, filled contours -------
@@ -18573,11 +18955,25 @@ class PlotWindow(tk.Toplevel):
             out += self._script_bar(column, tag, target, main)
             size = int(self.axis_cfg["y"].get("tick_size", 12))
             out.append(f"cax_{tag}.tick_params(labelsize={size})")
-            if plan["bar_label"]:
-                font, colour = self.bar_label_style(column)
-                out.append(
-                    f"bar_{tag}.set_label({lit(plan['bar_label'])}, fontsize="
-                    f"{font}, color={lit(colour)})")
+            out += self._script_bar_label(column, tag, plan["bar_label"])
+        return out
+
+    def _script_bar_label(self, column, tag, label):
+        """The lines that write the label of a colour bar, where it was
+        dragged to."""
+        if not label:
+            return []
+        lit = self._literal
+        font, colour = self.bar_label_style(column)
+        out = [f"bar_{tag}.set_label({lit(str(label))}, fontsize={font}, "
+               f"color={lit(colour)})"]
+        dx, dy = self.bar_label_offset(column)
+        if dx or dy:
+            flat = self.color_bar_flat(self.color_bar_box(column))
+            text = f"cax_{tag}.{'xaxis' if flat else 'yaxis'}.label"
+            out.append(f"{text}.set_transform({text}.get_transform() + "
+                       f"ScaledTranslation({lit(float(dx))} / 72, "
+                       f"{lit(float(dy))} / 72, fig.dpi_scale_trans))")
         return out
 
     def _script_bar(self, column, tag, target, main):
@@ -18708,12 +19104,16 @@ class PlotWindow(tk.Toplevel):
                     f"{self.hist2d_bins(column, 'ybins')}], "
                     f"cmap={lit(str(g_cfg.get('cmap', 'viridis')))}, "
                     f"alpha={float(g_cfg.get('alpha', 1.0))}, "
-                    f"cmin={lit(1 if g_cfg.get('hide_empty', True) else None)})"
+                    f"cmin={lit(1 if g_cfg.get('hide_empty', True) else None)}, "
+                    f"vmin={lit(self.typed_range(g_cfg)[0])}, "
+                    f"vmax={lit(self.typed_range(g_cfg)[1])})"
                 )
                 out.append(f"curves[{lit(str(column))}] = mesh_{tag}")
                 if g_cfg.get("colorbar"):
                     out += self._script_bar(column, tag, target,
                                             f"mesh_{tag}")
+                    out += self._script_bar_label(
+                        column, tag, str(g_cfg.get("bar_label") or ""))
             elif st in SURFACE_STYLES:
                 out += self._script_surface(column, tag, target, x_data)
             elif st == "pie":
@@ -21917,11 +22317,17 @@ class PlotWindow(tk.Toplevel):
         if state is None:
             return False
         dx, dy = self._axes_delta(dx_pixels, dy_pixels)
-        if kind in ("colorbar", "barlabel"):
-            # the label belongs to its bar: the arrow keys carry both
+        if kind == "colorbar":
             box = self.color_bar_box(key)
             return self.set_color_bar_box(
                 key, (box[0] + dx, box[1] + dy, box[2], box[3]))
+        if kind == "barlabel":
+            # the label of a bar keeps its shift in points, as the labels
+            # of the axes do
+            offset = self.bar_label_offset(key)
+            return self.set_bar_label_offset(
+                key, (offset[0] + self.points(dx_pixels),
+                      offset[1] + self.points(dy_pixels)))
         if kind == "text":
             # the title and the axis labels keep their shift in points
             offset = self.text_offset[key]
@@ -22689,6 +23095,7 @@ class PlotWindow(tk.Toplevel):
         for name in ("title", "x", "y", "y2"):
             self.text_offset[name] = (0.0, 0.0)
         self.apply_text_offsets()
+        self.reset_bar_label_offsets()
         self.draw()
 
     def text_at(self, x, y):
@@ -22834,6 +23241,8 @@ class PlotWindow(tk.Toplevel):
             return [("shape", drag["key"])]
         if self._text_drag is not None:
             name = str(self._text_drag["name"])
+            if self._text_drag.get("bar") is not None:
+                return [("barlabel", self._text_drag["bar"])]
             if name.startswith(NOTE_KEY):
                 return [("note", name[len(NOTE_KEY):])]
             return [("text", name)]
@@ -22854,6 +23263,8 @@ class PlotWindow(tk.Toplevel):
             found = [self.legends.get(key)]
         elif kind == "text":
             found = [self.text_artist(key)]
+        elif kind == "barlabel":
+            found = [self.bar_label_artist(key)]
         return [one for one in found if one is not None]
 
     def _moving_artists(self):
@@ -23156,7 +23567,12 @@ class PlotWindow(tk.Toplevel):
             if abs(dx) > 2 or abs(dy) > 2:
                 drag["moved"] = True
             name = drag["name"]
-            if name.startswith(NOTE_KEY):     # text boxes live in axes coords
+            if drag.get("bar") is not None:   # the label of a colour bar
+                if drag["moved"]:
+                    self.set_bar_label_offset(
+                        drag["bar"], (drag["offset"][0] + self.points(dx),
+                                      drag["offset"][1] + self.points(dy)))
+            elif name.startswith(NOTE_KEY):   # text boxes live in axes coords
                 inverse = self.ax.transAxes.inverted()
                 start = inverse.transform((drag["x"], drag["y"]))
                 now = inverse.transform((event.x, event.y))
@@ -23199,6 +23615,9 @@ class PlotWindow(tk.Toplevel):
         if (self._shape_drag or {}).get("mode") == "bar-move" \
                 and not self._shape_drag.get("moved"):
             dragged = False                    # the bar was only clicked
+        if (self._text_drag or {}).get("bar") is not None \
+                and self._text_drag.get("moved"):
+            dragged = True                     # the label of a bar was moved
         self._plot_drag = None
         self._finish_drag(event)
         self._open_pending_rename()
@@ -23258,7 +23677,9 @@ class PlotWindow(tk.Toplevel):
             return
         if not drag["moved"]:      # a click that only selected: put it back
             name = drag["name"]
-            if name.startswith(NOTE_KEY):
+            if drag.get("bar") is not None:
+                self.set_bar_label_offset(drag["bar"], drag["offset"])
+            elif name.startswith(NOTE_KEY):
                 self._move_note(name[len(NOTE_KEY):], drag["offset"])
             else:
                 self.text_offset[name] = drag["offset"]
@@ -23747,9 +24168,8 @@ class PlotWindow(tk.Toplevel):
                     else self.edit_axis_label(key))
         if kind == "barlabel":
             return self.edit_bar_label(key)
-        if kind == "colorbar":             # its settings are those of the curve
-            line = self.series.get(key)
-            return None if line is None else self.open_series_dialog(line)
+        if kind == "colorbar":             # the range of its colours
+            return self.edit_color_bar(key)
         if kind in ("frame", "axis"):
             return self.open_axes_dialog("frame")
         return None
@@ -23959,14 +24379,14 @@ class PlotWindow(tk.Toplevel):
             self.select_object("barlabel", column)
             self.announce_selection()
             self.draw()
-            self._start_bar_drag(column, event)   # dragged, it carries the bar
+            self._start_bar_label_drag(column, event)  # moved on its own
             return
         column = self.color_bar_at(event.x, event.y)
         if column is not None:            # select a colour bar and drag it
             self.select_object("colorbar", column)
             self.flash("Colour bar selected - drag it to move it, drag a "
                        "control point to resize it, double click for the "
-                       "colour scale")
+                       "range of the colours")
             self.draw()
             self._start_bar_drag(column, event)
             return
@@ -24741,7 +25161,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.4 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.4.5 (2026-11-13)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -24872,6 +25292,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.4.5 | 2026-11-13 | The **range of the colours** is set at the colour bar itself: a **double click on the bar** opens a new `Colour bar` window with `Lowest` and `Highest` value of the colour scale.  The two fields show the **whole range of the data** to begin with; another number typed in lays the whole colour scale over a **narrower** range (the colours spread out over the part that matters - what a logarithmic scale of many decades needs to show its features) or over a **wider** one (they are squeezed).  An end left as it was goes on following the data, `Whole range of the data` lets both ends go again, and the window also holds the `Logarithmic colour scale` switch, the label of the bar and a `Curve properties...` button.  A **2D Histogram** has the range too (`Lowest count`, `Highest count`, also in its curve properties), and its colour bar can now have a label.  The **label of the colour bar is a text of its own**: it is **dragged with the pointer** like the label of an axis - without its bar - and moved by the arrow keys; it follows the bar when that is moved, its place is saved with the diagram, taken back by `Undo`, written into the exported program, and `Reset dragged texts` puts it back beside the bar. |
 | 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
 | 1.4.3 | 2026-11-13 | The axes of the three **x, y, z** styles - `Colour Surface (pcolor)`, `Contour Lines` and `Filled Contours` - **begin and end on a major tick**, as the axes of every other plot style do: the automatic range is rounded out to the ticks around the surface instead of stopping at its edge.  Where the surface ends between two ticks a narrow strip of the plot area stays empty beside it; `Begin and end on a major tick` of `Axes properties` switches the rounding off for one axis, and the surface fills its plot area to the edge again.  A diagram saved by 1.4.0 - 1.4.2 opens as it was saved.  `Exchange the X and Y axes (turn the picture)` turns contour lines and filled contours exactly as it turns a colour surface - over a grid or over scattered points - and the ticks at the two ends of the axes change places with the rest. |
 | 1.4.2 | 2026-11-13 | The report at the first start after an update - *"APlot has been updated from ... to ..."*, what is new and what is left to do - is a window of its own with a **scroll bar** instead of a message box, which grew with its text until its button was below the screen: the window is never taller than the main (data sheet) window, the rest is reached by scrolling, and it lists every version since the one that was updated, not only the newest six; `OK`, `Return` or `Esc` closes it, and the program can be used while it is open.  The window that offers a newer version keeps within the height of the main window too, and shows up to 20 lines of what is new. |
@@ -27280,8 +27701,8 @@ whatever the zoom as well.  This has two further useful consequences:
 * the **distance** setting still works: it moves the text with respect to
   the axis, and the drag is added to that.
 
-`Plot > Title and fonts... > Reset dragged texts` puts the title and both
-labels back to their automatic places.
+`Plot > Title and fonts... > Reset dragged texts` puts the title, both
+labels and the label of a colour bar back to their automatic places.
 
 ### Legend boxes
 
@@ -27501,6 +27922,10 @@ switched on in `Curve properties` like any other.
     frame wherever it is dragged and never takes room away from the diagram.
     It can be moved and resized with the pointer, as described under
     `Colour scale (Z values)` below.
+  * `Lowest count` and `Highest count`: the range of the colours.  An
+    empty field follows the data; a number typed in lays the colour scale
+    over that range instead.  A double click on the colour bar sets the
+    same two numbers in the window of the bar.
   * `Leave the empty cells white`: on (the default) a cell with nothing in
     it is not painted at all, so the background stays visible; off, it is
     painted with the lowest colour of the scale.
@@ -27512,9 +27937,14 @@ switched on in `Curve properties` like any other.
     other column can be chosen.
   * `Colour scale`: the same 21 colour maps, and `Turn the colour scale
     round` to run any of them the other way.
-  * `Lowest Z` and `Highest Z`: the two ends of the colour scale.  An empty
-    field follows the data; a number typed in fixes that end, which is how
-    two diagrams are given the same scale.
+  * `Lowest Z` and `Highest Z`: the **range of the colours** - the two
+    ends of the colour scale.  An empty field follows the data; a number
+    typed in fixes that end.  The whole colour scale is laid over the
+    range: a narrower one than the data spreads the colours over the part
+    that matters (what lies outside wears the first or the last colour),
+    a wider one squeezes them - and it is how two diagrams are given the
+    same scale.  The same two numbers are set in the window of the colour
+    bar, see below.
   * `Logarithmic colour scale`: for values that span several decades.
     Values that are zero or negative have no logarithm and are left out.
   * `Opacity (0-1)` with a `Colour bar` switch next to it (on to begin
@@ -27527,11 +27957,22 @@ switched on in `Curve properties` like any other.
       four corners and the two ends only, so that its middle is free to be
       grabbed; a bar made **wider than it is tall lies down** - a
       horizontal bar, with its numbers and its label under it,
-    * a **double click** on the bar opens these curve properties,
+    * a **double click** on the bar opens the `Colour bar` window: the
+      **range of the colours** (`Lowest` and `Highest` value), the
+      `Logarithmic colour scale` switch and the label of the bar.  The two
+      fields show the whole range of the data to begin with; type another
+      number and press `Apply` (or Enter) to compress or stretch the
+      colour scale.  An end that was not changed goes on following the
+      data, and `Whole range of the data` lets both ends go again.
+      `Curve properties...` opens the rest of the settings,
     * its **label** is edited like an axis label: one click selects it, a
       slow second click (within 1.5 seconds) writes it in place, a double
-      click opens a window with its text, font size and colour.  Dragging
-      the label carries the whole bar.
+      click opens a window with its text, font size and colour.  The
+      label is a text of its own: **dragging it moves the label only**,
+      as the label of an axis is moved, and the arrow keys move it by
+      small steps.  It keeps following its bar - as far from it as it was
+      put - and `Plot > Title and fonts... > Reset dragged texts` puts it
+      back beside the bar.
     The place and the size of the bar are fractions of the plot area, so
     the bar follows the graph when that is moved or resized; they are
     saved with the diagram, taken back by `Undo`, and the exported
