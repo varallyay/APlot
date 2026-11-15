@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.5.0 (2026-11-15) - see `APP_VERSION` below and "Version history" in the
+1.5.1 (2026-11-15) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -266,7 +266,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 APP_VERSION_DATE = "2026-11-15"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -362,7 +362,13 @@ FLAT_SURFACE_FRAME = "box_out"
 # (None is the name of the Z column) and how that label is written
 VIEW3D_DEFAULT = {"elev": 30.0, "azim": -60.0, "box": [4.0, 4.0, 3.0],
                   "zmin": None, "zmax": None, "zlabel": None,
-                  "zlabel_size": None, "zlabel_color": None}
+                  "zlabel_size": None, "zlabel_color": None,
+                  # the numbers of the Z axis: their distance (None is
+                  # automatic), their font size and colour (None: as on
+                  # the Y axis)
+                  "zstep": None, "ztick_size": None, "ztick_color": None}
+# a diagram that opens with a surface in space shows the walls of its box
+SURFACE3D_FRAME = "box"
 # a surface of very many cells turns slowly: at most this many are drawn
 # along each of its two sides
 SURFACE3D_CELLS = 150
@@ -7593,6 +7599,154 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
 # axes properties: one window, one tab per axis
 # --------------------------------------------------------------------------
 
+class ZAxisTab(DiagramMirror, PairedFields, ttk.Frame):
+    """The page of the Z axis of a surface in space.
+
+    The X and the Y axis of such a diagram are set on their usual pages;
+    this one holds what the third axis needs: its label, its range, the
+    distance of its numbers and their font.
+    """
+
+    field = staticmethod(ToolDialog.field)
+
+    def __init__(self, master, plot):
+        super().__init__(master, padding=12)
+        self.plot = plot
+        now = self._now()
+        self.label_var = tk.StringVar(value=now["label"])
+        self.label_size_var = tk.StringVar(value=now["label_size"])
+        self.tick_size_var = tk.StringVar(value=now["tick_size"])
+        self.auto_var = tk.BooleanVar(value=now["auto"])
+        self.min_var = tk.StringVar(value=now["min"])
+        self.max_var = tk.StringVar(value=now["max"])
+        self.step_var = tk.StringVar(value=now["step"])
+
+        box = ttk.LabelFrame(self, text="Label", padding=8)
+        box.pack(fill="x")
+        self.field(box, 0, "Text:",
+                   ttk.Entry(box, textvariable=self.label_var, width=30))
+        self.label_color = ColorSwatch(box, now["label_color"])
+        self._pair(box, 1,
+                   "Font size:",
+                   ttk.Spinbox(box, from_=4, to=72, increment=1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.label_size_var),
+                   "Colour:", self.label_color)
+
+        box = ttk.LabelFrame(self, text="Range", padding=8)
+        box.pack(fill="x", pady=(10, 0))
+        ttk.Checkbutton(box, text="Automatic (follows the data)",
+                        variable=self.auto_var,
+                        command=self._toggle_auto).grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
+        self.min_entry = ttk.Entry(box, width=SPIN_WIDTH + 4,
+                                   textvariable=self.min_var)
+        self.max_entry = ttk.Entry(box, width=SPIN_WIDTH + 4,
+                                   textvariable=self.max_var)
+        self._pair(box, 1, "From:", self.min_entry, "To:", self.max_entry)
+        self.field(box, 2, "Step of the numbers:",
+                   ttk.Entry(box, width=SPIN_WIDTH + 4,
+                             textvariable=self.step_var))
+        ttk.Label(box, foreground="#666", justify="left",
+                  text="An empty step is chosen automatically.  The "
+                       "surface is cut\nat the two ends of the range.").grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+        box = ttk.LabelFrame(self, text="Numbers", padding=8)
+        box.pack(fill="x", pady=(10, 0))
+        self.tick_color = ColorSwatch(box, now["tick_color"])
+        self._pair(box, 0,
+                   "Font size:",
+                   ttk.Spinbox(box, from_=4, to=72, increment=1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.tick_size_var),
+                   "Colour:", self.tick_color)
+        ttk.Label(self, foreground="#666", justify="left",
+                  text="The length of this axis and the view of the "
+                       "surface are in the\ncurve properties (a double "
+                       "click on the surface).").pack(anchor="w",
+                                                     pady=(10, 0))
+        self._toggle_auto()
+        self.mirror(force=True)
+
+    def _now(self):
+        """What the diagram says about its Z axis, as the fields write it."""
+        plot = self.plot
+        view = plot.view3d
+        auto = view.get("zmin") is None and view.get("zmax") is None
+        try:
+            low, high = plot.z_limits()
+        except (AttributeError, TypeError, ValueError):
+            low, high = 0.0, 1.0
+        label_size, label_color = plot.z_label_style()
+        tick_size, tick_color = plot.z_tick_style()
+        return {"label": plot.z_label_text(),
+                "label_size": str(int(label_size)),
+                "label_color": label_color,
+                "tick_size": str(int(tick_size)), "tick_color": tick_color,
+                "auto": auto, "min": f"{low:g}", "max": f"{high:g}",
+                "step": field_number(view.get("zstep"), "")}
+
+    def _diagram_fields(self):
+        now = self._now()
+        return {"label": (self.label_var, now["label"]),
+                "label_size": (self.label_size_var, now["label_size"]),
+                "label_color": (SwatchField(self.label_color),
+                                now["label_color"]),
+                "tick_size": (self.tick_size_var, now["tick_size"]),
+                "tick_color": (SwatchField(self.tick_color),
+                               now["tick_color"]),
+                "auto": (self.auto_var, now["auto"]),
+                "min": (self.min_var, now["min"]),
+                "max": (self.max_var, now["max"]),
+                "step": (self.step_var, now["step"])}
+
+    def _mirrored(self, names):
+        if "auto" in names:
+            self._toggle_auto()
+
+    def _toggle_auto(self):
+        state = "disabled" if self.auto_var.get() else "normal"
+        for entry in (self.min_entry, self.max_entry):
+            entry.configure(state=state)
+
+    def sync_range(self, force=False):
+        return False
+
+    def apply(self):
+        """Give the Z axis what this page says; False when it cannot be."""
+        plot = self.plot
+        low = high = None
+        if not self.auto_var.get():
+            low = to_float(self.min_var.get(), None)
+            high = to_float(self.max_var.get(), None)
+            if low is None or high is None or low == high:
+                messagebox.showwarning(
+                    "Axis range", "'From' and 'To' must be two different "
+                    "numbers on the Z axis.", parent=self.winfo_toplevel())
+                return False
+        changes = {"zmin": low, "zmax": high,
+                   "zstep": to_float(self.step_var.get(), None),
+                   "zlabel_size": to_int(self.label_size_var.get(), 12),
+                   "zlabel_color": self.label_color.color,
+                   "ztick_size": to_int(self.tick_size_var.get(), 12),
+                   "ztick_color": self.tick_color.color}
+        text = self.label_var.get()
+        if not (plot.view3d.get("zlabel") is None
+                and text == plot.z_column_name()):
+            changes["zlabel"] = text       # typed in: no longer the column
+        # what still equals the font of the Y axis goes on following it
+        base = plot.axis_cfg["y"]
+        for key, same in (("zlabel_size", base.get("label_size")),
+                          ("zlabel_color", base.get("label_color")),
+                          ("ztick_size", base.get("tick_size")),
+                          ("ztick_color", base.get("tick_color"))):
+            if plot.view3d.get(key) is None and str(changes[key]) == str(same):
+                changes[key] = None
+        plot.set_view3d(**changes)
+        return True
+
+
 class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
     """One page of the axes dialog (X or Y)."""
 
@@ -8211,6 +8365,11 @@ class AxesDialog(ToolDialog):
             tab = AxisTab(notebook, plot, which)
             notebook.add(tab, text=words)
             self.tabs[which] = tab
+        # a surface in space has a third axis
+        self.z_tab = None
+        if getattr(plot, "ax3d", None) is not None:
+            self.z_tab = ZAxisTab(notebook, plot)
+            notebook.add(self.z_tab, text="Z axis")
         self.frame_tab = FrameTab(notebook, plot)
         notebook.add(self.frame_tab, text="Frame and origin")
         self.notebook = notebook
@@ -8233,7 +8392,10 @@ class AxesDialog(ToolDialog):
 
     def pages(self):
         """The title page, the three axis pages and the frame page."""
-        return [self.title_tab, *self.tabs.values(), self.frame_tab]
+        pages = [self.title_tab, *self.tabs.values(), self.frame_tab]
+        if self.z_tab is not None:
+            pages.append(self.z_tab)
+        return pages
 
     def mirror(self, force=False):
         """Every page shows what the diagram says now (see `DiagramMirror`).
@@ -8256,6 +8418,8 @@ class AxesDialog(ToolDialog):
             self.notebook.select(self.frame_tab)
         elif which == "title":
             self.notebook.select(self.title_tab)
+        elif which == "z" and self.z_tab is not None:
+            self.notebook.select(self.z_tab)
         else:
             self.notebook.select(self.tabs.get(which, self.tabs["x"]))
 
@@ -8278,6 +8442,9 @@ class AxesDialog(ToolDialog):
                     f"{AXIS_NAMES.get(which, which.upper())}.", parent=self)
                 return False
             self.plot.apply_axis(which, cfg, redraw=False)
+        if self.z_tab is not None and self.plot.ax3d is not None:
+            if not self.z_tab.apply():
+                return False
 
         frame = self.frame_tab.values()
         problem = self.plot.check_frame(frame)
@@ -14677,6 +14844,8 @@ class PlotWindow(tk.Toplevel):
         }
         if self.plot_style in FLAT_SURFACE_STYLES:
             self.frame_cfg["style"] = FLAT_SURFACE_FRAME
+        elif self.plot_style == SURFACE3D:
+            self.frame_cfg["style"] = SURFACE3D_FRAME
 
         self._build_widgets()
         if not self._plot_data(plot_cfg):
@@ -18261,10 +18430,19 @@ class PlotWindow(tk.Toplevel):
             pass
         size, colour = self.z_label_style()
         ax3d.set_zlabel(self.z_label_text(), fontsize=size, color=colour)
-        base = self.axis_cfg["y"]
-        ax3d.tick_params(axis="z", labelsize=int(base.get("tick_size", 12)),
-                         labelcolor=safe_hex(base.get("tick_color"),
-                                             "#000000"))
+        size, colour = self.z_tick_style()
+        ax3d.tick_params(axis="z", labelsize=size, labelcolor=colour)
+        try:
+            step = self.view3d.get("zstep")
+            low, high = sorted(ax3d.get_zlim())
+            if step and (high - low) / float(step) <= 60:
+                ax3d.zaxis.set_major_locator(MultipleLocator(float(step)))
+            elif not isinstance(ax3d.zaxis.get_major_locator(), AutoLocator):
+                ax3d.zaxis.set_major_locator(AutoLocator())
+        except (TypeError, ValueError, AttributeError):
+            pass
+        self.apply_3d_frame()
+        self._clip_3d_surfaces()
         family = self.font_family()
         if family:
             for axis in (ax3d.xaxis, ax3d.yaxis, ax3d.zaxis):
@@ -18274,6 +18452,112 @@ class PlotWindow(tk.Toplevel):
                     except (ValueError, AttributeError):
                         continue
         return True
+
+    def z_tick_style(self):
+        """Font size and colour of the numbers of the Z axis: their own,
+        or - until they are set - those of the Y axis."""
+        base = self.axis_cfg["y"]
+        size = self.view3d.get("ztick_size")
+        colour = self.view3d.get("ztick_color")
+        return (max(1, to_int(base.get("tick_size", 12) if size is None
+                              else size, 12)),
+                safe_hex(base.get("tick_color") if colour is None
+                         else colour, "#000000"))
+
+    def apply_3d_frame(self):
+        """`Frame and origin` on the box of a surface in space.
+
+        `No frame` leaves the three axes alone, without the walls of the
+        box and the net on them; every other style draws the walls, in
+        the colour of the plot area.  The ticks point into the box or out of it as the style
+        says, the thickness of the frame is that of the three axis lines,
+        and each axis wears the colour of its own page.
+        """
+        ax3d = self.ax3d
+        if ax3d is None:
+            return False
+        cfg = self.frame_cfg
+        style = str(cfg.get("style", "none"))
+        width = max(0.0, to_float(cfg.get("width"), 1.0))
+        length = max(0.0, to_float(cfg.get("major_tick_length"), 3.5)) / 3.5
+        length = max(0.3, min(length, 4.0))
+        # matplotlib names the two halves of a tick in space the other
+        # way round: its "inward" half is the one that stands out of the
+        # box, towards the numbers
+        inward, outward = {"box_in": (0.0, 0.3),
+                           "box_out": (0.3, 0.0)}.get(style, (0.2, 0.1))
+        background = cfg.get("background", "#ffffff")
+        walls = style != "none"
+        try:
+            ax3d.grid(walls)           # the net is drawn on the walls
+        except (AttributeError, TypeError, ValueError):
+            pass
+        for axis, which in ((ax3d.xaxis, "x"), (ax3d.yaxis, "y"),
+                            (ax3d.zaxis, "y")):
+            colour = safe_hex(self.axis_cfg[which].get("axis_color"),
+                              "#000000")
+            try:
+                axis.line.set_linewidth(width)
+                axis.line.set_color(colour)
+                info = axis._axinfo
+                info["axisline"]["linewidth"] = width
+                info["axisline"]["color"] = colour
+                info["tick"]["inward_factor"] = inward * length
+                info["tick"]["outward_factor"] = outward * length
+                info["tick"]["linewidth"] = {True: width, False: width * 0.6}
+                axis.set_tick_params(which="both", color=colour)
+                pane = axis.pane
+                pane.set_visible(walls)
+                if background == "none":
+                    pane.set_facecolor((1.0, 1.0, 1.0, 0.0))
+                else:
+                    pane.set_facecolor(to_rgba(background, 1.0))
+                pane.set_edgecolor(to_rgba(colour, 0.35))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue
+        return True
+
+    def clip3d_now(self):
+        """The ranges of the three axes in space, each from low to high."""
+        ax3d = self.ax3d
+        return tuple(tuple(sorted(float(one) for one in limits))
+                     for limits in (ax3d.get_xlim(), ax3d.get_ylim(),
+                                    ax3d.get_zlim()))
+
+    def _clip_3d_surfaces(self):
+        """Draw again every surface that reaches beyond the box.
+
+        matplotlib does not cut a surface in space at the ends of its
+        axes: with a range made smaller than the data it would hang out of
+        the box on every side and hide the numbers and the labels.  So a
+        surface is drawn from the points inside the three ranges only, and
+        drawn again whenever one of those ranges changes.
+        """
+        if self.ax3d is None or getattr(self, "_clipping_3d", False):
+            return False
+        clip = self.clip3d_now()
+        self._clipping_3d = True
+        again = False
+        try:
+            for column in self.surface3d_columns():
+                artists = self.surface_artists.get(column) or ()
+                if artists and all(getattr(one, "aplot_clip", None) == clip
+                                   for one in artists):
+                    continue
+                self._clip3d = clip
+                self.refresh_surface(column)
+                self._check_bar_selection(column)
+                again = True
+        finally:
+            self._clip3d = None
+            self._clipping_3d = False
+        return again
+
+    @staticmethod
+    def _inside(values, limits):
+        low, high = limits
+        air = abs(high - low) * 1e-9
+        return (values >= low - air) & (values <= high + air)
 
     def set_view3d(self, **changes):
         """Another view of the surface in space: angles, lengths, Z axis."""
@@ -18311,8 +18595,17 @@ class PlotWindow(tk.Toplevel):
                 value = None if value is None else str(value)
             elif key == "zlabel_size":
                 value = None if value is None else max(1, to_int(value, 12))
-            elif key == "zlabel_color":
+            elif key in ("zlabel_color", "ztick_color"):
                 value = None if value is None else safe_hex(value, "#000000")
+            elif key == "ztick_size":
+                value = None if value is None else max(1, to_int(value, 12))
+            elif key == "zstep":
+                try:
+                    value = float(value)
+                    value = value if (math.isfinite(value) and value > 0) \
+                        else None
+                except (TypeError, ValueError):
+                    value = None
             view[key] = value
         if repr(sorted(view.items(), key=lambda one: one[0])) == before:
             return False
@@ -18331,25 +18624,61 @@ class PlotWindow(tk.Toplevel):
         edge = (dict(edgecolor="#000000", linewidth=0.3) if plan["edges"]
                 else dict(edgecolor="none", linewidth=0.0))
         grid = plan["grid"]
+        clip = getattr(self, "_clip3d", None)
+        # matplotlib would make the box wider for every surface it is given
+        view = (ax3d.get_xlim(), ax3d.get_ylim(), ax3d.get_zlim())
         try:
             if grid:
                 xs, ys, heights = grid[:3]
-                x_grid, y_grid = np.meshgrid(np.asarray(xs, float),
-                                             np.asarray(ys, float))
-                main = ax3d.plot_surface(
-                    x_grid, y_grid,
-                    np.ma.filled(np.ma.asarray(heights, dtype=float), np.nan),
-                    cmap=plan["cmap"], norm=norm, alpha=plan["alpha"],
-                    rcount=SURFACE3D_CELLS, ccount=SURFACE3D_CELLS,
-                    antialiased=bool(plan["edges"]), **edge)
+                xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+                heights = np.ma.filled(np.ma.asarray(heights, dtype=float),
+                                       np.nan)
+                if clip is not None:
+                    # the rows and the columns inside the X and the Y
+                    # range, and of those the points inside the Z range
+                    keep_x = np.nonzero(self._inside(xs, clip[0]))[0]
+                    keep_y = np.nonzero(self._inside(ys, clip[1]))[0]
+                    if len(keep_x) < 2 or len(keep_y) < 2:
+                        keep_x, keep_y = keep_x[:0], keep_y[:0]
+                    xs, ys = xs[keep_x], ys[keep_y]
+                    heights = heights[np.ix_(keep_y, keep_x)].copy()
+                    with np.errstate(invalid="ignore"):
+                        heights[~self._inside(heights, clip[2])] = np.nan
+                if heights.size and np.isfinite(heights).any():
+                    x_grid, y_grid = np.meshgrid(xs, ys)
+                    main = ax3d.plot_surface(
+                        x_grid, y_grid, heights,
+                        cmap=plan["cmap"], norm=norm, alpha=plan["alpha"],
+                        rcount=SURFACE3D_CELLS, ccount=SURFACE3D_CELLS,
+                        antialiased=bool(plan["edges"]), **edge)
+                else:           # nothing of it is inside the box
+                    main = ax3d.plot_surface(
+                        np.zeros((2, 2)), np.zeros((2, 2)),
+                        np.full((2, 2), np.nan), cmap=plan["cmap"], norm=norm)
             else:
                 # points scattered freely are joined into triangles
+                x_arr, y_arr, z_arr = plan["x"], plan["y"], plan["z"]
+                if clip is not None:
+                    keep = (self._inside(x_arr, clip[0])
+                            & self._inside(y_arr, clip[1])
+                            & self._inside(z_arr, clip[2]))
+                    if int(keep.sum()) >= 3:
+                        x_arr, y_arr, z_arr = x_arr[keep], y_arr[keep], \
+                            z_arr[keep]
                 main = ax3d.plot_trisurf(
-                    plan["x"], plan["y"], plan["z"], cmap=plan["cmap"],
+                    x_arr, y_arr, z_arr, cmap=plan["cmap"],
                     norm=norm, alpha=plan["alpha"],
                     antialiased=bool(plan["edges"]), **edge)
         except (ValueError, TypeError, RuntimeError, IndexError):
             return None            # points on one line are no surface
+        finally:
+            try:
+                ax3d.set_xlim(view[0])
+                ax3d.set_ylim(view[1])
+                ax3d.set_zlim(view[2])
+            except (TypeError, ValueError):
+                pass
+        main.aplot_clip = clip
         main.aplot_series = str(column)
         main.aplot_zrange = (float(np.min(plan["z"])),
                              float(np.max(plan["z"])))
@@ -18418,6 +18747,34 @@ class PlotWindow(tk.Toplevel):
             place = min(1.0, max(0.0, float((point - first) @ along) / length))
             if float(np.hypot(*(point - (first + place * along)))) <= reach:
                 return name
+        return None
+
+    def numbers3d_at(self, x, y):
+        """"x", "y" or "z": the axis in space whose numbers are under the
+        pointer, or None."""
+        if self.ax3d is None or x is None or y is None:
+            return None
+        self._sync_3d_geometry()
+        renderer = self._renderer()
+        for name in ("x", "y", "z"):
+            axis = getattr(self.ax3d, f"{name}axis")
+            try:
+                low, high = sorted(axis.get_view_interval())
+            except (ValueError, TypeError):
+                continue
+            air = abs(high - low) * 1e-6
+            for tick in axis.get_major_ticks():
+                try:
+                    where = float(tick.get_loc())
+                    label = tick.label1
+                    if not (low - air <= where <= high + air) \
+                            or not label.get_text():
+                        continue
+                    box = label.get_window_extent(renderer)
+                except (RuntimeError, ValueError, AttributeError, TypeError):
+                    continue
+                if box.expanded(1.15, 1.4).contains(x, y):
+                    return name
         return None
 
     def box3d_corners(self):
@@ -19620,7 +19977,7 @@ class PlotWindow(tk.Toplevel):
             out.append(f"ax3d.set_{name}lim({lit(float(low))}, "
                        f"{lit(float(high))})")
             near, far = sorted((float(low), float(high)))
-            if name != "z":
+            if name != "z" or self.view3d.get("zstep"):
                 ticks = [float(one) for one
                          in getattr(ax3d, f"get_{name}ticks")()
                          if near <= float(one) <= far]
@@ -19636,6 +19993,14 @@ class PlotWindow(tk.Toplevel):
                 f"ax3d.tick_params(axis={lit(name)}, "
                 f"labelsize={int(cfg.get('tick_size', 12))}, "
                 f"labelcolor={lit(safe_hex(cfg.get('tick_color'), '#000000'))})")
+        size, colour = self.z_tick_style()
+        out[-1] = (f"ax3d.tick_params(axis='z', labelsize={size}, "
+                   f"labelcolor={lit(colour)})")
+        if str(self.frame_cfg.get("style", "none")) == "none":
+            out += ["# no frame: the three axes without the walls of the box",
+                    "ax3d.grid(False)",
+                    "for axis3d in (ax3d.xaxis, ax3d.yaxis, ax3d.zaxis):",
+                    "    axis3d.pane.set_visible(False)"]
         if any(any(self.text_offset.get(name, (0.0, 0.0)))
                for name in ("x", "y", "z")):
             out.append("# (the labels of these axes were dragged in APlot; "
@@ -19694,6 +20059,32 @@ class PlotWindow(tk.Toplevel):
             target = "ax"              # its colour bar hangs on the flat axes
             edge = ("edgecolor='#000000', linewidth=0.3" if plan["edges"]
                     else "edgecolor='none', linewidth=0.0")
+            clip = next((one.aplot_clip for one
+                         in self.surface_artists.get(column, ())
+                         if getattr(one, "aplot_clip", None)), None)
+            if clip is not None:
+                # matplotlib does not cut a surface at the ends of its axes
+                (x0, x1), (y0, y1), (z0, z1) = [
+                    (exact(low), exact(high)) for low, high in clip]
+                out.append("# only what lies inside the ranges of the axes")
+                if grid:
+                    out += [
+                        f"kx_{tag} = (gx_{tag} >= {x0}) & (gx_{tag} <= {x1})",
+                        f"ky_{tag} = (gy_{tag} >= {y0}) & (gy_{tag} <= {y1})",
+                        f"gz_{tag} = np.ma.filled(gz_{tag}, np.nan)"
+                        f"[np.ix_(ky_{tag}, kx_{tag})]",
+                        f"gx_{tag}, gy_{tag} = gx_{tag}[kx_{tag}], "
+                        f"gy_{tag}[ky_{tag}]",
+                        f"gz_{tag}[(gz_{tag} < {z0}) | (gz_{tag} > {z1})] "
+                        f"= np.nan",
+                        f"gz_{tag} = np.ma.masked_invalid(gz_{tag})"]
+                else:
+                    out += [
+                        f"in_{tag} = ((sx_{tag} >= {x0}) & (sx_{tag} <= {x1}) "
+                        f"& (sy_{tag} >= {y0}) & (sy_{tag} <= {y1}) "
+                        f"& (sz_{tag} >= {z0}) & (sz_{tag} <= {z1}))",
+                        f"sx_{tag}, sy_{tag}, sz_{tag} = sx_{tag}[in_{tag}], "
+                        f"sy_{tag}[in_{tag}], sz_{tag}[in_{tag}]"]
             if grid:
                 out.append(
                     f"{main} = ax3d.plot_surface(*np.meshgrid(gx_{tag}, "
@@ -23011,9 +23402,12 @@ class PlotWindow(tk.Toplevel):
         return moved
 
     def numbers_at(self, x, y):
-        """The axis whose numbers are under the pointer ("x", "y", "y2")."""
-        if x is None or y is None or self.ax3d is not None:
+        """The axis whose numbers are under the pointer ("x", "y", "y2" -
+        or "z", beside a surface in space)."""
+        if x is None or y is None:
             return None
+        if self.ax3d is not None:
+            return self.numbers3d_at(x, y)
         renderer = self._renderer()
         axes = [("x", self.ax.xaxis), ("y", self.ax.yaxis)]
         if self.ax2 is not None:
@@ -24553,8 +24947,9 @@ class PlotWindow(tk.Toplevel):
         elif (self.bar_label_at(event.x, event.y) is not None
               or self.color_bar_at(event.x, event.y) is not None):
             cursor = "fleur"           # a colour bar is carried the same way
-        elif self.ax3d is not None \
-                and self.axis3d_at(event.x, event.y) is not None:
+        elif self.ax3d is not None and (
+                self.axis3d_at(event.x, event.y) is not None
+                or self.numbers3d_at(event.x, event.y) is not None):
             cursor = "fleur"           # an axis in space carries the graph
         elif self.ax3d is not None and self.in_3d_box(event.x, event.y):
             cursor = "exchange"        # the surface is turned by the pointer
@@ -25016,11 +25411,7 @@ class PlotWindow(tk.Toplevel):
             return (self.edit_title() if key == "title"
                     else self.edit_axis_label(key))
         if kind == "axis3d":               # an axis of a surface in space
-            if key in ("x", "y"):
-                return self.open_axes_dialog(key)
-            columns = self.surface3d_columns()
-            line = self.series.get(columns[0]) if columns else None
-            return None if line is None else self.open_series_dialog(line)
+            return self.open_axes_dialog(key)
         if kind == "barlabel":
             return self.edit_bar_label(key)
         if kind == "colorbar":             # the range of its colours
@@ -25055,6 +25446,12 @@ class PlotWindow(tk.Toplevel):
             self.draw()
             self.open_properties(kind, key)
             return True
+        if self.ax3d is not None:
+            # the numbers of an axis in space open the page of that axis
+            which = self.numbers3d_at(event.x, event.y)
+            if which:
+                self.open_axes_dialog(which)
+                return True
         name = self.series_at(event)       # a curve of either Y axis
         if name is not None and self.covering_series_at(event):
             # a surface lies over the lines of the frame and of the axes:
@@ -25257,6 +25654,15 @@ class PlotWindow(tk.Toplevel):
                        "the graph, drag one of its ends to make it longer or "
                        "shorter, double click for its properties")
             self._start_plot_drag(event)  # ...and dragging it carries the graph
+            return
+        if self.ax3d is not None \
+                and self.numbers3d_at(event.x, event.y) is not None:
+            # the numbers of an axis are the graph: grabbed, they carry it
+            if self.selection is not None or self.group:
+                self.select_object(None, None)
+                self.clear_group()
+                self.draw()
+            self._start_plot_drag(event)
             return
         if self.ax3d is not None and self.in_3d_box(event.x, event.y):
             # the surface itself: dragging it turns the view
@@ -25751,8 +26157,10 @@ class PlotWindow(tk.Toplevel):
 
     def _axis_hit(self, event):
         """Which axis region (tick labels / axis label) was clicked?"""
-        if event.x is None or event.y is None or self.ax3d is not None:
+        if event.x is None or event.y is None:
             return None
+        if self.ax3d is not None:
+            return self.numbers3d_at(event.x, event.y)
         box = self.ax.get_window_extent()
         if box.x0 <= event.x <= box.x1:
             if self.x_side == "top":
@@ -25923,6 +26331,11 @@ class PlotWindow(tk.Toplevel):
 
     def open_axes_dialog(self, which="x"):
         existing = self._dialogs.get("axes")
+        if existing is not None and existing.winfo_exists() \
+                and (getattr(existing, "z_tab", None) is not None) \
+                != (self.ax3d is not None):
+            existing.close()           # the Z page came, or went
+            existing = None
         if existing is not None and existing.winfo_exists():
             existing.mirror()               # the diagram may have moved on
             existing.select_tab(which)      # jump to the requested tab
@@ -26052,7 +26465,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.5.0 (2026-11-15)**.  The number is written in one place
+This is **APlot 1.5.1 (2026-11-15)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -26183,6 +26596,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.5.1 | 2026-11-15 | Four corrections of the `3D Surface`.  **(1)** A range of an axis made **smaller than the data** no longer lets the surface hang out of the box over the numbers and the labels: the surface is drawn from the points inside the three ranges only, and drawn again whenever a range changes (the exported program cuts it the same way).  **(2)** `Axes properties` has a **`Z axis` page** while the diagram is in space: the label with its font, the range (`Automatic`, `From`, `To`), the step of the numbers and their font.  **(3)** A **double click on the numbers** of the X, the Y or the Z axis opens the page of that axis, as in every other diagram - and so does a double click on the line of an axis; a single press on the numbers carries the graph.  **(4)** The **frame style** acts on the box: `No frame` draws the three axes alone, without the walls and their net; the other styles draw the walls, with the ticks pointing in or out as the style says.  The thickness of the frame, the length of the ticks, the colour of each axis and the colour of the plot area are taken over as well.  A diagram that opens as a 3D surface starts with `Full frame`. |
 | 1.5.0 | 2026-11-15 | The first version that draws in **three dimensions**: the new plot style `3D Surface` draws x, y, z columns - the same columns a `Colour Surface (pcolor)` reads - as a **surface in space** (`ax.plot_surface`; points that stand on no grid are joined into triangles).  **Dragging the surface turns it** in any direction, and the two angles of the view (`Elevation`, `Azimuth`) stand in the curve properties, where they can be typed in and where they follow the pointer.  **An axis is selected by a click on its line** and made **longer or shorter by its two ends**, as the axes of every other diagram are; dragging the line carries the whole graph.  The **labels of the three axes** are dragged, written in place by a slow second click and opened by a double click like any other label.  The colour scale, its range and the logarithmic scale are those of the colour surface; the **colour bar is off to begin with** and is switched on in the curve properties.  The view is taken back by `Undo`, saved with the diagram and written into the exported matplotlib program.  Besides, a diagram that opens as a `Colour Surface (pcolor)`, as `Contour Lines` or as `Filled Contours` now has **`Frame with ticks (outward)`** to begin with. |
 | 1.4.5 | 2026-11-13 | The **range of the colours** is set at the colour bar itself: a **double click on the bar** opens a new `Colour bar` window with `Lowest` and `Highest` value of the colour scale.  The two fields show the **whole range of the data** to begin with; another number typed in lays the whole colour scale over a **narrower** range (the colours spread out over the part that matters - what a logarithmic scale of many decades needs to show its features) or over a **wider** one (they are squeezed).  An end left as it was goes on following the data, `Whole range of the data` lets both ends go again, and the window also holds the `Logarithmic colour scale` switch, the label of the bar and a `Curve properties...` button.  A **2D Histogram** has the range too (`Lowest count`, `Highest count`, also in its curve properties), and its colour bar can now have a label.  The **label of the colour bar is a text of its own**: it is **dragged with the pointer** like the label of an axis - without its bar - and moved by the arrow keys; it follows the bar when that is moved, its place is saved with the diagram, taken back by `Undo`, written into the exported program, and `Reset dragged texts` puts it back beside the bar. |
 | 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
@@ -28909,7 +29323,14 @@ switched on in `Curve properties` like any other.
   * `Z axis from` and `to`: the range of the Z axis; an empty field
     follows the data and ends on round numbers.  The ranges, the steps of
     the numbers, the labels and the fonts of **X and Y** are set on their
-    own pages of `Axes properties`, as for every other diagram.
+    own pages of `Axes properties`, as for every other diagram - and
+    while the diagram is in space that window has a **`Z axis` page** as
+    well: the label and its font, the range (`Automatic`, or `From` and
+    `To`), the `Step of the numbers` and their font size and colour.
+  * **A range smaller than the data cuts the surface**: only the part
+    inside the three ranges is drawn, so nothing hangs out of the box.
+    Along X and Y the surface ends at the last row of points inside the
+    range; along Z it is cut cell by cell, which leaves a toothed edge.
   * `Z axis label`: the name of the Z column until another text is typed.
     The **labels of the three axes** are handled like every other label:
     one click selects, a drag moves it (it goes on following its axis
@@ -28921,18 +29342,27 @@ switched on in `Curve properties` like any other.
     `Lowest Z` and `Highest Z`, `Logarithmic colour scale`, `Opacity` -
     and so is the **colour bar**, which is **off to begin with** here:
     `Colour bar` in `Colour scale (Z values)` switches it on.
-  * **A double click** on the surface opens these properties, on the
-    line of the X or the Y axis the page of that axis, and on the line of
-    the Z axis these properties again.
+  * **A double click** on the surface opens these properties; on the
+    **numbers** or on the **line** of the X, the Y or the Z axis it opens
+    the page of that axis in `Axes properties`.  A single press on the
+    numbers carries the graph, as it does in every other diagram.
+  * **The frame** (`Frame and origin`): `No frame` draws the three axes
+    alone, without the walls of the box and the net on them; `Full frame`
+    - what a 3D surface opens with - draws the walls; the two styles
+    `with ticks` draw the walls and turn the ticks into the box or out
+    of it.  The thickness of the frame is that of the three axis lines,
+    the length of the major ticks is followed, each axis wears the
+    colour of its own page (Z that of the Y axis), and the walls have
+    the colour of the plot area.
   * What is different in space:
     * the whole diagram is in space as soon as one of its curves is a 3D
       surface, so every curve of it should have this style: a curve left
       in a flat style is drawn flat, on the paper in front of the box;
     * the axes are linear: a logarithmic X or Y axis is not drawn as one
       (the **colour** scale can be logarithmic);
-    * the frame styles, the grid settings and the top X / right Y axes
-      belong to the flat diagrams: the box in space always shows its
-      three walls with their grids;
+    * the grid settings of the axis pages and the top X / right Y axes
+      belong to the flat diagrams: the net on the walls of the box comes
+      and goes with the walls;
     * a surface of more than 150 x 150 cells is drawn with every n-th
       point, so that it still turns smoothly;
     * the exported matplotlib program draws the surface, the view, the

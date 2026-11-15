@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.5.0 (2026-11-15)**.  The number is written in one place
+This is **APlot 1.5.1 (2026-11-15)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.5.1 | 2026-11-15 | Four corrections of the `3D Surface`.  **(1)** A range of an axis made **smaller than the data** no longer lets the surface hang out of the box over the numbers and the labels: the surface is drawn from the points inside the three ranges only, and drawn again whenever a range changes (the exported program cuts it the same way).  **(2)** `Axes properties` has a **`Z axis` page** while the diagram is in space: the label with its font, the range (`Automatic`, `From`, `To`), the step of the numbers and their font.  **(3)** A **double click on the numbers** of the X, the Y or the Z axis opens the page of that axis, as in every other diagram - and so does a double click on the line of an axis; a single press on the numbers carries the graph.  **(4)** The **frame style** acts on the box: `No frame` draws the three axes alone, without the walls and their net; the other styles draw the walls, with the ticks pointing in or out as the style says.  The thickness of the frame, the length of the ticks, the colour of each axis and the colour of the plot area are taken over as well.  A diagram that opens as a 3D surface starts with `Full frame`. |
 | 1.5.0 | 2026-11-15 | The first version that draws in **three dimensions**: the new plot style `3D Surface` draws x, y, z columns - the same columns a `Colour Surface (pcolor)` reads - as a **surface in space** (`ax.plot_surface`; points that stand on no grid are joined into triangles).  **Dragging the surface turns it** in any direction, and the two angles of the view (`Elevation`, `Azimuth`) stand in the curve properties, where they can be typed in and where they follow the pointer.  **An axis is selected by a click on its line** and made **longer or shorter by its two ends**, as the axes of every other diagram are; dragging the line carries the whole graph.  The **labels of the three axes** are dragged, written in place by a slow second click and opened by a double click like any other label.  The colour scale, its range and the logarithmic scale are those of the colour surface; the **colour bar is off to begin with** and is switched on in the curve properties.  The view is taken back by `Undo`, saved with the diagram and written into the exported matplotlib program.  Besides, a diagram that opens as a `Colour Surface (pcolor)`, as `Contour Lines` or as `Filled Contours` now has **`Frame with ticks (outward)`** to begin with. |
 | 1.4.5 | 2026-11-13 | The **range of the colours** is set at the colour bar itself: a **double click on the bar** opens a new `Colour bar` window with `Lowest` and `Highest` value of the colour scale.  The two fields show the **whole range of the data** to begin with; another number typed in lays the whole colour scale over a **narrower** range (the colours spread out over the part that matters - what a logarithmic scale of many decades needs to show its features) or over a **wider** one (they are squeezed).  An end left as it was goes on following the data, `Whole range of the data` lets both ends go again, and the window also holds the `Logarithmic colour scale` switch, the label of the bar and a `Curve properties...` button.  A **2D Histogram** has the range too (`Lowest count`, `Highest count`, also in its curve properties), and its colour bar can now have a label.  The **label of the colour bar is a text of its own**: it is **dragged with the pointer** like the label of an axis - without its bar - and moved by the arrow keys; it follows the bar when that is moved, its place is saved with the diagram, taken back by `Undo`, written into the exported program, and `Reset dragged texts` puts it back beside the bar. |
 | 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
@@ -2886,7 +2887,14 @@ switched on in `Curve properties` like any other.
   * `Z axis from` and `to`: the range of the Z axis; an empty field
     follows the data and ends on round numbers.  The ranges, the steps of
     the numbers, the labels and the fonts of **X and Y** are set on their
-    own pages of `Axes properties`, as for every other diagram.
+    own pages of `Axes properties`, as for every other diagram - and
+    while the diagram is in space that window has a **`Z axis` page** as
+    well: the label and its font, the range (`Automatic`, or `From` and
+    `To`), the `Step of the numbers` and their font size and colour.
+  * **A range smaller than the data cuts the surface**: only the part
+    inside the three ranges is drawn, so nothing hangs out of the box.
+    Along X and Y the surface ends at the last row of points inside the
+    range; along Z it is cut cell by cell, which leaves a toothed edge.
   * `Z axis label`: the name of the Z column until another text is typed.
     The **labels of the three axes** are handled like every other label:
     one click selects, a drag moves it (it goes on following its axis
@@ -2898,18 +2906,27 @@ switched on in `Curve properties` like any other.
     `Lowest Z` and `Highest Z`, `Logarithmic colour scale`, `Opacity` -
     and so is the **colour bar**, which is **off to begin with** here:
     `Colour bar` in `Colour scale (Z values)` switches it on.
-  * **A double click** on the surface opens these properties, on the
-    line of the X or the Y axis the page of that axis, and on the line of
-    the Z axis these properties again.
+  * **A double click** on the surface opens these properties; on the
+    **numbers** or on the **line** of the X, the Y or the Z axis it opens
+    the page of that axis in `Axes properties`.  A single press on the
+    numbers carries the graph, as it does in every other diagram.
+  * **The frame** (`Frame and origin`): `No frame` draws the three axes
+    alone, without the walls of the box and the net on them; `Full frame`
+    - what a 3D surface opens with - draws the walls; the two styles
+    `with ticks` draw the walls and turn the ticks into the box or out
+    of it.  The thickness of the frame is that of the three axis lines,
+    the length of the major ticks is followed, each axis wears the
+    colour of its own page (Z that of the Y axis), and the walls have
+    the colour of the plot area.
   * What is different in space:
     * the whole diagram is in space as soon as one of its curves is a 3D
       surface, so every curve of it should have this style: a curve left
       in a flat style is drawn flat, on the paper in front of the box;
     * the axes are linear: a logarithmic X or Y axis is not drawn as one
       (the **colour** scale can be logarithmic);
-    * the frame styles, the grid settings and the top X / right Y axes
-      belong to the flat diagrams: the box in space always shows its
-      three walls with their grids;
+    * the grid settings of the axis pages and the top X / right Y axes
+      belong to the flat diagrams: the net on the walls of the box comes
+      and goes with the walls;
     * a surface of more than 150 x 150 cells is drawn with every n-th
       point, so that it still turns smoothly;
     * the exported matplotlib program draws the surface, the view, the
