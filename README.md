@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.4.5 (2026-11-13)**.  The number is written in one place
+This is **APlot 1.5.0 (2026-11-15)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.5.0 | 2026-11-15 | The first version that draws in **three dimensions**: the new plot style `3D Surface` draws x, y, z columns - the same columns a `Colour Surface (pcolor)` reads - as a **surface in space** (`ax.plot_surface`; points that stand on no grid are joined into triangles).  **Dragging the surface turns it** in any direction, and the two angles of the view (`Elevation`, `Azimuth`) stand in the curve properties, where they can be typed in and where they follow the pointer.  **An axis is selected by a click on its line** and made **longer or shorter by its two ends**, as the axes of every other diagram are; dragging the line carries the whole graph.  The **labels of the three axes** are dragged, written in place by a slow second click and opened by a double click like any other label.  The colour scale, its range and the logarithmic scale are those of the colour surface; the **colour bar is off to begin with** and is switched on in the curve properties.  The view is taken back by `Undo`, saved with the diagram and written into the exported matplotlib program.  Besides, a diagram that opens as a `Colour Surface (pcolor)`, as `Contour Lines` or as `Filled Contours` now has **`Frame with ticks (outward)`** to begin with. |
 | 1.4.5 | 2026-11-13 | The **range of the colours** is set at the colour bar itself: a **double click on the bar** opens a new `Colour bar` window with `Lowest` and `Highest` value of the colour scale.  The two fields show the **whole range of the data** to begin with; another number typed in lays the whole colour scale over a **narrower** range (the colours spread out over the part that matters - what a logarithmic scale of many decades needs to show its features) or over a **wider** one (they are squeezed).  An end left as it was goes on following the data, `Whole range of the data` lets both ends go again, and the window also holds the `Logarithmic colour scale` switch, the label of the bar and a `Curve properties...` button.  A **2D Histogram** has the range too (`Lowest count`, `Highest count`, also in its curve properties), and its colour bar can now have a label.  The **label of the colour bar is a text of its own**: it is **dragged with the pointer** like the label of an axis - without its bar - and moved by the arrow keys; it follows the bar when that is moved, its place is saved with the diagram, taken back by `Undo`, written into the exported program, and `Reset dragged texts` puts it back beside the bar. |
 | 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
 | 1.4.3 | 2026-11-13 | The axes of the three **x, y, z** styles - `Colour Surface (pcolor)`, `Contour Lines` and `Filled Contours` - **begin and end on a major tick**, as the axes of every other plot style do: the automatic range is rounded out to the ticks around the surface instead of stopping at its edge.  Where the surface ends between two ticks a narrow strip of the plot area stays empty beside it; `Begin and end on a major tick` of `Axes properties` switches the rounding off for one axis, and the surface fills its plot area to the edge again.  A diagram saved by 1.4.0 - 1.4.2 opens as it was saved.  `Exchange the X and Y axes (turn the picture)` turns contour lines and filled contours exactly as it turns a colour surface - over a grid or over scattered points - and the ticks at the two ends of the axes change places with the rest. |
@@ -686,7 +687,7 @@ sheets together:
 
 | Button | Row | What it does |
 | --- | --- | --- |
-| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 13 styles. |
+| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 14 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting.  The diagrams come to the front, and the one used last **gets the keyboard** as well - the arrow keys move its selected object at once (a click into the sheet gives the keyboard back to the sheet). |
 | Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
 | Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
@@ -1055,6 +1056,11 @@ an immediate action with a style menu:
     values written on them if wanted.
   * **Filled Contours**: The **bands between** those lines, each in one
     colour (`ax.contourf`), with or without the lines themselves.
+  * **3D Surface**: The same x, y, z columns as a **surface in space**
+    (`ax.plot_surface`): Z is the height over the X/Y plane, z = f(x, y).
+    The surface is turned with the pointer, each of its three axes can be
+    made longer or shorter, and it is coloured by its height - see
+    `3D surface properties` under `Curve properties`.
   * **Pie Chart**: The values of **one** column as slices of a circle
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
@@ -2658,11 +2664,11 @@ and moves it (see `Moving the whole graph`), so the properties need the
 second click, exactly like a text box or a drawing.
 
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 13 styles: **Line +
+representation of any individual curve between all 14 styles: **Line +
 Symbol**, **Line**, **Scatter**, **Bar Chart**, **Error Bar (Median, SD)**,
 **Error Bar (Median, +error, -error)**, **Histogram**, **Stairs**,
 **2D Histogram**, **Colour Surface (pcolor)**, **Contour Lines**,
-**Filled Contours** and **Pie Chart**.  A single curve switched to an error
+**Filled Contours**, **3D Surface** and **Pie Chart**.  A single curve switched to an error
 bar style by hand reads the column after it (or the two columns after it)
 for its errors, and one switched to a surface or contour style reads the
 column after it for its Z values.  The dialog shows exactly
@@ -2682,6 +2688,7 @@ the sections that style can use, and nothing else:
 | Colour Surface (pcolor) | Legend, Colour scale (Z values), Colour surface properties |
 | Contour Lines | Legend, Colour scale (Z values), Contour properties |
 | Filled Contours | Legend, Colour scale (Z values), Contour properties |
+| 3D Surface | Legend, Colour scale (Z values), 3D surface properties |
 | Pie Chart | Legend, Pie properties |
 
 The dialog sections each have **their own check button as the title**: switched
@@ -2853,6 +2860,61 @@ switched on in `Curve properties` like any other.
   * `Shading`: `Flat` paints one cell of one colour around every point,
     `Smooth` blends the colours from point to point.
   * `Draw the edges of the cells`: a thin black line around every cell.
+* **3D surface properties** (visible for 3D Surfaces).  The surface is
+  drawn on **axes of its own**, laid over the plot area; the title, the
+  legend boxes, the text boxes, the drawings and the colour bar stay where
+  they are and lie in front of it.
+  * `Elevation [deg]` and `Azimuth [deg]`: the two angles of the view -
+    how high the eye stands over the X/Y plane (-90 to 90), and how far it
+    has walked around the Z axis (-180 to 180).  30 and -60 to begin with.
+  * **Dragging the surface turns it**: sideways around the Z axis, up and
+    down over it.  The pointer becomes a round arrow over the surface, the
+    toolbar tells the two angles while it turns, and the two fields follow
+    - so a view found with the pointer can be read off and typed into
+    another diagram.  `Undo` takes a turn back.
+  * `Axis lengths X : Y : Z`: how long the three axes are compared with
+    one another, `4 : 4 : 3` to begin with.  **With the pointer**: one
+    click on the line of an axis selects it and shows a control point at
+    each of its ends; dragging a control point makes that axis longer or
+    shorter, exactly as an axis of any other diagram is resized.  The box
+    is always drawn as large as the plot area allows, so a longer axis
+    makes the other two look shorter.
+  * **Dragging the line of an axis** carries the whole graph on the page,
+    and the arrow keys move it by small steps while an axis is selected.
+    The size of the graph on the page is set by `Plot > Resize graph` and
+    in `Frame and origin`.
+  * `Z axis from` and `to`: the range of the Z axis; an empty field
+    follows the data and ends on round numbers.  The ranges, the steps of
+    the numbers, the labels and the fonts of **X and Y** are set on their
+    own pages of `Axes properties`, as for every other diagram.
+  * `Z axis label`: the name of the Z column until another text is typed.
+    The **labels of the three axes** are handled like every other label:
+    one click selects, a drag moves it (it goes on following its axis
+    when the view is turned), a slow second click writes it in place and
+    a double click opens a window with its text, font size and colour.
+    `Reset dragged texts` puts them back.
+  * `Draw the edges of the cells`: a thin black line around every cell.
+  * The **colour scale** is that of the colour surface - `Colour scale`,
+    `Lowest Z` and `Highest Z`, `Logarithmic colour scale`, `Opacity` -
+    and so is the **colour bar**, which is **off to begin with** here:
+    `Colour bar` in `Colour scale (Z values)` switches it on.
+  * **A double click** on the surface opens these properties, on the
+    line of the X or the Y axis the page of that axis, and on the line of
+    the Z axis these properties again.
+  * What is different in space:
+    * the whole diagram is in space as soon as one of its curves is a 3D
+      surface, so every curve of it should have this style: a curve left
+      in a flat style is drawn flat, on the paper in front of the box;
+    * the axes are linear: a logarithmic X or Y axis is not drawn as one
+      (the **colour** scale can be logarithmic);
+    * the frame styles, the grid settings and the top X / right Y axes
+      belong to the flat diagrams: the box in space always shows its
+      three walls with their grids;
+    * a surface of more than 150 x 150 cells is drawn with every n-th
+      point, so that it still turns smoothly;
+    * the exported matplotlib program draws the surface, the view, the
+      ranges and the labels - but not the places the labels were dragged
+      to, which matplotlib works out again.
 * **Contour properties** (visible for Contour Lines and Filled Contours):
   * `Levels`: how many lines (or bands) are drawn, 10 to begin with.  They
     stand at round numbers, as the ticks of an axis do - or exactly evenly
@@ -3145,7 +3207,10 @@ The last tab of the axes dialog, also reachable with
   * `Frame with ticks (inward)` - all four sides with ticks on every side,
     pointing into the diagram,
   * `Frame with ticks (outward)` - all four sides with ticks on every side,
-    pointing outwards.
+    pointing outwards.  A diagram that **opens** as a Colour Surface, as
+    Contour Lines or as Filled Contours has this style to begin with: a
+    surface fills its plot area to the very edge, and the ticks would be
+    lost on it.
 * **Thickness** of the frame lines; the tick marks follow it.
 * The **colour** is not here: every axis paints its own line and its own
   tick marks with the `Axis colour` of its page (see `Axes properties`).
