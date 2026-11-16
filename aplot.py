@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.5.2 (2026-11-15) - see `APP_VERSION` below and "Version history" in the
+1.5.3 (2026-11-16) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -268,8 +268,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.5.2"
-APP_VERSION_DATE = "2026-11-15"
+APP_VERSION = "1.5.3"
+APP_VERSION_DATE = "2026-11-16"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -18087,6 +18087,7 @@ class PlotWindow(tk.Toplevel):
             self.ax3d = ax3d
             for name in ("x", "y", "z"):
                 self._shift_3d_label(name)
+            self._measure_3d_labels(ax3d)
             self.ax.set_axis_off()
             kind, _key = self.selection or (None, None)
             if kind == "axis":
@@ -18108,6 +18109,43 @@ class PlotWindow(tk.Toplevel):
                 self.select_object(None, None)
         self._geometry3d_stale = True
         return wanted
+
+    @staticmethod
+    def _measure_3d_labels(ax3d):
+        """Count the three labels into the size of the axes in space.
+
+        matplotlib leaves the labels of such axes out when it measures
+        how much room the axes take, so a picture cut around the graph -
+        `Copy figure`, a saved picture, the thumbnail - cut through a
+        label that stood at the edge, mostly the one of the Z axis.  Here
+        they are measured in, where they were last drawn.
+        """
+        if getattr(ax3d, "aplot_measures_labels", False):
+            return ax3d
+        plain = ax3d.get_tightbbox
+
+        def get_tightbbox(renderer=None, *args, **kwargs):
+            box = plain(renderer, *args, **kwargs)
+            if kwargs.get("for_layout_only") or not ax3d.get_visible() \
+                    or not getattr(ax3d, "_axis3don", True):
+                return box
+            boxes = [] if box is None else [box]
+            for axis in (ax3d.xaxis, ax3d.yaxis, ax3d.zaxis):
+                label = axis.label
+                try:
+                    if axis.get_visible() and label.get_visible() \
+                            and label.get_text().strip():
+                        extent = label.get_window_extent(renderer)
+                        if all(math.isfinite(one) for one in extent.extents):
+                            boxes.append(extent)
+                except (TypeError, ValueError, AttributeError,
+                        RuntimeError):
+                    continue
+            return Bbox.union(boxes) if boxes else box
+
+        ax3d.get_tightbbox = get_tightbbox
+        ax3d.aplot_measures_labels = True
+        return ax3d
 
     def _shift_3d_label(self, name):
         """Let the label of one axis in space be dragged from its place.
@@ -26501,7 +26539,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.5.2 (2026-11-15)**.  The number is written in one place
+This is **APlot 1.5.3 (2026-11-16)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -26632,6 +26670,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.5.3 | 2026-11-16 | A correction of the `3D Surface`: **the copied picture no longer cuts through the label of the Z axis**.  `Copy figure to the clipboard`, a saved picture, the preview and the thumbnail cut the graph out of the page, and the labels of the three axes in space were not counted into its size - so a label standing at the edge of the graph, mostly that of the Z axis, lost most of its letters.  The three labels are measured in now, wherever they were dragged. |
 | 1.5.2 | 2026-11-15 | The **Z axis** of a `3D Surface` has **the same page as the X and the Y axis** in `Axes properties`: direction (`No Z axis`, `Standard`, `Reverse`), the label with its switch, font, colour and offset, the numbers with their switch, font, colour and offset, the automatic range and `Begin and end on a major tick`, `From` / `To`, the interval of the major ticks, the colour of the axis and its grid.  Those settings now act on **all three** axes of the box - the grid of each axis is the net its numbers draw on the walls, in the colour, style and width of its page - and a 3D surface opens with the three grids switched on.  The Z range and the Z label have left the curve properties for that page.  The curve properties of a 3D surface have the **`Shading`** of the colour surface: `Flat` paints every cell of the grid in one colour, `Smooth` draws up to four times as many points between the points, so that the steps of colour disappear - and a new switch, **`Light and shadow on the surface`**, lights the surface from the upper left so that its shape shows.  Files of 1.5.0 and 1.5.1 open as they were saved. |
 | 1.5.1 | 2026-11-15 | Four corrections of the `3D Surface`.  **(1)** A range of an axis made **smaller than the data** no longer lets the surface hang out of the box over the numbers and the labels: the surface is drawn from the points inside the three ranges only, and drawn again whenever a range changes (the exported program cuts it the same way).  **(2)** `Axes properties` has a **`Z axis` page** while the diagram is in space: the label with its font, the range (`Automatic`, `From`, `To`), the step of the numbers and their font.  **(3)** A **double click on the numbers** of the X, the Y or the Z axis opens the page of that axis, as in every other diagram - and so does a double click on the line of an axis; a single press on the numbers carries the graph.  **(4)** The **frame style** acts on the box: `No frame` draws the three axes alone, without the walls and their net; the other styles draw the walls, with the ticks pointing in or out as the style says.  The thickness of the frame, the length of the ticks, the colour of each axis and the colour of the plot area are taken over as well.  A diagram that opens as a 3D surface starts with `Full frame`. |
 | 1.5.0 | 2026-11-15 | The first version that draws in **three dimensions**: the new plot style `3D Surface` draws x, y, z columns - the same columns a `Colour Surface (pcolor)` reads - as a **surface in space** (`ax.plot_surface`; points that stand on no grid are joined into triangles).  **Dragging the surface turns it** in any direction, and the two angles of the view (`Elevation`, `Azimuth`) stand in the curve properties, where they can be typed in and where they follow the pointer.  **An axis is selected by a click on its line** and made **longer or shorter by its two ends**, as the axes of every other diagram are; dragging the line carries the whole graph.  The **labels of the three axes** are dragged, written in place by a slow second click and opened by a double click like any other label.  The colour scale, its range and the logarithmic scale are those of the colour surface; the **colour bar is off to begin with** and is switched on in the curve properties.  The view is taken back by `Undo`, saved with the diagram and written into the exported matplotlib program.  Besides, a diagram that opens as a `Colour Surface (pcolor)`, as `Contour Lines` or as `Filled Contours` now has **`Frame with ticks (outward)`** to begin with. |
