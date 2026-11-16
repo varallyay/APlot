@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.0 (2026-11-16) - see `APP_VERSION` below and "Version history" in the
+1.6.1 (2026-11-16) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -301,7 +301,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 APP_VERSION_DATE = "2026-11-16"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -408,6 +408,8 @@ SURFACE3D_FRAME = "box"
 SURFACE3D_CELLS = 150
 # matplotlib leaves much air around the box: it is drawn this much larger
 VIEW3D_ZOOM = 1.2
+# the room one number takes along an axis in space, in heights of its font
+SPACE_TICK_ROOM = 2.0
 VIEW3D_TURN = 180.0         # degrees for a drag across the whole plot area
 VIEW3D_AXIS_REACH = 7.0     # pixels around the line of an axis in space
 # the styles whose curves take the column after them for themselves
@@ -5054,6 +5056,34 @@ class EndTickLocator(AutoLocator):
         first = round(low / step)
         return np.array([_clean_tick((first + one) * step, step)
                          for one in range(count + 1)])
+
+
+class SpaceTickLocator(EndTickLocator):
+    """The automatic ticks of a linear axis of a surface in space.
+
+    How many numbers fit along an axis is a matter of its length.  The
+    flat axes underneath are as long as the plot area and matplotlib's own
+    count for an axis in space is taken from the width of the whole box -
+    neither is the length of the axis that is drawn, so a slightly smaller
+    font could double the numbers until they stood on one another.  Here
+    the count is asked for (`bins`, see `PlotWindow.space_tick_bins`) each
+    time the ticks are laid out: it follows the length the axis has in
+    space, and the size of its numbers.
+    """
+
+    def __init__(self, bins, ends=True):
+        super().__init__()
+        self.space_bins = bins
+        self.space_ends = bool(ends)
+
+    def tick_values(self, vmin, vmax):
+        try:
+            self._nbins = max(1, int(self.space_bins()))
+        except (TypeError, ValueError, AttributeError):
+            self._nbins = 5
+        if self.space_ends:
+            return super().tick_values(vmin, vmax)
+        return AutoLocator.tick_values(self, vmin, vmax)
 
 
 class EndTickLogLocator(LogLocator):
@@ -18592,6 +18622,30 @@ class PlotWindow(tk.Toplevel):
             box = list(VIEW3D_DEFAULT["box"])
         return box
 
+    def space_tick_bins(self, name):
+        """How many intervals of major ticks fit along one axis in space.
+
+        The length of the axis is the one it has in space - the share its
+        side has of the box, whatever way the box is turned, so the ticks
+        do not come and go while the view is dragged - and each number is
+        given `SPACE_TICK_ROOM` heights of its font along it.
+        """
+        ax3d = self.ax3d
+        try:
+            box = self.view3d_box()
+            share = box["xyz".index(name)] / math.sqrt(
+                sum(one * one for one in box))
+            # the box is drawn into the largest square of the plot area,
+            # and its diagonal is about as long as a side of that square
+            side = min(ax3d.bbox.width, ax3d.bbox.height) \
+                / float(self.fig.dpi) * 72.0
+            size = max(1, to_int(self.axis_cfg[name].get("tick_size"), 12))
+            bins = side * VIEW3D_ZOOM * share / (size * SPACE_TICK_ROOM)
+            return int(np.clip(bins, 1, 9))
+        except (AttributeError, TypeError, ValueError, KeyError,
+                ZeroDivisionError):
+            return 5
+
     def sync_3d_axes(self):
         """The axes in space show what the diagram says.
 
@@ -18660,18 +18714,28 @@ class PlotWindow(tk.Toplevel):
                             and abs(high - low) / float(step) <= 60:
                         axis.set_major_locator(MultipleLocator(float(step)))
                     elif not isinstance(axis.get_major_locator(),
-                                        AutoLocator):
-                        axis.set_major_locator(AutoLocator())
+                                        SpaceTickLocator):
+                        axis.set_major_locator(SpaceTickLocator(
+                            lambda: self.space_tick_bins("z"), ends=False))
                 elif sound:
-                    # X and Y: the major ticks of the flat axes
                     flat = self.ax.xaxis if name == "x" else self.ax.yaxis
-                    near, far = sorted((low, high))
-                    air = abs(far - near) * 1e-9
-                    ticks = [float(one)
-                             for one in flat.get_majorticklocs()
-                             if near - air <= float(one) <= far + air]
-                    if 2 <= len(ticks) <= 60:
-                        getattr(ax3d, f"set_{name}ticks")(ticks)
+                    automatic = flat.get_major_locator()
+                    if isinstance(automatic, AutoLocator):
+                        # X and Y without an interval of their own: as
+                        # many numbers as fit along the axis in space
+                        # (the flat axis underneath is a longer one)
+                        axis.set_major_locator(SpaceTickLocator(
+                            lambda name=name: self.space_tick_bins(name),
+                            ends=isinstance(automatic, EndTickLocator)))
+                    else:
+                        # an interval typed in: the ticks of the flat axes
+                        near, far = sorted((low, high))
+                        air = abs(far - near) * 1e-9
+                        ticks = [float(one)
+                                 for one in flat.get_majorticklocs()
+                                 if near - air <= float(one) <= far + air]
+                        if 2 <= len(ticks) <= 60:
+                            getattr(ax3d, f"set_{name}ticks")(ticks)
                 minor = max(0, int(cfg.get("minor", 0) or 0))
                 axis.set_minor_locator(AutoMinorLocator(minor + 1) if minor
                                        else NullLocator())
@@ -19013,6 +19077,13 @@ class PlotWindow(tk.Toplevel):
                 ax3d.set_zlim(view[2])
             except (TypeError, ValueError):
                 pass
+        try:
+            # the box in space reaches beyond the plot area it is drawn
+            # into (`VIEW3D_ZOOM`): cut at the edge of that area, the
+            # corner of a surface that comes towards the viewer was missing
+            main.set_clip_on(False)
+        except (AttributeError, TypeError):
+            pass
         main.aplot_clip = clip
         main.aplot_space = self.space_signature()
         main.aplot_series = str(column)
@@ -20579,6 +20650,7 @@ class PlotWindow(tk.Toplevel):
                         f"shade=False, rcount={SURFACE3D_CELLS}, "
                         f"ccount={SURFACE3D_CELLS}, "
                         f"antialiased={bool(plan['edges'])}, {edge})",
+                        f"{main}.set_clip_on(False)",
                         f"map_{tag} = ScalarMappable(norm=norm_{tag}, "
                         f"cmap={lit(plan['cmap'])})"]
                 else:
@@ -20588,12 +20660,14 @@ class PlotWindow(tk.Toplevel):
                         f"alpha={exact(plan['alpha'])}, "
                         f"rcount={SURFACE3D_CELLS}, ccount={SURFACE3D_CELLS}, "
                         f"antialiased={bool(plan['edges'])}, {edge})")
+                    out.append(f"{main}.set_clip_on(False)")
                     out += recolour
             else:
                 out.append(
                     f"{main} = ax3d.plot_trisurf({where}, {colours}, "
                     f"alpha={exact(plan['alpha'])}, "
                     f"antialiased={bool(plan['edges'])}, {edge})")
+                out.append(f"{main}.set_clip_on(False)")
                 out += recolour
         elif plan["style"] == "pcolor":
             call = "pcolormesh" if grid else "tripcolor"
@@ -26982,7 +27056,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.0 (2026-11-16)**.  The number is written in one place
+This is **APlot 1.6.1 (2026-11-16)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27113,6 +27187,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.1 | 2026-11-16 | Two corrections of the `3D Surface`.  **The numbers of an axis no longer double when their font is made a little smaller**: the automatic ticks of the X and the Y axis of the box were those of the flat axes underneath, which are as long as the whole plot area - so at 11 pt instead of 12 pt twice as many numbers could be asked for as fit along the much shorter axis in space, and they stood on one another.  The automatic ticks of all three axes are now counted from the length the axis has in space and the size of its numbers; they do not change while the view is turned, and an interval typed into `Major ticks interval` is kept as before.  **The surface is no longer cut at the edge of the plot area**: the box in space reaches a little beyond the plot area it is drawn into, and at some views (an elevation of 42 and an azimuth of 56 degrees, for one) the corner of the surface nearest to the viewer was missing - the paper showed through.  The exported program draws the surface uncut too. |
 | 1.6.0 | 2026-11-16 | The axes of a `3D Surface` have **minor ticks** and can be **logarithmic** - all three of them.  **Minor ticks**: `Minor ticks` of an axis page draws that many between two major ticks of the X, the Y and the Z axis of the box; they are shorter than the major ones (by what `Minor tick length` is of `Major tick length` in `Frame and origin`), carry no numbers, and draw no lines on the walls unless `Minor grid lines` is switched on.  **Logarithmic axes**: the `Scale` box of the `Z axis` page is no longer grey, and `Log 10`, `Log 2` and `Log (natural)` of the X and the Y page now really spread the surface logarithmically (until now the box in space stayed linear whatever they said).  The numbers are written as powers, `Major ticks interval` counts powers and the minor ticks stand on 2, 3 ... 9, as on a flat diagram; values at or below zero have no place on such an axis and are left out; the colours and the colour bar go on counting in the values.  **The matplotlib underneath is looked at when the program starts**: from matplotlib 3.11 on a logarithmic axis in space is drawn by matplotlib itself; on an older one APlot draws the logarithms of the values on a linear axis and writes the numbers as powers - the picture is the same.  The exported program writes such an axis that second way, so it runs on every matplotlib.  Besides, on matplotlib 3.11 a **dragged label** of an axis in space is no longer cut off the copied picture (matplotlib 3.11 measures the labels itself, but where they stood before they were dragged).  Files of 1.5.x open as they were saved. |
 | 1.5.3 | 2026-11-16 | A correction of the `3D Surface`: **the copied picture no longer cuts through the label of the Z axis**.  `Copy figure to the clipboard`, a saved picture, the preview and the thumbnail cut the graph out of the page, and the labels of the three axes in space were not counted into its size - so a label standing at the edge of the graph, mostly that of the Z axis, lost most of its letters.  The three labels are measured in now, wherever they were dragged. |
 | 1.5.2 | 2026-11-15 | The **Z axis** of a `3D Surface` has **the same page as the X and the Y axis** in `Axes properties`: direction (`No Z axis`, `Standard`, `Reverse`), the label with its switch, font, colour and offset, the numbers with their switch, font, colour and offset, the automatic range and `Begin and end on a major tick`, `From` / `To`, the interval of the major ticks, the colour of the axis and its grid.  Those settings now act on **all three** axes of the box - the grid of each axis is the net its numbers draw on the walls, in the colour, style and width of its page - and a 3D surface opens with the three grids switched on.  The Z range and the Z label have left the curve properties for that page.  The curve properties of a 3D surface have the **`Shading`** of the colour surface: `Flat` paints every cell of the grid in one colour, `Smooth` draws up to four times as many points between the points, so that the steps of colour disappear - and a new switch, **`Light and shadow on the surface`**, lights the surface from the upper left so that its shape shows.  Files of 1.5.0 and 1.5.1 open as they were saved. |
@@ -29863,6 +29938,10 @@ switched on in `Curve properties` like any other.
     in `Frame and origin` - and carry no numbers.  The net on the walls is
     drawn from the major ticks alone; `Minor grid lines` adds the lines of
     the minor ticks, in the style of the grid of that axis.
+  * **How many numbers** an axis without a `Major ticks interval` gets
+    (since 1.6.1) follows the length that axis has in space - its share of
+    the box, whichever way the box is turned - and the size of its
+    numbers: a smaller font or a longer axis makes room for more of them.
   * **Logarithmic axes** (since 1.6.0): the `Scale` box of the X, the Y
     and the Z page spreads that axis of the box logarithmically (`Log 10`,
     `Log 2`, `Log (natural)`).  Everything is as on a flat diagram: the
