@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.5.3 (2026-11-16)**.  The number is written in one place
+This is **APlot 1.6.0 (2026-11-16)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.0 | 2026-11-16 | The axes of a `3D Surface` have **minor ticks** and can be **logarithmic** - all three of them.  **Minor ticks**: `Minor ticks` of an axis page draws that many between two major ticks of the X, the Y and the Z axis of the box; they are shorter than the major ones (by what `Minor tick length` is of `Major tick length` in `Frame and origin`), carry no numbers, and draw no lines on the walls unless `Minor grid lines` is switched on.  **Logarithmic axes**: the `Scale` box of the `Z axis` page is no longer grey, and `Log 10`, `Log 2` and `Log (natural)` of the X and the Y page now really spread the surface logarithmically (until now the box in space stayed linear whatever they said).  The numbers are written as powers, `Major ticks interval` counts powers and the minor ticks stand on 2, 3 ... 9, as on a flat diagram; values at or below zero have no place on such an axis and are left out; the colours and the colour bar go on counting in the values.  **The matplotlib underneath is looked at when the program starts**: from matplotlib 3.11 on a logarithmic axis in space is drawn by matplotlib itself; on an older one APlot draws the logarithms of the values on a linear axis and writes the numbers as powers - the picture is the same.  The exported program writes such an axis that second way, so it runs on every matplotlib.  Besides, on matplotlib 3.11 a **dragged label** of an axis in space is no longer cut off the copied picture (matplotlib 3.11 measures the labels itself, but where they stood before they were dragged).  Files of 1.5.x open as they were saved. |
 | 1.5.3 | 2026-11-16 | A correction of the `3D Surface`: **the copied picture no longer cuts through the label of the Z axis**.  `Copy figure to the clipboard`, a saved picture, the preview and the thumbnail cut the graph out of the page, and the labels of the three axes in space were not counted into its size - so a label standing at the edge of the graph, mostly that of the Z axis, lost most of its letters.  The three labels are measured in now, wherever they were dragged. |
 | 1.5.2 | 2026-11-15 | The **Z axis** of a `3D Surface` has **the same page as the X and the Y axis** in `Axes properties`: direction (`No Z axis`, `Standard`, `Reverse`), the label with its switch, font, colour and offset, the numbers with their switch, font, colour and offset, the automatic range and `Begin and end on a major tick`, `From` / `To`, the interval of the major ticks, the colour of the axis and its grid.  Those settings now act on **all three** axes of the box - the grid of each axis is the net its numbers draw on the walls, in the colour, style and width of its page - and a 3D surface opens with the three grids switched on.  The Z range and the Z label have left the curve properties for that page.  The curve properties of a 3D surface have the **`Shading`** of the colour surface: `Flat` paints every cell of the grid in one colour, `Smooth` draws up to four times as many points between the points, so that the steps of colour disappear - and a new switch, **`Light and shadow on the surface`**, lights the surface from the upper left so that its shape shows.  Files of 1.5.0 and 1.5.1 open as they were saved. |
 | 1.5.1 | 2026-11-15 | Four corrections of the `3D Surface`.  **(1)** A range of an axis made **smaller than the data** no longer lets the surface hang out of the box over the numbers and the labels: the surface is drawn from the points inside the three ranges only, and drawn again whenever a range changes (the exported program cuts it the same way).  **(2)** `Axes properties` has a **`Z axis` page** while the diagram is in space: the label with its font, the range (`Automatic`, `From`, `To`), the step of the numbers and their font.  **(3)** A **double click on the numbers** of the X, the Y or the Z axis opens the page of that axis, as in every other diagram - and so does a double click on the line of an axis; a single press on the numbers carries the graph.  **(4)** The **frame style** acts on the box: `No frame` draws the three axes alone, without the walls and their net; the other styles draw the walls, with the ticks pointing in or out as the style says.  The thickness of the frame, the length of the ticks, the colour of each axis and the colour of the plot area are taken over as well.  A diagram that opens as a 3D surface starts with `Full frame`. |
@@ -2903,9 +2904,30 @@ switched on in `Curve properties` like any other.
       on the walls of the box, with their style, colour and width.  A 3D
       surface opens with the grid of all three axes switched on.
     All of this acts on the X and the Y axis of the box in the same way.
-    Two things an axis in space cannot do: it has **no minor ticks** (nor
-    minor grid lines), and it is **linear** - the `Scale` box of the Z
-    page is grey.
+  * **Minor ticks** (since 1.6.0): `Minor ticks` of each of the three
+    pages draws that many between two major ticks.  They are shorter than
+    the major ones - by what `Minor tick length` is of `Major tick length`
+    in `Frame and origin` - and carry no numbers.  The net on the walls is
+    drawn from the major ticks alone; `Minor grid lines` adds the lines of
+    the minor ticks, in the style of the grid of that axis.
+  * **Logarithmic axes** (since 1.6.0): the `Scale` box of the X, the Y
+    and the Z page spreads that axis of the box logarithmically (`Log 10`,
+    `Log 2`, `Log (natural)`).  Everything is as on a flat diagram: the
+    numbers are written as powers, `Major ticks interval` counts powers of
+    the base, and the minor ticks stand on the whole numbers in between
+    (2, 3 ... 9 inside a decade).  A value at or below zero has no place
+    on such an axis: those points are left out of the surface, and a
+    range typed in that reaches zero is moved above it.  The colour
+    scale, and the colour bar, go on counting in the values themselves.
+    *How it is drawn depends on the matplotlib the program runs on*, which
+    is looked at once, when APlot starts: matplotlib **3.11 and later**
+    draws a logarithmic axis in space itself; on an **older** matplotlib
+    APlot draws the logarithms of the values on a linear axis and writes
+    the numbers as powers.  The picture is the same either way.  The
+    exported matplotlib program always writes it the second way, so that
+    it runs on every matplotlib; it leaves the minor ticks out, because
+    matplotlib alone draws them as long as the major ones, each with a
+    grid line of its own.
   * **A range smaller than the data cuts the surface**: only the part
     inside the three ranges is drawn, so nothing hangs out of the box.
     Along X and Y the surface ends at the last row of points inside the

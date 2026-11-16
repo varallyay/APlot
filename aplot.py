@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.5.3 (2026-11-16) - see `APP_VERSION` below and "Version history" in the
+1.6.0 (2026-11-16) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -245,10 +245,12 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import (Ellipse, FancyBboxPatch, Polygon,
                                 Rectangle)
 from matplotlib.text import Text
-from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedLocator,
-                               Formatter, FuncFormatter, LogFormatterSciNotation,
-                               LogLocator, MaxNLocator, MultipleLocator,
-                               NullFormatter, NullLocator)
+from matplotlib.ticker import (AutoLocator, AutoMinorLocator, FixedFormatter,
+                               FixedLocator, Formatter, FuncFormatter,
+                               LogFormatterSciNotation, LogLocator,
+                               MaxNLocator, MultipleLocator, NullFormatter,
+                               NullLocator, ScalarFormatter)
+from matplotlib.tri import Triangulation
 from matplotlib import transforms as mtransforms
 from matplotlib.transforms import (Affine2D, Bbox, BboxTransformTo,
                                    IdentityTransform, ScaledTranslation,
@@ -256,6 +258,37 @@ from matplotlib.transforms import (Affine2D, Bbox, BboxTransformTo,
 # the axes of a surface in space; named here so that a packaged APlot
 # carries them too
 from mpl_toolkits.mplot3d import Axes3D, proj3d  # noqa: F401
+
+
+def version_numbers(text):
+    """"3.10.1" -> (3, 10, 1); whatever is no number ends the row."""
+    numbers = []
+    for part in str(text).split("."):
+        digits = ""
+        for sign in part:
+            if not sign.isdigit():
+                break
+            digits += sign
+        if not digits:
+            break
+        numbers.append(int(digits))
+        if digits != part:
+            break
+    return tuple(numbers)
+
+
+# The matplotlib this program runs on, looked at once, when it starts.  Two
+# things about a surface in space depend on it:
+#   * a **logarithmic axis in space** exists in matplotlib since 3.11.
+#     Before that, such an axis is drawn the long way round: the logarithm
+#     of the values on a linear axis, whose numbers are written as powers;
+#   * the **labels of the axes in space** are counted into the size of the
+#     picture by matplotlib itself since 3.11.  Before that APlot measures
+#     them in (`PlotWindow._measure_3d_labels`).
+MPL_VERSION = version_numbers(matplotlib.__version__)
+MPL_SPACE_AXES = (3, 11)       # the first matplotlib that does both itself
+SPACE_LOG_NATIVE = MPL_VERSION >= MPL_SPACE_AXES
+SPACE_LABELS_MEASURED = MPL_VERSION >= MPL_SPACE_AXES
 
 APP_NAME = "APlot"
 # The version of the program - the ONE place where it is written.  The
@@ -268,7 +301,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.6.0"
 APP_VERSION_DATE = "2026-11-16"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -8216,9 +8249,6 @@ class AxesDialog(ToolDialog):
             notebook.add(tab, text=words)
             self.tabs[which] = tab
         self.z_tab = self.tabs.get("z")
-        if self.z_tab is not None:
-            # an axis in space is linear: it has no other scale
-            self.z_tab.scale_box.configure(state="disabled")
         self.frame_tab = FrameTab(notebook, plot)
         notebook.add(self.frame_tab, text="Frame and origin")
         self.notebook = notebook
@@ -18087,6 +18117,7 @@ class PlotWindow(tk.Toplevel):
             self.ax3d = ax3d
             for name in ("x", "y", "z"):
                 self._shift_3d_label(name)
+                self._tame_3d_minor_ticks(name)
             self._measure_3d_labels(ax3d)
             self.ax.set_axis_off()
             kind, _key = self.selection or (None, None)
@@ -18114,11 +18145,17 @@ class PlotWindow(tk.Toplevel):
     def _measure_3d_labels(ax3d):
         """Count the three labels into the size of the axes in space.
 
-        matplotlib leaves the labels of such axes out when it measures
-        how much room the axes take, so a picture cut around the graph -
-        `Copy figure`, a saved picture, the thumbnail - cut through a
-        label that stood at the edge, mostly the one of the Z axis.  Here
-        they are measured in, where they were last drawn.
+        A picture cut around the graph - `Copy figure`, a saved picture,
+        the thumbnail - asks the axes how much room they take.  What
+        matplotlib answers depends on its version (`MPL_VERSION`):
+
+        * before 3.11 it leaves the labels of such axes out, so the cut
+          went through a label that stood at the edge, mostly the one of
+          the Z axis.  They are measured in here, where they were drawn;
+        * since 3.11 it counts them itself - but it puts each label back
+          where it would stand by itself to do so, and a label that was
+          dragged is measured where it used to be.  So the label is put
+          where it was dragged to once more, and measured there.
         """
         if getattr(ax3d, "aplot_measures_labels", False):
             return ax3d
@@ -18133,11 +18170,17 @@ class PlotWindow(tk.Toplevel):
             for axis in (ax3d.xaxis, ax3d.yaxis, ax3d.zaxis):
                 label = axis.label
                 try:
-                    if axis.get_visible() and label.get_visible() \
-                            and label.get_text().strip():
-                        extent = label.get_window_extent(renderer)
-                        if all(math.isfinite(one) for one in extent.extents):
-                            boxes.append(extent)
+                    if not (axis.get_visible() and label.get_visible()
+                            and label.get_text().strip()):
+                        continue
+                    place = getattr(label, "aplot_place", None)
+                    moved = place() if (SPACE_LABELS_MEASURED
+                                        and place is not None) else False
+                    if SPACE_LABELS_MEASURED and not moved:
+                        continue       # matplotlib has measured this one
+                    extent = label.get_window_extent(renderer)
+                    if all(math.isfinite(one) for one in extent.extents):
+                        boxes.append(extent)
                 except (TypeError, ValueError, AttributeError,
                         RuntimeError):
                     continue
@@ -18146,6 +18189,77 @@ class PlotWindow(tk.Toplevel):
         ax3d.get_tightbbox = get_tightbbox
         ax3d.aplot_measures_labels = True
         return ax3d
+
+    def _tame_3d_minor_ticks(self, name):
+        """Minor ticks an axis in space can be seen to have.
+
+        matplotlib draws the minor ticks of such an axis exactly like the
+        major ones - as long, and each with a grid line of its own on the
+        walls of the box.  Two things are changed here, as the last thing
+        before they are painted: a minor tick is made shorter, by what
+        `Minor tick length` is of `Major tick length`, around the point
+        where it stands on its axis; and the net on the walls is drawn
+        from the major ticks alone, unless `Minor grid lines` is on.
+        """
+        axis = getattr(self.ax3d, f"{name}axis")
+        if getattr(axis, "aplot_minor_tamed", False):
+            return axis
+        plain_update, plain_grid = axis._update_ticks, axis.draw_grid
+
+        def shorten(tick):
+            line = tick.tick1line
+            if getattr(line, "aplot_short_draw", False):
+                return
+            plain = line.draw
+
+            def draw(renderer, *args, **kwargs):
+                try:
+                    ratio = float(getattr(axis, "aplot_minor_ratio", 0.5))
+                    xs, ys = (np.asarray(one, dtype=float)
+                              for one in line.get_data())
+                    here = (tuple(xs), tuple(ys))
+                    if len(xs) == 2 and ratio != 1.0 \
+                            and here != getattr(line, "aplot_shortened", None):
+                        info = axis._axinfo["tick"]
+                        out = float(info["outward_factor"])
+                        inside = float(info["inward_factor"])
+                        share = out / (out + inside) if out + inside > 0 \
+                            else 0.5
+                        foot_x = xs[0] + (xs[1] - xs[0]) * share
+                        foot_y = ys[0] + (ys[1] - ys[0]) * share
+                        xs = foot_x + (xs - foot_x) * ratio
+                        ys = foot_y + (ys - foot_y) * ratio
+                        line.set_data(xs, ys)
+                        line.aplot_shortened = (tuple(xs), tuple(ys))
+                except (TypeError, ValueError, AttributeError, KeyError):
+                    pass
+                return plain(renderer, *args, **kwargs)
+
+            line.draw = draw
+            line.aplot_short_draw = True
+
+        def _update_ticks(*args, **kwargs):
+            ticks = plain_update(*args, **kwargs)
+            for tick in ticks:
+                if not getattr(tick, "_major", True):
+                    shorten(tick)
+            if getattr(axis, "aplot_grid_pass", False) \
+                    and not getattr(axis, "aplot_minor_grid", False):
+                ticks = [tick for tick in ticks
+                         if getattr(tick, "_major", True)]
+            return ticks
+
+        def draw_grid(renderer, *args, **kwargs):
+            axis.aplot_grid_pass = True
+            try:
+                return plain_grid(renderer, *args, **kwargs)
+            finally:
+                axis.aplot_grid_pass = False
+
+        axis._update_ticks = _update_ticks
+        axis.draw_grid = draw_grid
+        axis.aplot_minor_tamed = True
+        return axis
 
     def _shift_3d_label(self, name):
         """Let the label of one axis in space be dragged from its place.
@@ -18162,7 +18276,8 @@ class PlotWindow(tk.Toplevel):
         plain = label.draw
         window = self
 
-        def draw(renderer, *args, **kwargs):
+        def place():
+            """Put the label where it was dragged to; True when it was."""
             try:
                 dx, dy = window.text_offset.get(name, (0.0, 0.0))
                 if dx or dy:
@@ -18178,12 +18293,18 @@ class PlotWindow(tk.Toplevel):
                     label.set_position((float(moved[0]), float(moved[1])))
                     label.aplot_moved_to = tuple(
                         float(one) for one in label.get_position())
+                    return True
             except (TypeError, ValueError, AttributeError,
                     np.linalg.LinAlgError):
                 pass
+            return False
+
+        def draw(renderer, *args, **kwargs):
+            place()
             return plain(renderer, *args, **kwargs)
 
         label.draw = draw
+        label.aplot_place = place
         label.aplot_shifted_draw = True
         label.set_picker(True)
         return label
@@ -18233,9 +18354,39 @@ class PlotWindow(tk.Toplevel):
         return (min(low for low, _high in ends),
                 max(high for _low, high in ends))
 
+    def z_positive_range(self):
+        """(lowest, highest) Z above zero of every surface in space, or
+        None: what a logarithmic Z axis can show of them."""
+        ends = [one.aplot_zpositive
+                for column in self.surface3d_columns()
+                for one in self.surface_artists.get(column, ())
+                if getattr(one, "aplot_zpositive", None) is not None]
+        if not ends:
+            return None
+        return (min(low for low, _high in ends),
+                max(high for _low, high in ends))
+
     def z_automatic_limits(self):
         """The two ends the data gives the Z axis: on round numbers when
         the axis begins and ends on a major tick."""
+        if self.space_log("z"):
+            low, high = self.z_positive_range() or (0.1, 10.0)
+            if high <= low:
+                low, high = low / 10.0, high * 10.0
+            if self.ends_on_ticks("z"):
+                # the ends go to the powers the major ticks stand on
+                base = self.log_major_base(
+                    LOG_BASES[self.axis_scale("z")],
+                    self.axis_cfg["z"].get("step"), (low, high))
+                try:
+                    size = math.log(base)
+                    low = base ** math.floor(math.log(low) / size + 1e-9)
+                    high = base ** math.ceil(math.log(high) / size - 1e-9)
+                    if high <= low:
+                        high = low * base
+                except (ValueError, OverflowError, ZeroDivisionError):
+                    pass
+            return float(low), float(high)
         low, high = self.z_data_range() or (0.0, 1.0)
         if high <= low:
             step = abs(low) * 0.5 or 0.5
@@ -18258,7 +18409,11 @@ class PlotWindow(tk.Toplevel):
             high = to_float(cfg.get("max"), None)
             if low is not None and high is not None and low != high \
                     and math.isfinite(low) and math.isfinite(high):
-                return (low, high) if high > low else (high, low)
+                low, high = sorted((low, high))
+                if self.space_log("z"):  # it never reaches zero
+                    high = max(high, LOG_FLOOR * 10.0)
+                    low = low if low > 0.0 else high / 1000.0
+                return low, high
         return self.z_automatic_limits()
 
     def apply_z_axis(self, cfg, redraw=True):
@@ -18268,10 +18423,16 @@ class PlotWindow(tk.Toplevel):
         for key in ("auto", "min", "max", "step", "minor", "label_size",
                     "tick_size", "label_color", "tick_color", "label_pad",
                     "tick_pad", "axis_color", "label_on", "ticks_on",
-                    "tick_labels_on", "direction", "ends_on_ticks", "z"):
+                    "tick_labels_on", "direction", "ends_on_ticks", "z",
+                    "scale"):
             if key in cfg:
                 new[key] = cfg[key]
-        new["scale"] = "linear"        # the only one an axis in space has
+        if str(new.get("scale", "linear")) not in LOG_BASES:
+            new["scale"] = "linear"
+        try:
+            new["minor"] = max(0, int(new.get("minor", 0) or 0))
+        except (TypeError, ValueError):
+            new["minor"] = 0
         new["grid"] = {**(stored.get("grid") or {}), **(cfg.get("grid") or {})}
         if "label" in cfg:
             text = cfg["label"]
@@ -18295,6 +18456,130 @@ class PlotWindow(tk.Toplevel):
         if redraw:
             self.draw()
         return None
+
+    # -- the scale of an axis in space ----------------------------------------
+    def space_log(self, name):
+        """True while that axis in space is a logarithmic one."""
+        return self.axis_scale(name) != "linear"
+
+    def space_signature(self):
+        """What a drawn surface depends on besides the three ranges: the
+        scales of the axes, and the way a logarithmic one is drawn."""
+        return (tuple(self.axis_scale(name) for name in ("x", "y", "z")),
+                bool(SPACE_LOG_NATIVE))
+
+    def to_space(self, name, values, native=None):
+        """Values of the data, as the places they have along one axis in
+        space.
+
+        They are the values themselves on a linear axis, and on a
+        logarithmic one that matplotlib draws itself (3.11 and later,
+        `SPACE_LOG_NATIVE`).  Before that such an axis is a linear one
+        that carries the **logarithms**: the place of a value is its
+        logarithm to the base ten, whatever base the numbers are written
+        in, and what cannot have one - zero, a negative value - has no
+        place at all.
+        """
+        values = np.asarray(values, dtype=float)
+        if native is None:
+            native = SPACE_LOG_NATIVE
+        if native or not self.space_log(name):
+            return values
+        above = values > 0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(above, np.log10(np.where(above, values, 1.0)),
+                            np.nan)
+
+    def from_space(self, name, places, native=None):
+        """The other way round: the values that stand at those places."""
+        places = np.asarray(places, dtype=float)
+        if native is None:
+            native = SPACE_LOG_NATIVE
+        if native or not self.space_log(name):
+            return places
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.power(10.0, places)
+
+    def space_limits(self, name):
+        """The two ends of one axis in space, as values of the data and
+        in the direction the axis runs."""
+        if name == "z":
+            low, high = self.z_limits()
+            if self.axis_direction("z") == "reverse":
+                low, high = high, low
+        else:
+            limits = self.ax.get_xlim() if name == "x" else self.ax.get_ylim()
+            low, high = float(limits[0]), float(limits[1])
+        if self.space_log(name) and not min(low, high) > 0.0:
+            top = max(low, high, LOG_FLOOR * 10.0)
+            bottom = top / 1000.0
+            low, high = (top, bottom) if low > high else (bottom, top)
+        return float(low), float(high)
+
+    def space_log_ticks(self, name):
+        """(major ticks, minor ticks, the numbers written at the major
+        ones) of a logarithmic axis in space, as values of the data.
+
+        They are worked out the way the pages of a flat diagram do it:
+        `Major ticks interval` counts powers of the base, and the minor
+        ticks stand on the whole numbers in between (`log_major_base`,
+        `log_minor_subs`).
+        """
+        cfg = self.axis_cfg[name]
+        scale = self.axis_scale(name)
+        near, far = sorted(self.space_limits(name))
+        base = self.log_major_base(LOG_BASES[scale], cfg.get("step"),
+                                   (near, far))
+        try:
+            count = max(0, int(cfg.get("minor", 0) or 0))
+        except (TypeError, ValueError):
+            count = 0
+        subs = self.log_minor_subs(base, count)
+
+        def inside(value):
+            return near * (1.0 - 1e-9) <= value <= far * (1.0 + 1e-9)
+
+        try:
+            majors = [float(one) for one in LogLocator(
+                base=base, subs=(1.0,),
+                numticks=LOG_TICK_LIMIT).tick_values(near, far)
+                if inside(float(one))]
+            minors = [float(one) for one in LogLocator(
+                base=base, subs=subs,
+                numticks=LOG_TICK_LIMIT).tick_values(near, far)
+                if inside(float(one))] if subs else []
+        except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+            majors, minors = [], []
+        minors = [one for one in minors
+                  if not any(math.isclose(one, major, rel_tol=1e-9)
+                             for major in majors)]
+        writer = NaturalLogFormatter() if scale == "ln" \
+            else LogFormatterSciNotation(base=LOG_BASES[scale])
+        texts = []
+        for value in majors:
+            try:
+                texts.append(str(writer(value)))
+            except (TypeError, ValueError, AttributeError):
+                texts.append(f"{value:g}")
+        return majors, minors, texts
+
+    def _sync_3d_scale(self, name):
+        """Tell matplotlib the scale of one axis in space, where it knows
+        of such a thing (3.11 and later); True for a logarithmic axis."""
+        scale = self.axis_scale(name)
+        axis = getattr(self.ax3d, f"{name}axis")
+        if SPACE_LOG_NATIVE and getattr(axis, "aplot_scale",
+                                        "linear") != scale:
+            setter = getattr(self.ax3d, f"set_{name}scale")
+            try:
+                if scale == "linear":
+                    setter("linear")
+                else:
+                    setter("log", base=LOG_BASES[scale])
+                axis.aplot_scale = scale
+            except (TypeError, ValueError, AttributeError):
+                pass
+        return scale != "linear"
 
     def view3d_box(self):
         """The lengths of the three axes compared with one another."""
@@ -18347,33 +18632,51 @@ class PlotWindow(tk.Toplevel):
         set_lim = getattr(ax3d, f"set_{name}lim")
         shown = self.axis_direction(name) != "off"
         try:
-            if name == "z":
-                low, high = self.z_limits()
-                if self.axis_direction("z") == "reverse":
-                    low, high = high, low
-                set_lim(low, high)
-                step = cfg.get("step")
-                if step and not cfg.get("auto", True) \
-                        and abs(high - low) / float(step) <= 60:
-                    axis.set_major_locator(MultipleLocator(float(step)))
-                elif not isinstance(axis.get_major_locator(), AutoLocator):
-                    axis.set_major_locator(AutoLocator())
+            log = self._sync_3d_scale(name)
+            low, high = self.space_limits(name)
+            sound = math.isfinite(low) and math.isfinite(high) and low != high
+            if sound:
+                set_lim(*(float(one)
+                          for one in self.to_space(name, (low, high))))
+            if log:
+                # the ticks stand where the pages of the axis put them,
+                # and the numbers are written as powers of the base
+                majors, minors, texts = self.space_log_ticks(name)
+                axis.set_major_locator(
+                    FixedLocator(self.to_space(name, majors)))
+                axis.set_major_formatter(FixedFormatter(texts))
+                axis.set_minor_locator(
+                    FixedLocator(self.to_space(name, minors)) if minors
+                    else NullLocator())
+                axis.aplot_log_ticks = True
             else:
-                # X and Y: the range and the major ticks of the flat axes
-                flat = self.ax.xaxis if name == "x" else self.ax.yaxis
-                limits = self.ax.get_xlim() if name == "x" \
-                    else self.ax.get_ylim()
-                low, high = float(limits[0]), float(limits[1])
-                if math.isfinite(low) and math.isfinite(high) and low != high:
-                    set_lim(low, high)
-                    if str(cfg.get("scale", "linear")) == "linear":
-                        near, far = sorted((low, high))
-                        air = abs(far - near) * 1e-9
-                        ticks = [float(one)
-                                 for one in flat.get_majorticklocs()
-                                 if near - air <= float(one) <= far + air]
-                        if 2 <= len(ticks) <= 60:
-                            getattr(ax3d, f"set_{name}ticks")(ticks)
+                if getattr(axis, "aplot_log_ticks", False):
+                    axis.set_major_locator(AutoLocator())
+                    axis.set_major_formatter(ScalarFormatter())
+                    axis.aplot_log_ticks = False
+                if name == "z":
+                    step = cfg.get("step")
+                    if step and not cfg.get("auto", True) \
+                            and abs(high - low) / float(step) <= 60:
+                        axis.set_major_locator(MultipleLocator(float(step)))
+                    elif not isinstance(axis.get_major_locator(),
+                                        AutoLocator):
+                        axis.set_major_locator(AutoLocator())
+                elif sound:
+                    # X and Y: the major ticks of the flat axes
+                    flat = self.ax.xaxis if name == "x" else self.ax.yaxis
+                    near, far = sorted((low, high))
+                    air = abs(far - near) * 1e-9
+                    ticks = [float(one)
+                             for one in flat.get_majorticklocs()
+                             if near - air <= float(one) <= far + air]
+                    if 2 <= len(ticks) <= 60:
+                        getattr(ax3d, f"set_{name}ticks")(ticks)
+                minor = max(0, int(cfg.get("minor", 0) or 0))
+                axis.set_minor_locator(AutoMinorLocator(minor + 1) if minor
+                                       else NullLocator())
+            # a minor tick carries no number, here as everywhere else
+            axis.set_minor_formatter(NullFormatter())
         except (TypeError, ValueError, AttributeError):
             pass
         label_on = shown and bool(cfg.get("label_on", True))
@@ -18415,7 +18718,13 @@ class PlotWindow(tk.Toplevel):
         cfg = self.frame_cfg
         style = str(cfg.get("style", "none"))
         width = max(0.0, to_float(cfg.get("width"), 1.0))
-        length = max(0.0, to_float(cfg.get("major_tick_length"), 3.5)) / 3.5
+        major_length = max(0.0, to_float(cfg.get("major_tick_length"), 3.5))
+        minor_length = max(0.0, to_float(cfg.get("minor_tick_length"), 2.0))
+        # a minor tick is as much shorter than a major one as the two
+        # lengths of the frame say (see `_tame_3d_minor_ticks`)
+        minor_ratio = (max(0.0, min(minor_length / major_length, 1.5))
+                       if major_length > 0 else 0.5)
+        length = major_length / 3.5
         length = max(0.3, min(length, 4.0))
         # matplotlib names the two halves of a tick in space the other
         # way round: its "inward" half is the one that stands out of the
@@ -18436,6 +18745,8 @@ class PlotWindow(tk.Toplevel):
             colour = safe_hex(self.axis_cfg[which].get("axis_color"),
                               "#000000")
             grid = self.axis_cfg[which].get("grid") or {}
+            axis.aplot_minor_ratio = minor_ratio
+            axis.aplot_minor_grid = bool(grid.get("minor"))
             try:
                 net = axis._axinfo["grid"]
                 net["color"] = to_rgba(safe_hex(grid.get("color"), "#b0b0b0"))
@@ -18474,10 +18785,8 @@ class PlotWindow(tk.Toplevel):
 
     def clip3d_now(self):
         """The ranges of the three axes in space, each from low to high."""
-        ax3d = self.ax3d
-        return tuple(tuple(sorted(float(one) for one in limits))
-                     for limits in (ax3d.get_xlim(), ax3d.get_ylim(),
-                                    ax3d.get_zlim()))
+        return tuple(tuple(sorted(self.space_limits(name)))
+                     for name in ("x", "y", "z"))
 
     def _clip_3d_surfaces(self):
         """Draw again every surface that reaches beyond the box.
@@ -18491,12 +18800,15 @@ class PlotWindow(tk.Toplevel):
         if self.ax3d is None or getattr(self, "_clipping_3d", False):
             return False
         clip = self.clip3d_now()
+        space = self.space_signature()
         self._clipping_3d = True
         again = False
         try:
             for column in self.surface3d_columns():
                 artists = self.surface_artists.get(column) or ()
                 if artists and all(getattr(one, "aplot_clip", None) == clip
+                                   and getattr(one, "aplot_space",
+                                               None) == space
                                    for one in artists):
                     continue
                 self._clip3d = clip
@@ -18589,6 +18901,22 @@ class PlotWindow(tk.Toplevel):
                 else dict(edgecolor="none", linewidth=0.0))
         grid = plan["grid"]
         clip = getattr(self, "_clip3d", None)
+        # a logarithmic axis: the surface is laid out along the logarithms
+        # of its values (`to_space`), and has nothing at or below zero
+        logs = {name: self.space_log(name) for name in ("x", "y", "z")}
+        z_as_log = logs["z"] and not SPACE_LOG_NATIVE
+
+        def laid(name, values):
+            """The places of some values along an axis, as logarithms
+            wherever the axis is a logarithmic one."""
+            return self.to_space(name, values, native=False)
+
+        def drawn(name, places):
+            """Those places, as what matplotlib is given to draw."""
+            if SPACE_LOG_NATIVE:
+                return self.from_space(name, places, native=False)
+            return places
+
         # matplotlib would make the box wider for every surface it is given
         view = (ax3d.get_xlim(), ax3d.get_ylim(), ax3d.get_zlim())
         try:
@@ -18597,28 +18925,40 @@ class PlotWindow(tk.Toplevel):
                 xs, ys = np.asarray(xs, float), np.asarray(ys, float)
                 heights = np.ma.filled(np.ma.asarray(heights, dtype=float),
                                        np.nan)
+                keep_x = np.ones(len(xs), bool) if not logs["x"] else xs > 0
+                keep_y = np.ones(len(ys), bool) if not logs["y"] else ys > 0
                 if clip is not None:
                     # the rows and the columns inside the X and the Y
                     # range, and of those the points inside the Z range
-                    keep_x = np.nonzero(self._inside(xs, clip[0]))[0]
-                    keep_y = np.nonzero(self._inside(ys, clip[1]))[0]
-                    if len(keep_x) < 2 or len(keep_y) < 2:
-                        keep_x, keep_y = keep_x[:0], keep_y[:0]
-                    xs, ys = xs[keep_x], ys[keep_y]
-                    heights = heights[np.ix_(keep_y, keep_x)].copy()
-                    with np.errstate(invalid="ignore"):
+                    keep_x &= self._inside(xs, clip[0])
+                    keep_y &= self._inside(ys, clip[1])
+                keep_x, keep_y = np.nonzero(keep_x)[0], np.nonzero(keep_y)[0]
+                if len(keep_x) < 2 or len(keep_y) < 2:
+                    keep_x, keep_y = keep_x[:0], keep_y[:0]
+                xs, ys = xs[keep_x], ys[keep_y]
+                heights = heights[np.ix_(keep_y, keep_x)].copy()
+                with np.errstate(invalid="ignore"):
+                    if clip is not None:
                         heights[~self._inside(heights, clip[2])] = np.nan
+                    if logs["z"]:
+                        heights[~(heights > 0)] = np.nan
                 if heights.size and np.isfinite(heights).any():
+                    xs, ys, heights = laid("x", xs), laid("y", ys), \
+                        laid("z", heights)
                     if plan["smooth"]:
                         xs, ys, heights = self.surface3d_finer(xs, ys, heights)
-                    x_grid, y_grid = np.meshgrid(xs, ys)
+                    # the values the colours are read from
+                    values = self.from_space("z", heights, native=False)
+                    x_grid, y_grid = np.meshgrid(drawn("x", xs),
+                                                 drawn("y", ys))
                     if plan["light"]:
                         # every cell in the colour of its height, made
                         # lighter or darker by the way it faces the light
                         main = ax3d.plot_surface(
-                            x_grid, y_grid, heights,
+                            x_grid, y_grid, drawn("z", heights),
                             facecolors=self.surface3d_lit(
-                                heights, plan["cmap"], norm, plan["alpha"]),
+                                values, plan["cmap"], norm, plan["alpha"],
+                                shape=heights),
                             shade=False,
                             rcount=SURFACE3D_CELLS, ccount=SURFACE3D_CELLS,
                             antialiased=bool(plan["edges"]), **edge)
@@ -18626,28 +18966,44 @@ class PlotWindow(tk.Toplevel):
                             norm=norm, cmap=plan["cmap"])
                     else:
                         main = ax3d.plot_surface(
-                            x_grid, y_grid, heights,
+                            x_grid, y_grid, drawn("z", heights),
                             cmap=plan["cmap"], norm=norm, alpha=plan["alpha"],
                             rcount=SURFACE3D_CELLS, ccount=SURFACE3D_CELLS,
                             antialiased=bool(plan["edges"]), **edge)
+                        if z_as_log:
+                            self._colour_by_values(main)
                 else:           # nothing of it is inside the box
                     main = ax3d.plot_surface(
                         np.zeros((2, 2)), np.zeros((2, 2)),
                         np.full((2, 2), np.nan), cmap=plan["cmap"], norm=norm)
             else:
                 # points scattered freely are joined into triangles
-                x_arr, y_arr, z_arr = plan["x"], plan["y"], plan["z"]
+                x_arr, y_arr, z_arr = (np.asarray(plan[one], float)
+                                       for one in ("x", "y", "z"))
+                keep = np.ones(len(x_arr), bool)
+                for name, values in (("x", x_arr), ("y", y_arr),
+                                     ("z", z_arr)):
+                    if logs[name]:
+                        keep &= values > 0
                 if clip is not None:
-                    keep = (self._inside(x_arr, clip[0])
-                            & self._inside(y_arr, clip[1])
-                            & self._inside(z_arr, clip[2]))
-                    if int(keep.sum()) >= 3:
-                        x_arr, y_arr, z_arr = x_arr[keep], y_arr[keep], \
-                            z_arr[keep]
+                    keep &= (self._inside(x_arr, clip[0])
+                             & self._inside(y_arr, clip[1])
+                             & self._inside(z_arr, clip[2]))
+                if int(keep.sum()) >= 3 or any(logs.values()):
+                    x_arr, y_arr, z_arr = x_arr[keep], y_arr[keep], \
+                        z_arr[keep]
+                where = {}
+                if logs["x"] or logs["y"]:
+                    # joined the way they lie on the logarithmic axes
+                    where["triangles"] = Triangulation(
+                        laid("x", x_arr), laid("y", y_arr)).triangles
                 main = ax3d.plot_trisurf(
-                    x_arr, y_arr, z_arr, cmap=plan["cmap"],
+                    drawn("x", laid("x", x_arr)), drawn("y", laid("y", y_arr)),
+                    drawn("z", laid("z", z_arr)), cmap=plan["cmap"],
                     norm=norm, alpha=plan["alpha"],
-                    antialiased=bool(plan["edges"]), **edge)
+                    antialiased=bool(plan["edges"]), **where, **edge)
+                if z_as_log:
+                    self._colour_by_values(main)
         except (ValueError, TypeError, RuntimeError, IndexError):
             return None            # points on one line are no surface
         finally:
@@ -18658,9 +19014,13 @@ class PlotWindow(tk.Toplevel):
             except (TypeError, ValueError):
                 pass
         main.aplot_clip = clip
+        main.aplot_space = self.space_signature()
         main.aplot_series = str(column)
-        main.aplot_zrange = (float(np.min(plan["z"])),
-                             float(np.max(plan["z"])))
+        all_z = np.asarray(plan["z"], dtype=float)
+        main.aplot_zrange = (float(np.min(all_z)), float(np.max(all_z)))
+        above = all_z[all_z > 0]
+        main.aplot_zpositive = ((float(above.min()), float(above.max()))
+                                if above.size else None)
         try:
             main.set_label("_nolegend_")
         except (AttributeError, TypeError):
@@ -18672,6 +19032,26 @@ class PlotWindow(tk.Toplevel):
             self._add_color_bar(column, getattr(main, "aplot_mappable", main),
                                 self.ax, plan["bar_label"])
         return main
+
+    @staticmethod
+    def _colour_by_values(surface):
+        """Colour a surface whose heights are logarithms by the values.
+
+        A logarithmic Z axis drawn the long way round (matplotlib before
+        3.11) is given the logarithms of the heights, and matplotlib
+        would read the colours from those.  The colour scale and its
+        colour bar count in the values themselves, so each cell is told
+        its value again - the mean of its corners, as it lies on the
+        logarithmic axis.
+        """
+        try:
+            places = surface.get_array()
+            if places is not None:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    surface.set_array(np.power(10.0, places))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return True
 
     @staticmethod
     def surface3d_finer(xs, ys, heights, cells=SURFACE3D_CELLS):
@@ -18702,17 +19082,25 @@ class PlotWindow(tk.Toplevel):
         return fine_x, fine_y, fine
 
     @staticmethod
-    def surface3d_lit(heights, cmap, norm, alpha=1.0):
+    def surface3d_lit(heights, cmap, norm, alpha=1.0, shape=None):
         """`Light and shadow`: the colours of a surface as a lamp standing
-        to the upper left of it would show them (RGBA, one per point)."""
+        to the upper left of it would show them (RGBA, one per point).
+
+        `shape` is the surface as it is drawn, when that is not the
+        heights themselves: on a logarithmic Z axis the colours come from
+        the values and the shadows from their logarithms."""
         heights = np.asarray(heights, float)
         known = np.isfinite(heights)
         low = float(np.min(heights[known])) if known.any() else 0.0
         filled = np.where(known, heights, low)
-        span = float(np.ptp(filled)) or 1.0
+        form = filled if shape is None else np.asarray(shape, float)
+        seen = np.isfinite(form)
+        floor = float(np.min(form[seen])) if seen.any() else 0.0
+        form = np.where(seen, form, floor)
+        span = float(np.ptp(form)) or 1.0
         rows, columns = filled.shape
         lamp = LightSource(azdeg=315, altdeg=45)
-        shade = lamp.hillshade((filled - low) / span, vert_exag=1.0,
+        shade = lamp.hillshade((form - floor) / span, vert_exag=1.0,
                                dx=1.0 / max(columns - 1, 1),
                                dy=1.0 / max(rows - 1, 1))
         colours = np.asarray(matplotlib.colormaps[cmap](norm(filled)), float)
@@ -19983,13 +20371,27 @@ class PlotWindow(tk.Toplevel):
         self.sync_3d_axes()
         ax3d = self.ax3d
         out = ["", "# ------------------------- the ranges and labels in space"]
+        if any(self.space_log(name) for name in ("x", "y", "z")):
+            out += ["# a logarithmic axis in space is written the way every",
+                    "# matplotlib draws it: a linear axis that carries the",
+                    "# logarithms (base ten) of the values, with the numbers",
+                    "# written as powers.  (matplotlib 3.11 and later could",
+                    "# be told ax3d.set_zscale('log') instead.)"]
         for name in ("x", "y", "z"):
-            low, high = getattr(ax3d, f"get_{name}lim")()
+            # where the two ends stand: the logarithms on such an axis
+            low, high = (float(one) for one in self.to_space(
+                name, self.space_limits(name), native=False))
             out.append(f"ax3d.set_{name}lim({lit(float(low))}, "
                        f"{lit(float(high))})")
             near, far = sorted((float(low), float(high)))
-            if name != "z" or (self.axis_cfg["z"].get("step")
-                               and not self.axis_cfg["z"].get("auto", True)):
+            if self.space_log(name):
+                majors, _minors, texts = self.space_log_ticks(name)
+                places = [float(one) for one
+                          in self.to_space(name, majors, native=False)]
+                out += [f"ax3d.set_{name}ticks({lit(places)})",
+                        f"ax3d.set_{name}ticklabels({lit(texts)})"]
+            elif name != "z" or (self.axis_cfg["z"].get("step")
+                                 and not self.axis_cfg["z"].get("auto", True)):
                 ticks = [float(one) for one
                          in getattr(ax3d, f"get_{name}ticks")()
                          if near <= float(one) <= far]
@@ -20019,6 +20421,11 @@ class PlotWindow(tk.Toplevel):
                for name in ("x", "y", "z")):
             out.append("# (the labels of these axes were dragged in APlot; "
                        "matplotlib places them itself here)")
+        if any(int(self.axis_cfg[name].get("minor", 0) or 0) > 0
+               for name in ("x", "y", "z")):
+            out.append("# (the minor ticks of these axes are drawn by APlot "
+                       "itself: matplotlib draws\n#  them as long as the "
+                       "major ones, each with a grid line - left out here)")
         return out
 
     def _script_surface(self, column, tag, target, x_data):
@@ -20098,8 +20505,41 @@ class PlotWindow(tk.Toplevel):
                         f"& (sz_{tag} >= {z0}) & (sz_{tag} <= {z1}))",
                         f"sx_{tag}, sy_{tag}, sz_{tag} = sx_{tag}[in_{tag}], "
                         f"sy_{tag}[in_{tag}], sz_{tag}[in_{tag}]"]
+            logs = {one: self.space_log(one) for one in ("x", "y", "z")}
             if grid:
                 out.append(f"gz_{tag} = np.ma.filled(gz_{tag}, np.nan)")
+                if any(logs.values()):
+                    out.append("# logarithmic axes: the surface lies along "
+                               "the logarithms of its values")
+                if logs["x"]:
+                    out += [f"px_{tag} = gx_{tag} > 0",
+                            f"gx_{tag}, gz_{tag} = np.log10(gx_{tag}"
+                            f"[px_{tag}]), gz_{tag}[:, px_{tag}]"]
+                if logs["y"]:
+                    out += [f"py_{tag} = gy_{tag} > 0",
+                            f"gy_{tag}, gz_{tag} = np.log10(gy_{tag}"
+                            f"[py_{tag}]), gz_{tag}[py_{tag}, :]"]
+                if logs["z"]:
+                    out += ["with np.errstate(divide='ignore', "
+                            "invalid='ignore'):",
+                            f"    gz_{tag} = np.where(gz_{tag} > 0, "
+                            f"np.log10(gz_{tag}), np.nan)"]
+            elif any(logs.values()):
+                names = {"x": f"sx_{tag}", "y": f"sy_{tag}", "z": f"sz_{tag}"}
+                chosen = [one for one in ("x", "y", "z") if logs[one]]
+                out += ["# logarithmic axes: the points lie along the "
+                        "logarithms of their values",
+                        f"pos_{tag} = " + " & ".join(
+                            f"({names[one]} > 0)" for one in chosen),
+                        f"sx_{tag}, sy_{tag}, sz_{tag} = sx_{tag}[pos_{tag}],"
+                        f" sy_{tag}[pos_{tag}], sz_{tag}[pos_{tag}]"]
+                out += [f"{names[one]} = np.log10({names[one]})"
+                        for one in chosen]
+            # the colours count in the values, not in their logarithms
+            recolour = [f"{main}.set_array(10.0 ** {main}.get_array())"
+                        "    # the colours count in the values"] \
+                if logs["z"] else []
+            if grid:
                 finer = self.surface3d_finer(
                     np.zeros(len(grid[0])), np.zeros(len(grid[1])),
                     np.zeros((len(grid[1]), len(grid[0]))))
@@ -20128,7 +20568,8 @@ class PlotWindow(tk.Toplevel):
                         f" vert_exag=1.0, dx=1.0 / max(fz_{tag}.shape[1] - 1, 1),"
                         f" dy=1.0 / max(fz_{tag}.shape[0] - 1, 1))",
                         f"rgb_{tag} = plt.get_cmap({lit(plan['cmap'])})("
-                        f"norm_{tag}(fz_{tag}))",
+                        + (f"norm_{tag}(10.0 ** fz_{tag}))" if logs["z"]
+                           else f"norm_{tag}(fz_{tag}))"),
                         f"rgb_{tag} = np.dstack([np.clip(lamp_{tag}"
                         f".blend_soft_light(rgb_{tag}[..., :3], "
                         f"shade_{tag}[..., np.newaxis]), 0, 1), "
@@ -20147,11 +20588,13 @@ class PlotWindow(tk.Toplevel):
                         f"alpha={exact(plan['alpha'])}, "
                         f"rcount={SURFACE3D_CELLS}, ccount={SURFACE3D_CELLS}, "
                         f"antialiased={bool(plan['edges'])}, {edge})")
+                    out += recolour
             else:
                 out.append(
                     f"{main} = ax3d.plot_trisurf({where}, {colours}, "
                     f"alpha={exact(plan['alpha'])}, "
                     f"antialiased={bool(plan['edges'])}, {edge})")
+                out += recolour
         elif plan["style"] == "pcolor":
             call = "pcolormesh" if grid else "tripcolor"
             shading = ("gouraud" if plan["smooth"]
@@ -26539,7 +26982,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.5.3 (2026-11-16)**.  The number is written in one place
+This is **APlot 1.6.0 (2026-11-16)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -26670,6 +27113,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.0 | 2026-11-16 | The axes of a `3D Surface` have **minor ticks** and can be **logarithmic** - all three of them.  **Minor ticks**: `Minor ticks` of an axis page draws that many between two major ticks of the X, the Y and the Z axis of the box; they are shorter than the major ones (by what `Minor tick length` is of `Major tick length` in `Frame and origin`), carry no numbers, and draw no lines on the walls unless `Minor grid lines` is switched on.  **Logarithmic axes**: the `Scale` box of the `Z axis` page is no longer grey, and `Log 10`, `Log 2` and `Log (natural)` of the X and the Y page now really spread the surface logarithmically (until now the box in space stayed linear whatever they said).  The numbers are written as powers, `Major ticks interval` counts powers and the minor ticks stand on 2, 3 ... 9, as on a flat diagram; values at or below zero have no place on such an axis and are left out; the colours and the colour bar go on counting in the values.  **The matplotlib underneath is looked at when the program starts**: from matplotlib 3.11 on a logarithmic axis in space is drawn by matplotlib itself; on an older one APlot draws the logarithms of the values on a linear axis and writes the numbers as powers - the picture is the same.  The exported program writes such an axis that second way, so it runs on every matplotlib.  Besides, on matplotlib 3.11 a **dragged label** of an axis in space is no longer cut off the copied picture (matplotlib 3.11 measures the labels itself, but where they stood before they were dragged).  Files of 1.5.x open as they were saved. |
 | 1.5.3 | 2026-11-16 | A correction of the `3D Surface`: **the copied picture no longer cuts through the label of the Z axis**.  `Copy figure to the clipboard`, a saved picture, the preview and the thumbnail cut the graph out of the page, and the labels of the three axes in space were not counted into its size - so a label standing at the edge of the graph, mostly that of the Z axis, lost most of its letters.  The three labels are measured in now, wherever they were dragged. |
 | 1.5.2 | 2026-11-15 | The **Z axis** of a `3D Surface` has **the same page as the X and the Y axis** in `Axes properties`: direction (`No Z axis`, `Standard`, `Reverse`), the label with its switch, font, colour and offset, the numbers with their switch, font, colour and offset, the automatic range and `Begin and end on a major tick`, `From` / `To`, the interval of the major ticks, the colour of the axis and its grid.  Those settings now act on **all three** axes of the box - the grid of each axis is the net its numbers draw on the walls, in the colour, style and width of its page - and a 3D surface opens with the three grids switched on.  The Z range and the Z label have left the curve properties for that page.  The curve properties of a 3D surface have the **`Shading`** of the colour surface: `Flat` paints every cell of the grid in one colour, `Smooth` draws up to four times as many points between the points, so that the steps of colour disappear - and a new switch, **`Light and shadow on the surface`**, lights the surface from the upper left so that its shape shows.  Files of 1.5.0 and 1.5.1 open as they were saved. |
 | 1.5.1 | 2026-11-15 | Four corrections of the `3D Surface`.  **(1)** A range of an axis made **smaller than the data** no longer lets the surface hang out of the box over the numbers and the labels: the surface is drawn from the points inside the three ranges only, and drawn again whenever a range changes (the exported program cuts it the same way).  **(2)** `Axes properties` has a **`Z axis` page** while the diagram is in space: the label with its font, the range (`Automatic`, `From`, `To`), the step of the numbers and their font.  **(3)** A **double click on the numbers** of the X, the Y or the Z axis opens the page of that axis, as in every other diagram - and so does a double click on the line of an axis; a single press on the numbers carries the graph.  **(4)** The **frame style** acts on the box: `No frame` draws the three axes alone, without the walls and their net; the other styles draw the walls, with the ticks pointing in or out as the style says.  The thickness of the frame, the length of the ticks, the colour of each axis and the colour of the plot area are taken over as well.  A diagram that opens as a 3D surface starts with `Full frame`. |
@@ -29413,9 +29857,30 @@ switched on in `Curve properties` like any other.
       on the walls of the box, with their style, colour and width.  A 3D
       surface opens with the grid of all three axes switched on.
     All of this acts on the X and the Y axis of the box in the same way.
-    Two things an axis in space cannot do: it has **no minor ticks** (nor
-    minor grid lines), and it is **linear** - the `Scale` box of the Z
-    page is grey.
+  * **Minor ticks** (since 1.6.0): `Minor ticks` of each of the three
+    pages draws that many between two major ticks.  They are shorter than
+    the major ones - by what `Minor tick length` is of `Major tick length`
+    in `Frame and origin` - and carry no numbers.  The net on the walls is
+    drawn from the major ticks alone; `Minor grid lines` adds the lines of
+    the minor ticks, in the style of the grid of that axis.
+  * **Logarithmic axes** (since 1.6.0): the `Scale` box of the X, the Y
+    and the Z page spreads that axis of the box logarithmically (`Log 10`,
+    `Log 2`, `Log (natural)`).  Everything is as on a flat diagram: the
+    numbers are written as powers, `Major ticks interval` counts powers of
+    the base, and the minor ticks stand on the whole numbers in between
+    (2, 3 ... 9 inside a decade).  A value at or below zero has no place
+    on such an axis: those points are left out of the surface, and a
+    range typed in that reaches zero is moved above it.  The colour
+    scale, and the colour bar, go on counting in the values themselves.
+    *How it is drawn depends on the matplotlib the program runs on*, which
+    is looked at once, when APlot starts: matplotlib **3.11 and later**
+    draws a logarithmic axis in space itself; on an **older** matplotlib
+    APlot draws the logarithms of the values on a linear axis and writes
+    the numbers as powers.  The picture is the same either way.  The
+    exported matplotlib program always writes it the second way, so that
+    it runs on every matplotlib; it leaves the minor ticks out, because
+    matplotlib alone draws them as long as the major ones, each with a
+    grid line of its own.
   * **A range smaller than the data cuts the surface**: only the part
     inside the three ranges is drawn, so nothing hangs out of the box.
     Along X and Y the surface ends at the last row of points inside the
