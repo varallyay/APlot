@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.1 (2026-11-16) - see `APP_VERSION` below and "Version history" in the
+1.6.2 (2026-11-17) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -301,8 +301,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.1"
-APP_VERSION_DATE = "2026-11-16"
+APP_VERSION = "1.6.2"
+APP_VERSION_DATE = "2026-11-17"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -7674,6 +7674,8 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
         self._tick_color = cfg["tick_color"]
         self.label_pad_var = tk.StringVar(value=f"{cfg['label_pad']:g}")
         self.tick_pad_var = tk.StringVar(value=f"{cfg['tick_pad']:g}")
+        self.tick_shift_var = tk.StringVar(
+            value=f"{to_float(cfg.get('tick_shift'), 0.0):g}")
         self.auto_var = tk.BooleanVar(value=cfg["auto"])
         self.ends_var = tk.BooleanVar(value=bool(cfg.get("ends_on_ticks", True)))
         self.min_var = tk.StringVar(value=f"{low:g}")
@@ -7733,6 +7735,8 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
                           field_number(cfg.get("label_pad"), None)),
             "tick_pad": (self.tick_pad_var,
                          field_number(cfg.get("tick_pad"), None)),
+            "tick_shift": (self.tick_shift_var,
+                           field_number(cfg.get("tick_shift", 0.0), None)),
             "auto": (self.auto_var, bool(cfg.get("auto", True))),
             "ends_on_ticks": (self.ends_var, bool(cfg.get("ends_on_ticks", True))),
             "step": (self.step_var, "" if step in (None, 0)
@@ -7893,10 +7897,17 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
                    ttk.Spinbox(box, from_=4, to=48, increment=1, width=SPIN_WIDTH,
                                textvariable=self.tick_size_var),
                    "Colour:", self.tick_color)
-        ToolDialog.field(box, 1, "Number offset [px]:",
-                         ttk.Spinbox(box, from_=-200, to=400, increment=1,
-                                     width=SPIN_WIDTH,
-                                     textvariable=self.tick_pad_var))
+        # how far the numbers stand from the axis, and how far they are
+        # slid along it (the second one: an axis of a surface in space)
+        _pad, self.tick_shift_entry = self._pair(
+            box, 1, "Number offset [px]:",
+            ttk.Spinbox(box, from_=-200, to=400, increment=1,
+                        width=SPIN_WIDTH, textvariable=self.tick_pad_var),
+            "Parallel offset [px]:",
+            ttk.Spinbox(box, from_=-400, to=400, increment=1,
+                        width=SPIN_WIDTH, textvariable=self.tick_shift_var))
+        if getattr(self.plot, "ax3d", None) is None:
+            self.tick_shift_entry.configure(state="disabled")
         self._wide(ttk.Separator(box, orient="horizontal"), 2, pady=(8, 6))
         self._wide(ttk.Checkbutton(box, text="Automatic range and ticks",
                                    variable=self.auto_var,
@@ -8018,6 +8029,7 @@ class AxisTab(DiagramMirror, PairedFields, ttk.Frame):
             "tick_color": self.tick_color.color,
             "label_pad": to_float(self.label_pad_var.get(), 5.5),
             "tick_pad": to_float(self.tick_pad_var.get(), 5.0),
+            "tick_shift": to_float(self.tick_shift_var.get(), 0.0),
             "axis_color": self.axis_color.color,
             "label_on": bool(self.label_on_var.get()),
             "ticks_on": bool(self.ticks_on_var.get()),
@@ -14479,7 +14491,7 @@ def scale_style_document(document, factor):
           ("width", "major_tick_length", "minor_tick_length"), length)
     for axis in (document.get("axes") or {}).values():
         touch(axis, ("label_size", "tick_size"), font)
-        touch(axis, ("label_pad", "tick_pad"), length)
+        touch(axis, ("label_pad", "tick_pad", "tick_shift"), length)
         if isinstance(axis, dict):
             touch(axis.get("grid"), ("width",), length)
     offsets = document.get("text_offsets") or {}
@@ -14691,6 +14703,8 @@ class PlotWindow(tk.Toplevel):
                     "tick_color": safe_hex(self.fonts["tick_label_color"], "#000000"),
                     "label_pad": float(self.fonts["axis_label_pad"]),
                     "tick_pad": self.default_tick_pad(which),
+                    # the numbers slid along their axis (an axis in space)
+                    "tick_shift": 0.0,
                     # every axis carries its own colour and its two switches
                     "axis_color": safe_hex(config.get("frame", "color"),
                                            "#000000"),
@@ -18268,11 +18282,28 @@ class PlotWindow(tk.Toplevel):
             line.draw = draw
             line.aplot_short_draw = True
 
+        window = self
+
+        def slide(tick):
+            label = tick.label1
+            if getattr(label, "aplot_slide_draw", False):
+                return
+            plain = label.draw
+
+            def draw(renderer, *args, **kwargs):
+                window._slide_3d_number(name, label)
+                return plain(renderer, *args, **kwargs)
+
+            label.draw = draw
+            label.aplot_slide_draw = True
+
         def _update_ticks(*args, **kwargs):
             ticks = plain_update(*args, **kwargs)
             for tick in ticks:
                 if not getattr(tick, "_major", True):
                     shorten(tick)
+                else:
+                    slide(tick)
             if getattr(axis, "aplot_grid_pass", False) \
                     and not getattr(axis, "aplot_minor_grid", False):
                 ticks = [tick for tick in ticks
@@ -18290,6 +18321,46 @@ class PlotWindow(tk.Toplevel):
         axis.draw_grid = draw_grid
         axis.aplot_minor_tamed = True
         return axis
+
+    def _slide_3d_number(self, name, label):
+        """`Parallel offset`: one number of an axis in space, slid along
+        that axis.
+
+        matplotlib puts the number where it thinks fit at every drawing;
+        right before the number is painted it is moved from there along
+        the line of its axis as that is seen on the page - towards the end
+        where the numbers grow when the offset is positive.  The distance
+        is one of the page, like `Number offset`.
+        """
+        ax3d = self.ax3d
+        try:
+            shift = to_float(self.axis_cfg[name].get("tick_shift"), 0.0)
+            here = tuple(float(one) for one in label.get_position())
+            if not shift or ax3d is None \
+                    or here == getattr(label, "aplot_slid", None):
+                return False           # painted again where it was put
+            axis = getattr(ax3d, f"{name}axis")
+            ends = ax3d.transData.transform(
+                np.asarray(axis.line.get_xydata(), dtype=float))
+            along = ends[1] - ends[0]
+            length = float(np.hypot(*along))
+            if len(ends) != 2 or not math.isfinite(length) or length <= 0:
+                return False
+            low, high = axis.get_view_interval()
+            if low > high:             # the axis runs the other way round
+                along = -along
+            pixels = self.page_points(shift) * float(self.fig.dpi) / 72.0
+            place = ax3d.transData.transform(here) + along / length * pixels
+            there = tuple(float(one) for one
+                          in ax3d.transData.inverted().transform(place))
+            if not all(math.isfinite(one) for one in there):
+                return False
+            label.set_position(there)
+            label.aplot_slid = there
+        except (TypeError, ValueError, AttributeError, KeyError,
+                IndexError, np.linalg.LinAlgError):
+            return False
+        return True
 
     def _shift_3d_label(self, name):
         """Let the label of one axis in space be dragged from its place.
@@ -18353,6 +18424,7 @@ class PlotWindow(tk.Toplevel):
         base = self.axis_cfg["y"]
         return {**base, "grid": dict(base.get("grid") or {}), "label": None,
                 "auto": True, "min": None, "max": None, "step": None,
+                "tick_shift": 0.0,
                 "direction": "standard", "scale": "linear"}
 
     def z_label_text(self):
@@ -18452,7 +18524,8 @@ class PlotWindow(tk.Toplevel):
         new = dict(stored)
         for key in ("auto", "min", "max", "step", "minor", "label_size",
                     "tick_size", "label_color", "tick_color", "label_pad",
-                    "tick_pad", "axis_color", "label_on", "ticks_on",
+                    "tick_pad", "tick_shift", "axis_color", "label_on",
+                    "ticks_on",
                     "tick_labels_on", "direction", "ends_on_ticks", "z",
                     "scale"):
             if key in cfg:
@@ -20461,8 +20534,7 @@ class PlotWindow(tk.Toplevel):
                           in self.to_space(name, majors, native=False)]
                 out += [f"ax3d.set_{name}ticks({lit(places)})",
                         f"ax3d.set_{name}ticklabels({lit(texts)})"]
-            elif name != "z" or (self.axis_cfg["z"].get("step")
-                                 and not self.axis_cfg["z"].get("auto", True)):
+            else:
                 ticks = [float(one) for one
                          in getattr(ax3d, f"get_{name}ticks")()
                          if near <= float(one) <= far]
@@ -20492,6 +20564,11 @@ class PlotWindow(tk.Toplevel):
                for name in ("x", "y", "z")):
             out.append("# (the labels of these axes were dragged in APlot; "
                        "matplotlib places them itself here)")
+        if any(to_float(self.axis_cfg[name].get("tick_shift"), 0.0)
+               for name in ("x", "y", "z")):
+            out.append("# (the numbers of these axes were slid along them in "
+                       "APlot - `Parallel offset`;\n#  matplotlib places "
+                       "them itself here)")
         if any(int(self.axis_cfg[name].get("minor", 0) or 0) > 0
                for name in ("x", "y", "z")):
             out.append("# (the minor ticks of these axes are drawn by APlot "
@@ -21209,6 +21286,7 @@ class PlotWindow(tk.Toplevel):
                 "label_size": cfg["label_size"], "tick_size": cfg["tick_size"],
                 "label_color": cfg["label_color"], "tick_color": cfg["tick_color"],
                 "label_pad": cfg["label_pad"], "tick_pad": cfg["tick_pad"],
+                "tick_shift": to_float(cfg.get("tick_shift"), 0.0),
                 "z": float(self.object_z("axis", which)
                            or cfg.get("z") or Z_DEFAULT["axis"]),
                 "axis_color": self.axis_color(which),
@@ -24920,9 +24998,48 @@ class PlotWindow(tk.Toplevel):
                 box = artist.get_window_extent(renderer)
             except (RuntimeError, ValueError, AttributeError):
                 continue
-            if box.expanded(1.2, 1.5).contains(x, y):
+            if self._text_covers(artist, box, x, y):
                 return name
         return None
+
+    @staticmethod
+    def _text_covers(artist, box, x, y, wider=1.2, higher=1.5):
+        """True when the pointer is on a text, with a little air around.
+
+        A text that is written slanted - the label of an axis in space -
+        is asked for along its own lines.  The upright rectangle around
+        such a text is far bigger than the text is, and reached over the
+        numbers of the axis: a double click on those opened the label.
+        """
+        if not box.expanded(wider, higher).contains(x, y):
+            return False
+        try:
+            angle = math.radians(float(artist.get_rotation()) % 180.0)
+        except (TypeError, ValueError, AttributeError):
+            return True
+        sine, cosine = abs(math.sin(angle)), abs(math.cos(angle))
+        if sine < 0.05 or cosine < 0.05:
+            return True                # written straight: that rectangle
+        try:
+            lines = max(1, str(artist.get_text()).count("\n") + 1)
+            height = float(artist.get_fontsize()) * 1.4 * lines \
+                * float(artist.figure.dpi) / 72.0
+        except (TypeError, ValueError, AttributeError):
+            return True
+        # the upright rectangle is  width*cos + height*sin  wide and
+        # width*sin + height*cos  high
+        if cosine >= sine:
+            width = (box.width - height * sine) / cosine
+        else:
+            width = (box.height - height * cosine) / sine
+        width = max(width, height)
+        dx = x - (box.x0 + box.x1) / 2.0
+        dy = y - (box.y0 + box.y1) / 2.0
+        turn = math.radians(float(artist.get_rotation()))
+        along = dx * math.cos(turn) + dy * math.sin(turn)
+        across = -dx * math.sin(turn) + dy * math.cos(turn)
+        return abs(along) <= width / 2.0 * wider \
+            and abs(across) <= height / 2.0 * higher
 
     def _start_text_drag(self, name, event):
         if name.startswith(NOTE_KEY):
@@ -25802,6 +25919,10 @@ class PlotWindow(tk.Toplevel):
                                       self.fonts["tick_label_color"]), "#000000")
         label_pad = to_float(cfg.get("label_pad"), self.fonts["axis_label_pad"])
         tick_pad = to_float(cfg.get("tick_pad"), self.default_tick_pad(which))
+        tick_shift = to_float(cfg.get("tick_shift", stored.get("tick_shift")),
+                              0.0)
+        if not math.isfinite(tick_shift):
+            tick_shift = 0.0
         axis_color = safe_hex(cfg.get("axis_color",
                                       stored.get("axis_color", "#000000")),
                               "#000000")
@@ -25914,6 +26035,7 @@ class PlotWindow(tk.Toplevel):
             "label_size": label_size, "tick_size": tick_size,
             "label_color": label_color, "tick_color": tick_color,
             "label_pad": label_pad, "tick_pad": tick_pad,
+            "tick_shift": tick_shift,
             "axis_color": axis_color, "label_on": label_on,
             "ticks_on": ticks_on, "tick_labels_on": tick_labels_on,
             "direction": direction, "scale": scale,
@@ -27056,7 +27178,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.1 (2026-11-16)**.  The number is written in one place
+This is **APlot 1.6.2 (2026-11-17)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27187,6 +27309,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.2 | 2026-11-17 | Two completions of the `3D Surface`.  **A double click on the numbers of the X or the Y axis opens the page of that axis** in `Axes properties`, as it always did for the Z axis: the labels of the X and the Y axis are written slanted, and the upright rectangle around such a label - the one that was asked whether the pointer is on the label - reached over the numbers, so the double click opened the label instead (or did nothing).  A slanted text is now asked for along its own lines.  **`Parallel offset [px]`**, a new box to the right of `Number offset [px]` on the three axis pages: it slides the numbers **along** their axis in space - towards the end where the numbers grow when it is positive, the other way when it is negative, 0 to begin with - where `Number offset` moves them away from the axis.  It is saved with the diagram and taken back by `Undo`; on a flat diagram the box is grey.  Files of 1.6.x and before open as they were saved. |
 | 1.6.1 | 2026-11-16 | Two corrections of the `3D Surface`.  **The numbers of an axis no longer double when their font is made a little smaller**: the automatic ticks of the X and the Y axis of the box were those of the flat axes underneath, which are as long as the whole plot area - so at 11 pt instead of 12 pt twice as many numbers could be asked for as fit along the much shorter axis in space, and they stood on one another.  The automatic ticks of all three axes are now counted from the length the axis has in space and the size of its numbers; they do not change while the view is turned, and an interval typed into `Major ticks interval` is kept as before.  **The surface is no longer cut at the edge of the plot area**: the box in space reaches a little beyond the plot area it is drawn into, and at some views (an elevation of 42 and an azimuth of 56 degrees, for one) the corner of the surface nearest to the viewer was missing - the paper showed through.  The exported program draws the surface uncut too. |
 | 1.6.0 | 2026-11-16 | The axes of a `3D Surface` have **minor ticks** and can be **logarithmic** - all three of them.  **Minor ticks**: `Minor ticks` of an axis page draws that many between two major ticks of the X, the Y and the Z axis of the box; they are shorter than the major ones (by what `Minor tick length` is of `Major tick length` in `Frame and origin`), carry no numbers, and draw no lines on the walls unless `Minor grid lines` is switched on.  **Logarithmic axes**: the `Scale` box of the `Z axis` page is no longer grey, and `Log 10`, `Log 2` and `Log (natural)` of the X and the Y page now really spread the surface logarithmically (until now the box in space stayed linear whatever they said).  The numbers are written as powers, `Major ticks interval` counts powers and the minor ticks stand on 2, 3 ... 9, as on a flat diagram; values at or below zero have no place on such an axis and are left out; the colours and the colour bar go on counting in the values.  **The matplotlib underneath is looked at when the program starts**: from matplotlib 3.11 on a logarithmic axis in space is drawn by matplotlib itself; on an older one APlot draws the logarithms of the values on a linear axis and writes the numbers as powers - the picture is the same.  The exported program writes such an axis that second way, so it runs on every matplotlib.  Besides, on matplotlib 3.11 a **dragged label** of an axis in space is no longer cut off the copied picture (matplotlib 3.11 measures the labels itself, but where they stood before they were dragged).  Files of 1.5.x open as they were saved. |
 | 1.5.3 | 2026-11-16 | A correction of the `3D Surface`: **the copied picture no longer cuts through the label of the Z axis**.  `Copy figure to the clipboard`, a saved picture, the preview and the thumbnail cut the graph out of the page, and the labels of the three axes in space were not counted into its size - so a label standing at the edge of the graph, mostly that of the Z axis, lost most of its letters.  The three labels are measured in now, wherever they were dragged. |
@@ -29925,7 +30048,8 @@ switched on in `Curve properties` like any other.
       of the Z column until another one is typed), font size, colour and
       `Label offset`;
     * `Tick range, labels and fonts`: the switch of the ticks, the switch,
-      the font size, the colour and the `Number offset` of the numbers,
+      the font size, the colour, the `Number offset` and the
+      `Parallel offset` of the numbers,
       `Automatic range and ticks`, `Begin and end on a major tick`,
       `From` and `To`, the `Major ticks interval` and the `Axis colour`;
     * `Grid of this axis`: the lines that the numbers of this axis draw
@@ -29938,6 +30062,15 @@ switched on in `Curve properties` like any other.
     in `Frame and origin` - and carry no numbers.  The net on the walls is
     drawn from the major ticks alone; `Minor grid lines` adds the lines of
     the minor ticks, in the style of the grid of that axis.
+  * **`Parallel offset [px]`** (since 1.6.2), to the right of `Number
+    offset [px]` on each of the three pages: it slides the numbers of that
+    axis **along** the axis - a positive value towards the end where the
+    numbers grow, a negative one the other way, 0 leaves them where
+    matplotlib puts them.  `Number offset` moves them away from the axis
+    or towards it; with the two together the numbers can be put right
+    beside their tick marks at any view.  The value is saved with the
+    diagram; the exported matplotlib program leaves the numbers where
+    matplotlib puts them.  On a flat diagram the box is grey.
   * **How many numbers** an axis without a `Major ticks interval` gets
     (since 1.6.1) follows the length that axis has in space - its share of
     the box, whichever way the box is turned - and the size of its
