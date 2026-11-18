@@ -1,0 +1,13 @@
+# Packages for building the portable Windows APlot with build_frozen.py
+# (python -m pip install -r packaging/requirements-windows.txt), used by
+# .github/workflows/windows-portable.yml.  The built program needs none of them.
+# Exact versions: this combination was built and self-tested together (Python 3.12).
+# PyInstaller must be newer than NumPy's internals; update them together.
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.10
+numpy==2.5.5
+pandas==3.1.1
+matplotlib==3.11.2
+pillow==13.0.0
+openpyxl==3.1.5
+tkinterdnd2==0.7.0

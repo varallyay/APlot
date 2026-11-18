@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.2 (2026-11-17)**.  The number is written in one place
+This is **APlot 1.6.3 (2026-11-18)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.3 | 2026-11-18 | **APlot on Windows without installing anything, and without Python**: `APlot-<version>-Windows-portable.zip` on the Releases page is the folder of the self-contained APlot (`APlot.exe` with a Python of its own) - unpack it anywhere, a server or a network share too, and start `APlot.exe`; nothing is installed and the registry is never touched.  The file `PORTABLE` beside `APlot.exe` tells it from the `.msi`'s (`Help > About APlot` says "portable"); an update goes, as for every self-contained APlot, into `%LOCALAPPDATA%\APlot` of the user, so the folder itself may be read-only.  It is built by `.github/workflows/windows-portable.yml` on GitHub's Windows machine for every version tag (and by hand), with the exact package versions of `packaging/requirements-windows.txt`.  **The built program tests itself** before it is packed (`APlot.exe --self-test REPORT`): the libraries, the windows, a line diagram and a `3D Surface`, saving a graph and opening it again.  It found two gaps of every self-contained APlot, now closed: **Excel files** (openpyxl was left out) and **saving a picture as .svg, .eps or .ps** (matplotlib loads those writers by name). Linux, macOS and the plain `aplot.py` work as before. |
 | 1.6.2 | 2026-11-17 | Two completions of the `3D Surface`.  **A double click on the numbers of the X or the Y axis opens the page of that axis** in `Axes properties`, as it always did for the Z axis: the labels of the X and the Y axis are written slanted, and the upright rectangle around such a label - the one that was asked whether the pointer is on the label - reached over the numbers, so the double click opened the label instead (or did nothing).  A slanted text is now asked for along its own lines.  **`Parallel offset [px]`**, a new box to the right of `Number offset [px]` on the three axis pages: it slides the numbers **along** their axis in space - towards the end where the numbers grow when it is positive, the other way when it is negative, 0 to begin with - where `Number offset` moves them away from the axis.  It is saved with the diagram and taken back by `Undo`; on a flat diagram the box is grey.  Files of 1.6.x and before open as they were saved. |
 | 1.6.1 | 2026-11-16 | Two corrections of the `3D Surface`.  **The numbers of an axis no longer double when their font is made a little smaller**: the automatic ticks of the X and the Y axis of the box were those of the flat axes underneath, which are as long as the whole plot area - so at 11 pt instead of 12 pt twice as many numbers could be asked for as fit along the much shorter axis in space, and they stood on one another.  The automatic ticks of all three axes are now counted from the length the axis has in space and the size of its numbers; they do not change while the view is turned, and an interval typed into `Major ticks interval` is kept as before.  **The surface is no longer cut at the edge of the plot area**: the box in space reaches a little beyond the plot area it is drawn into, and at some views (an elevation of 42 and an azimuth of 56 degrees, for one) the corner of the surface nearest to the viewer was missing - the paper showed through.  The exported program draws the surface uncut too. |
 | 1.6.0 | 2026-11-16 | The axes of a `3D Surface` have **minor ticks** and can be **logarithmic** - all three of them.  **Minor ticks**: `Minor ticks` of an axis page draws that many between two major ticks of the X, the Y and the Z axis of the box; they are shorter than the major ones (by what `Minor tick length` is of `Major tick length` in `Frame and origin`), carry no numbers, and draw no lines on the walls unless `Minor grid lines` is switched on.  **Logarithmic axes**: the `Scale` box of the `Z axis` page is no longer grey, and `Log 10`, `Log 2` and `Log (natural)` of the X and the Y page now really spread the surface logarithmically (until now the box in space stayed linear whatever they said).  The numbers are written as powers, `Major ticks interval` counts powers and the minor ticks stand on 2, 3 ... 9, as on a flat diagram; values at or below zero have no place on such an axis and are left out; the colours and the colour bar go on counting in the values.  **The matplotlib underneath is looked at when the program starts**: from matplotlib 3.11 on a logarithmic axis in space is drawn by matplotlib itself; on an older one APlot draws the logarithms of the values on a linear axis and writes the numbers as powers - the picture is the same.  The exported program writes such an axis that second way, so it runs on every matplotlib.  Besides, on matplotlib 3.11 a **dragged label** of an axis in space is no longer cut off the copied picture (matplotlib 3.11 measures the labels itself, but where they stood before they were dragged).  Files of 1.5.x open as they were saved. |
@@ -204,6 +205,7 @@ kinds are made:
 | `aplot-<version>-1.noarch.rpm` | Fedora, openSUSE, RHEL... | the distribution's, the same way |
 | `APlot-<version>-macOS-arm64.dmg`, `-x86_64.dmg` | macOS (Apple Silicon, Intel) | **its own** - nothing else to install |
 | `APlot-<version>-Windows.msi` | Windows | **its own** |
+| `APlot-<version>-Windows-portable.zip` | Windows, **nothing installed**: unpack and start | **its own** |
 | `APlot-<version>-Linux.flatpak` | any Linux with flatpak | **its own** (on the freedesktop runtime of Flathub) |
 | `APlot-<version>-macOS-light.dmg` | macOS | the Mac's: conda (recommended), python.org or Homebrew |
 | `APlot-<version>-Windows-light.msi` | Windows | the computer's: conda (recommended) or python.org |
@@ -240,13 +242,22 @@ Installing them:
   by its installer (python.org, the Microsoft Store), and offers the
   download page of Anaconda when there is none; `APLOT_PYTHON` may name a
   Python of one's own.  It is uninstalled in Settings > Apps.
+* **portable .zip** (Windows): nothing is installed and no Python is
+  needed - unpack the folder `APlot` anywhere (the desktop, a USB stick,
+  a server or a network share several users start it from) and start
+  `APlot.exe` in it; delete the folder to remove it.  SmartScreen may
+  warn as for the `.msi` (`More info > Run anyway`).  Each user's
+  settings go to `%USERPROFILE%\.aplot`, an update to
+  `%LOCALAPPDATA%\APlot` (see below): the folder itself is never written
+  to.  `Read me first.txt` in it says all this.
 
 **Updates of a packaged APlot** come from GitHub as before, and never
 write over the files of a package:
 
 * a **self-contained** APlot (its own Python) puts the new `aplot.py` into
   a folder of the user - `~/Library/Application Support/APlot`,
-  `%LOCALAPPDATA%\APlot`, or the flatpak's own data folder - and starts the
+  `%LOCALAPPDATA%\APlot` (the `.msi` and the portable `.zip` alike), or the
+  flatpak's own data folder - and starts the
   newer of that and the one it came with; a newer package installed later
   is never held back by an older update;
 * the **light** `.dmg` and `.msi` replace the `aplot.py` inside APlot.app or
@@ -269,8 +280,12 @@ write over the files of a package:
   numpy pandas matplotlib pillow openpyxl tkinterdnd2`): on a Mac the
   `.dmg` itself, on Windows and Linux the folder that `build_packages.py
   msi --windows ...` and `build_packages.py flatpak --linux ...` turn into
-  the `.msi` and the `.flatpak`; `packaging/frozen/aplot_frozen.py` is the
-  small program inside that starts `aplot.py`;
+  the `.msi` and the `.flatpak`, and on Windows the portable `.zip` as
+  well; `packaging/frozen/aplot_frozen.py` is the small program inside
+  that starts `aplot.py`.  The built program is tested before it is
+  packed (`APlot --self-test REPORT`: every library, the windows, a
+  diagram drawn, saved and opened again) - always on Windows, with
+  `--self-test` on a Mac and on Linux;
 * **GitHub builds all of them by itself**: `.github/workflows/packages.yml`
   runs on GitHub's own Mac, Windows and Linux machines whenever a version
   tag is pushed, and puts every package on the Releases page:
@@ -279,6 +294,11 @@ write over the files of a package:
         git push origin v1.3.6
 
   (`Actions > Packages > Run workflow` builds them without a release.)
+  `.github/workflows/windows-portable.yml` builds the portable Windows
+  `.zip` on its own, with the exact package versions of
+  `packaging/requirements-windows.txt`, and attaches it to the release of
+  the tag (`Actions > Windows portable > Run workflow`: only a download
+  of that run).
 
 
 ## What it needs

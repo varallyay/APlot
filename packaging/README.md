@@ -7,13 +7,18 @@ In short:
 | --- | --- | --- |
 | `python3 packaging/build_packages.py` | Linux | `.deb`, `.rpm`, light `.dmg`, light `.msi` |
 | `python packaging/build_frozen.py` | macOS | self-contained `.dmg` |
-| `python packaging/build_frozen.py` | Windows | the folder of the self-contained `.msi` |
+| `python packaging/build_frozen.py` | Windows | the portable `.zip` (unpack and start, no Python needed) and the folder of the self-contained `.msi` |
 | `python packaging/build_frozen.py` | Linux | the folder of the `.flatpak` |
 | `python3 packaging/build_packages.py msi --windows <zip>` | Linux | self-contained `.msi` |
 | `python3 packaging/build_packages.py flatpak --linux <tar.gz>` | Linux | `.flatpak` |
 
 `.github/workflows/packages.yml` runs all of it on GitHub when a version
 tag (`v1.3.6`) is pushed and puts the packages on the Releases page.
+`.github/workflows/windows-portable.yml` builds the portable Windows `.zip`
+on its own (exact versions: `requirements-windows.txt`) and attaches it to
+the release of the tag.  `build_frozen.py` self-tests the built program
+(`APlot --self-test REPORT`) - always on Windows, with `--self-test`
+elsewhere.
 
 * `frozen/aplot_frozen.py` - the program PyInstaller builds; it starts
   `aplot.py` (the newer of the bundled one and an update in the user's folder)

@@ -13,3 +13,7 @@ ENV/
 
 # VS Code settings
 .vscode/
+
+# Results and work files of the package builds
+packaging/dist/
+packaging/build/

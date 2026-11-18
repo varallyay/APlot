@@ -1,0 +1,72 @@
+# The portable Windows APlot: a folder with APlot.exe and its own Python,
+# which is only unpacked and started - no installation, no Python on the
+# computer that runs it.  Packed as APlot-<version>-Windows-portable.zip.
+# (packaging/build_frozen.py, which also self-tests the built program.)
+#
+#  - On a version tag (v1.6.3, ...): the .zip is attached to the GitHub
+#    release of that tag (the release is made if it does not exist yet).
+#    The tag must match APP_VERSION in aplot.py.
+#  - Started by hand (Actions > Windows portable > Run workflow): the .zip is
+#    kept as a download of that run (Artifacts); nothing is published.
+#
+# Independent of packages.yml, which builds the installable packages.
+name: Windows portable
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # to attach the .zip to the release
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/requirements-windows.txt
+
+      - name: Install the build packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r packaging/requirements-windows.txt
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          version=$(python -c "import re; print(re.search(r'^APP_VERSION\s*=\s*\"([^\"]+)\"', open('aplot.py', encoding='utf-8').read(), re.M).group(1))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION is $version"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match APP_VERSION $version in aplot.py."
+            exit 1
+          fi
+
+      - name: Build and self-test
+        run: python packaging/build_frozen.py
+
+      - name: Keep the .zip as a download of this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: APlot-${{ steps.version.outputs.version }}-Windows-portable
+          path: packaging/dist/APlot-${{ steps.version.outputs.version }}-Windows-portable.zip
+          if-no-files-found: error
+
+      - name: Attach the .zip to the release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip="packaging/dist/APlot-${{ steps.version.outputs.version }}-Windows-portable.zip"
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "APlot ${{ steps.version.outputs.version }}" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "$zip" --clobber
