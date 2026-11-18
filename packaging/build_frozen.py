@@ -3,9 +3,8 @@
 is for, with PyInstaller.  GitHub Actions runs it on a Mac, on Windows and on
 Linux (.github/workflows/packages.yml); it can be run by hand as well:
 
-    python -m pip install pyinstaller numpy pandas matplotlib pillow openpyxl tkinterdnd2
-    python packaging/build_frozen.py                 # Windows: the exact versions
-                                                     # are in requirements-windows.txt
+    python -m pip install -r packaging/requirements-frozen.txt   # the exact versions
+    python packaging/build_frozen.py                 # Windows
     python packaging/build_frozen.py --self-test     # macOS, Linux: test the result too
     python packaging/build_frozen.py graph.aplt      # the self-test opens it as well
 
@@ -17,7 +16,7 @@ Into packaging/dist/:
            APlot-<version>-Windows-frozen.zip          the same folder;
            build_packages.py msi --windows makes the .msi of it (on Linux)
   Linux    APlot-<version>-Linux-frozen.tar.gz         the application folder,
-           which the flatpak (packaging/flatpak) is made of
+           which build_packages.py deb rpm --linux makes the .deb and .rpm of
 
 The application is packaging/frozen/aplot_frozen.py made into a program;
 aplot.py travels beside it as a plain file and is what runs (see there).

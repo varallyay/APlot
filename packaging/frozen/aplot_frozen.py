@@ -5,22 +5,30 @@ APlot.exe on Windows, the program of the flatpak - with Python, Tk, numpy,
 pandas, matplotlib and the rest inside it.  APlot itself stays the plain
 aplot.py it always is, carried beside the libraries; this bootstrap runs it.
 
-Updates of APlot come from GitHub as a new aplot.py.  They cannot go into
-the application (on a Mac it is signed, on Windows it may lie where only an
-administrator writes), so the updater writes the new aplot.py into a folder
-of the user instead:
+Updates: since 1.6.4 a self-contained APlot is updated with the package of
+the newest release on GitHub - a whole new APlot with its own Python - and
+not with a new aplot.py (which might need more than the Python inside).
+Older ones wrote the new aplot.py into a folder of the user,
 
     macOS     ~/Library/Application Support/APlot/aplot.py
     Windows   %LOCALAPPDATA%\\APlot\\aplot.py
     Linux     $XDG_DATA_HOME/aplot/aplot.py (in a flatpak: its own folder)
 
-and this bootstrap starts whichever of the two is newer - so installing a
-newer package later is never held back by an older update.
+and this bootstrap still starts that one when it is the newer of the two.
 
-On Windows the same folder is shipped two ways: inside the .msi, and as the
-portable APlot-<version>-Windows-portable.zip, which is only unpacked and
-started (no installation, no Python on the computer).  The portable folder
-has the file PORTABLE beside APlot.exe; About APlot says so.
+What kind of package it is (APlot names it, and its updates depend on it):
+the .dmg on a Mac; on Windows the .msi, or the portable .zip, which is only
+unpacked and started - the file PORTABLE lies beside APlot.exe; on Linux
+the flatpak, or the .deb and .rpm, which put the file PACKAGED (holding
+"deb" or "rpm") beside the program.  A portable APlot is updated by
+unpacking the new release into a folder of the user (`versions_folder()`):
+the folder it was started from may be shared and read-only.  This bootstrap
+hands over to the newest copy there when it is newer than itself.
+
+`APlot --script SCRIPT [arguments]` runs a Python script with the Python
+inside: the thumbnailer and the preview helper of the .deb and .rpm start
+with the line `#!/usr/lib/aplot/APlot --script`, so that they need no Python
+on the computer either.
 
 `APlot.exe --self-test REPORT [graph.aplt ...]` checks the built program
 itself - every library loads, the windows open, a diagram is drawn, saved
@@ -39,7 +47,11 @@ if os.environ.get("APLOT_NEVER_SET_ONLY_FOR_PYINSTALLER"):
     import aplot  # noqa: F401
 
 PORTABLE_MARK = "PORTABLE"      # beside APlot.exe in the portable zip
+PACKAGE_MARK = "PACKAGED"       # beside the program of the .deb and .rpm
 SELF_TEST = "--self-test"
+SCRIPT = "--script"
+HANDED_OVER = "APLOT_HANDED_OVER"   # set for the newer copy that is started
+VERSIONS_MARK = "APLOT_VERSIONS"    # tells aplot.py where versions_folder() is
 
 
 def bundled_program():
@@ -74,13 +86,27 @@ def version_of(path):
         return ()
 
 
+def application_folder():
+    """The folder of the program (APlot.exe, APlot)."""
+    return Path(sys.executable).resolve().parent
+
+
 def is_portable():
-    """True for the portable Windows folder (the file PORTABLE beside the
-    program), which is unpacked and started instead of installed."""
+    """True for the portable folder (the file PORTABLE beside the program),
+    which is unpacked and started instead of installed."""
     try:
-        return (Path(sys.executable).resolve().parent / PORTABLE_MARK).is_file()
+        return (application_folder() / PORTABLE_MARK).is_file()
     except OSError:
         return False
+
+
+def package_mark():
+    """What the file PACKAGED beside the program says ("deb", "rpm"), or ""."""
+    try:
+        text = (application_folder() / PACKAGE_MARK).read_text(encoding="utf-8")
+        return text.split()[0].strip().lower() if text.split() else ""
+    except (OSError, ValueError):
+        return ""
 
 
 def kind():
@@ -91,7 +117,67 @@ def kind():
         return "portable" if is_portable() else "msi"
     if os.environ.get("FLATPAK_ID") or os.path.exists("/.flatpak-info"):
         return "flatpak"
-    return "frozen"
+    return package_mark() or ("portable" if is_portable() else "frozen")
+
+
+def versions_folder():
+    """Where the updates of a portable APlot are unpacked, for this user:
+    one folder APlot-<version> for each."""
+    if os.name == "nt":
+        home = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "APlot"
+    else:
+        data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+        home = Path(data) / "aplot"
+    return home / "versions"
+
+
+def version_numbers(text):
+    try:
+        return tuple(int(part) for part in str(text).split("."))
+    except ValueError:
+        return ()
+
+
+def newer_portable_copy():
+    """The program of the newest APlot unpacked in versions_folder(), when
+    it is newer than this one; None otherwise."""
+    own, best = version_of(bundled_program()), None
+    name = "APlot.exe" if os.name == "nt" else "APlot"
+    try:
+        folders = list(versions_folder().glob("APlot-*"))
+    except OSError:
+        return None
+    for folder in folders:
+        found = version_numbers(folder.name[len("APlot-"):])
+        program = folder / name
+        if found and found > own and program.is_file():
+            if best is None or found > best[0]:
+                best = (found, program)
+    return None if best is None else best[1]
+
+
+def hand_over():
+    """A portable APlot starts the newer copy of the user instead of itself
+    (once: the copy that is started does not look again).  True if done."""
+    if os.environ.get(HANDED_OVER) or kind() != "portable":
+        return False
+    program = newer_portable_copy()
+    if program is None:
+        return False
+    import subprocess
+    environment = dict(os.environ, **{HANDED_OVER: "1"})
+    try:
+        subprocess.Popen([str(program)] + sys.argv[1:], env=environment,
+                         cwd=str(program.parent), close_fds=True)
+    except OSError:
+        return False                # this one is good enough after all
+    return True
+
+
+def run_script(path, arguments):
+    """`APlot --script SCRIPT ...`: SCRIPT run with the Python inside."""
+    sys.argv = [path] + list(arguments)
+    runpy.run_path(path, run_name="__main__")
 
 
 def chosen_program():
@@ -173,6 +259,7 @@ def self_test(report, graphs=()):
 
     os.environ["APLOT_FROZEN"] = kind()
     os.environ["APLOT_UPDATE_TARGET"] = str(updated_program())
+    os.environ[VERSIONS_MARK] = str(versions_folder())
     step("Python", python)
     step("libraries", libraries)
     step("Excel files", excel)
@@ -235,7 +322,10 @@ def self_test(report, graphs=()):
 
         def save_and_open():
             app = state["app"]
-            path = os.path.join(folder, "self-test.aplt")
+            # APLOT_SELF_TEST_GRAPH: where the graph is kept (the thumbnailer
+            # of a package is tried on it)
+            path = os.environ.get("APLOT_SELF_TEST_GRAPH") or os.path.join(
+                folder, "self-test.aplt")
             assert app.save_project(path) == path, "not saved"
             for window in app.open_windows():
                 window.destroy()
@@ -244,11 +334,20 @@ def self_test(report, graphs=()):
             settle(8)
             return f"{len(app.open_windows())} diagram(s) saved and opened again"
 
+        def updates():
+            kind_now = aplot.release_update_kind()
+            name = aplot.release_asset_name(aplot.APP_VERSION, kind_now)
+            if name is None and kind_now in aplot.RELEASE_KINDS:
+                raise RuntimeError(f"no release file for the kind {kind_now}")
+            return (f"the {kind_now} build updates itself with {name}" if name
+                    else f"the {kind_now} build has no release file (not released)")
+
         def open_given():
             state["app"].open_documents(*graphs)
             settle(10)
             return f"{', '.join(graphs)} opened"
 
+        step("updates", updates)
         if step("APlot window", start) is not None:
             step("line diagram", line_plot)
             step("3D surface", surface_plot)
@@ -277,10 +376,15 @@ def self_test(report, graphs=()):
 
 
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == SCRIPT:
+        return run_script(sys.argv[2], sys.argv[3:])
     if len(sys.argv) > 2 and sys.argv[1] == SELF_TEST:
         sys.exit(self_test(sys.argv[2], [os.path.abspath(one) for one in sys.argv[3:]]))
+    if hand_over():
+        return None
     program = chosen_program()
     os.environ["APLOT_FROZEN"] = kind()
+    os.environ[VERSIONS_MARK] = str(versions_folder())
     os.environ["APLOT_UPDATE_TARGET"] = str(updated_program())
     # a restart after an update hands the program file on: it is not a graph
     sys.argv = [sys.argv[0]] + [one for one in sys.argv[1:]

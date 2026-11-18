@@ -5,19 +5,24 @@
     python3 packaging/build_packages.py deb rpm          # only these
     python3 packaging/build_packages.py flatpak --linux packaging/dist/APlot-<v>-Linux-frozen.tar.gz
     python3 packaging/build_packages.py msi --windows packaging/dist/APlot-<v>-Windows-frozen.zip
+    python3 packaging/build_packages.py deb rpm --linux packaging/dist/APlot-<v>-Linux-frozen.tar.gz
 
 Into packaging/dist/:
 
   aplot_<version>_all.deb             Debian, Ubuntu, Mint...   (dpkg-deb)
   aplot-<version>-1.noarch.rpm        Fedora, openSUSE, RHEL... (rpmbuild)
+  aplot_<version>_amd64.deb           the same, self-contained (--linux)
+  aplot-<version>-1.x86_64.rpm        the same, self-contained (--linux)
   APlot-<version>-macOS-light.dmg     macOS: APlot.app, uses the Mac's Python
   APlot-<version>-Windows-light.msi   Windows: uses the computer's Python
   APlot-<version>-Windows.msi         Windows, self-contained (--windows)
   APlot-<version>-Linux.flatpak       any Linux, self-contained (--linux)
 
-APlot is one Python file.  The .deb and the .rpm depend on the
+APlot is one Python file.  The light .deb and .rpm depend on the
 distribution's python3-tk, numpy, pandas and matplotlib, which the package
-manager installs with them.  The *light* .dmg and .msi look for a Python
+manager installs with them; the self-contained ones (--linux, what the
+releases have) put the folder of build_frozen.py - APlot with its own
+Python - into /usr/lib/aplot and need nothing else.  The *light* .dmg and .msi look for a Python
 that has those packages when APlot starts (conda - Anaconda - is the
 recommended one, python.org's works as well) and say where to get one when
 there is none.  The self-contained ones carry a Python of their own: they
@@ -118,8 +123,57 @@ def linux_tree(kind):
     return root
 
 
-def build_deb():
-    root = linux_tree("deb")
+FROZEN_HOME = "/usr/lib/aplot"           # the self-contained APlot of a .deb/.rpm
+FROZEN_PROGRAM = f"{FROZEN_HOME}/{NAME}"
+
+
+def linux_frozen_tree(kind, payload):
+    """The files of a self-contained .deb or .rpm: the folder of
+    build_frozen.py in /usr/lib/aplot, and the desktop files of the light
+    package (the menu entry, the kind of file and its icons, thumbnails,
+    "Preview all graphs") made to start it.  The thumbnailer and the preview
+    helper are small Python scripts: the Python inside APlot runs them
+    (`#!/usr/lib/aplot/APlot --script`, see aplot_frozen.py)."""
+    import re
+    root = linux_tree(kind)
+    usr = root / "usr"
+    shutil.rmtree(usr / "share" / "aplot")          # the aplot.py of the light one
+    app = unpack_payload(payload, WORK / f"{kind}-payload")
+    if not (app / NAME).is_file():
+        raise RuntimeError(f"the Linux folder has no {NAME}")
+    home = root / FROZEN_HOME.lstrip("/")
+    shutil.copytree(app, home, symlinks=True)
+    (home / aplot.PACKAGE_MARK).write_text(f"{kind}\n", encoding="utf-8")
+    launcher = usr / "bin" / aplot.DESKTOP_ID
+    launcher.write_text(f"#!/bin/sh\n# APlot with its own Python (the {kind} "
+                        f"package)\nexec {FROZEN_PROGRAM} \"$@\"\n", encoding="utf-8")
+    desktop = usr / "share" / "applications" / f"{aplot.DESKTOP_ID}.desktop"
+    desktop.write_text(re.sub(r"^Exec=.*$", f"Exec={FROZEN_PROGRAM} %f",
+                              desktop.read_text(encoding="utf-8"), flags=re.M),
+                       encoding="utf-8")
+    for name in (aplot.THUMBNAILER_NAME, aplot.PREVIEW_NAME):
+        script = usr / "bin" / name
+        text = script.read_text(encoding="utf-8")
+        if not text.startswith("#!/usr/bin/env python3\n"):
+            raise RuntimeError(f"{name} does not start as it should")
+        script.write_text(f"#!{FROZEN_PROGRAM} --script\n"
+                          + text.split("\n", 1)[1], encoding="utf-8")
+    for path in [root] + list(root.rglob("*")):
+        if path.is_symlink():
+            continue
+        if path.is_dir():
+            os.chmod(path, 0o755)
+        else:
+            executable = os.access(path, os.X_OK) or path.parent == usr / "bin"
+            os.chmod(path, 0o755 if executable else 0o644)
+    os.chmod(home / NAME, 0o755)
+    return root
+
+
+def build_deb(payload=None):
+    """The .deb: the light one, or - with `payload`, the Linux folder of
+    build_frozen.py - the self-contained one."""
+    root = linux_frozen_tree("deb", payload) if payload else linux_tree("deb")
     docs = root / "usr" / "share" / "doc" / "aplot"
     (docs / "copyright").write_text(textwrap.dedent(f"""\
         Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
@@ -150,19 +204,26 @@ def build_deb():
     control = root / "DEBIAN"
     control.mkdir()
     long = "\n".join(" " + (line or ".") for line in DESCRIPTION.splitlines())
+    if payload:      # what the Tk inside takes from the system
+        needs = ("Architecture: amd64\n"
+                 "Depends: libc6 (>= 2.35), libx11-6, libxft2, libfontconfig1, "
+                 "libxss1, libxext6")
+    else:
+        needs = ("Architecture: all\n"
+                 "Depends: python3 (>= 3.10), python3-tk, python3-numpy, "
+                 "python3-pandas, python3-matplotlib\n"
+                 "Recommends: python3-pil, python3-pil.imagetk, python3-openpyxl")
     (control / "control").write_text(textwrap.dedent(f"""\
         Package: aplot
         Version: {VERSION}
         Section: science
         Priority: optional
-        Architecture: all
-        Depends: python3 (>= 3.10), python3-tk, python3-numpy, python3-pandas, python3-matplotlib
-        Recommends: python3-pil, python3-pil.imagetk, python3-openpyxl
+        {{needs}}
         Installed-Size: {(size + 1023) // 1024}
         Maintainer: {MAINTAINER}
         Homepage: {HOMEPAGE}
         Description: {SUMMARY}
-        """) + long + "\n", encoding="utf-8")
+        """).replace("{needs}", needs) + long + "\n", encoding="utf-8")
     sums = []
     for path in sorted(root.rglob("*")):
         if path.is_file() and "DEBIAN" not in path.parts:
@@ -176,22 +237,51 @@ def build_deb():
     for path in control.iterdir():
         os.chmod(path, 0o755 if path.name == "prerm" else 0o644)
     os.chmod(control, 0o755)
-    target = DIST / f"aplot_{VERSION}_all.deb"
+    target = DIST / f"aplot_{VERSION}_{'amd64' if payload else 'all'}.deb"
     run(["dpkg-deb", "--root-owner-group", "-Zxz", "--build", root, target])
     return target
 
 
-def build_rpm():
-    root = linux_tree("rpm")
+def build_rpm(payload=None):
+    """The .rpm: the light one, or - with `payload`, the Linux folder of
+    build_frozen.py - the self-contained one."""
+    root = linux_frozen_tree("rpm", payload) if payload else linux_tree("rpm")
     license_file = root / "usr" / "share" / "licenses" / "aplot" / "LICENSE"
     license_file.parent.mkdir(parents=True)
     license_file.write_text(license_text(), encoding="utf-8")
     os.chmod(license_file.parent, 0o755)
     files = []
     for path in sorted(root.rglob("*")):
+        inside = "/" + str(path.relative_to(root))
+        if payload and inside.startswith(FROZEN_HOME + "/"):
+            continue                        # the whole folder, below
         if path.is_file():
-            files.append("/" + str(path.relative_to(root)))
-    owned = ["/usr/share/aplot", "/usr/share/doc/aplot", "/usr/share/licenses/aplot"]
+            files.append(f'"{inside}"')
+    if payload:
+        files.append(FROZEN_HOME)
+        owned = ["/usr/share/doc/aplot", "/usr/share/licenses/aplot"]
+        # sonames: the same on Fedora, openSUSE and RHEL
+        needs = textwrap.dedent("""\
+            BuildArch:      x86_64
+            AutoReqProv:    no
+            Requires:       libX11.so.6()(64bit)
+            Requires:       libXft.so.2()(64bit)
+            Requires:       libfontconfig.so.1()(64bit)
+            Requires:       libXss.so.1()(64bit)
+            Requires:       libXext.so.6()(64bit)""")
+    else:
+        owned = ["/usr/share/aplot", "/usr/share/doc/aplot", "/usr/share/licenses/aplot"]
+        needs = textwrap.dedent("""\
+            BuildArch:      noarch
+            AutoReqProv:    no
+            Requires:       python3 >= 3.10
+            Requires:       (python3-tkinter or python3-tk)
+            Requires:       python3-numpy
+            Requires:       python3-pandas
+            Requires:       python3-matplotlib
+            Requires:       python3-matplotlib-tk
+            Recommends:     python3-pillow-tk
+            Recommends:     python3-openpyxl""")
     changes = "".join(
         f"* {time.strftime('%a %b %d %Y', time.strptime(date, '%Y-%m-%d'))} "
         f"{MAINTAINER} - {version}-1\n"
@@ -203,6 +293,8 @@ def build_rpm():
         %global debug_package %{{nil}}
         %global __os_install_post %{{nil}}
         %global __brp_python_bytecompile %{{nil}}
+        %global __arch_install_post %{{nil}}
+        %global _missing_build_ids_terminate_build 0
         %define _build_id_links none
         Name:           aplot
         Version:        {VERSION}
@@ -210,20 +302,11 @@ def build_rpm():
         Summary:        {SUMMARY}
         License:        GPL-3.0-or-later
         URL:            {HOMEPAGE}
-        BuildArch:      noarch
-        AutoReqProv:    no
-        Requires:       python3 >= 3.10
-        Requires:       (python3-tkinter or python3-tk)
-        Requires:       python3-numpy
-        Requires:       python3-pandas
-        Requires:       python3-matplotlib
-        Requires:       python3-matplotlib-tk
-        Recommends:     python3-pillow-tk
-        Recommends:     python3-openpyxl
+        {{needs}}
         Provides:       aplot = {VERSION}
 
         %description
-        """) + DESCRIPTION + textwrap.dedent(f"""
+        """).replace("{needs}", needs) + DESCRIPTION + textwrap.dedent(f"""
 
         %install
         mkdir -p %{{buildroot}}
@@ -238,7 +321,7 @@ def build_rpm():
         + "\n%changelog\n" + changes, encoding="utf-8")
     run(["rpmbuild", "--define", f"_topdir {top}", "--define",
          "_binary_payload w9.xzdio", "-bb", spec])
-    built = next((top / "RPMS" / "noarch").glob("aplot-*.rpm"))
+    built = next((top / "RPMS" / ("x86_64" if payload else "noarch")).glob("aplot-*.rpm"))
     target = DIST / built.name
     shutil.copy2(built, target)
     return target
@@ -648,7 +731,8 @@ def main():
                              "build_frozen.py: msi is built of it")
     parser.add_argument("--linux", metavar="FOLDER_OR_TAR",
                         help="the self-contained Linux folder of "
-                             "build_frozen.py: flatpak is built of it")
+                             "build_frozen.py: flatpak, and the "
+                             "self-contained deb and rpm, are built of it")
     options = parser.parse_args()
     kinds = options.kinds or ["deb", "rpm", "dmg", "msi"]
     wrong = [one for one in kinds if one not in KINDS]
@@ -657,7 +741,8 @@ def main():
     if "flatpak" in kinds and not options.linux:
         parser.error("flatpak needs --linux (the folder or .tar.gz of build_frozen.py)")
     DIST.mkdir(parents=True, exist_ok=True)
-    builders = {"deb": build_deb, "rpm": build_rpm, "dmg": build_dmg,
+    builders = {"deb": lambda: build_deb(options.linux),
+                "rpm": lambda: build_rpm(options.linux), "dmg": build_dmg,
                 "msi": lambda: build_msi(options.windows),
                 "flatpak": lambda: build_flatpak(options.linux)}
     built = []

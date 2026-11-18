@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.3 (2026-11-18)**.  The number is written in one place
+This is **APlot 1.6.4 (2026-11-18)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -160,6 +160,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.4 | 2026-11-18 | **Every package of the Releases page carries its own Python** - nothing else to install, no Python on the computer: besides the portable Windows `.zip` there are an `.msi` for Windows, a `.dmg` for Macs with Apple Silicon and one for Intel, and **the `.deb` and the `.rpm` now hold APlot with its own Python** in `/usr/lib/aplot` (the thumbnailer and "Preview all graphs" run on it too), replacing the ones that needed the distribution's Python.  **A self-contained APlot updates itself from the releases**: `Check for updates` asks GitHub for the newest release, downloads the package of this computer - checked against its size and SHA-256 - and installs it (the portable one unpacks it for the user, and the old folder hands over to it; the `.msi` runs its installer; the `.dmg` replaces APlot.app; the `.deb` and `.rpm` go through the package manager), instead of a new `aplot.py` that might need more than the Python inside.  A plain `aplot.py` is updated from `main` as before.  **GitHub builds, installs and tests every package** (`.github/workflows/packages.yml`) and only then publishes the release with all of them at once - the releases of the repository are immutable, which left 1.6.3 without its `.zip`. |
 | 1.6.3 | 2026-11-18 | **APlot on Windows without installing anything, and without Python**: `APlot-<version>-Windows-portable.zip` on the Releases page is the folder of the self-contained APlot (`APlot.exe` with a Python of its own) - unpack it anywhere, a server or a network share too, and start `APlot.exe`; nothing is installed and the registry is never touched.  The file `PORTABLE` beside `APlot.exe` tells it from the `.msi`'s (`Help > About APlot` says "portable"); an update goes, as for every self-contained APlot, into `%LOCALAPPDATA%\APlot` of the user, so the folder itself may be read-only.  It is built by `.github/workflows/windows-portable.yml` on GitHub's Windows machine for every version tag (and by hand), with the exact package versions of `packaging/requirements-windows.txt`.  **The built program tests itself** before it is packed (`APlot.exe --self-test REPORT`): the libraries, the windows, a line diagram and a `3D Surface`, saving a graph and opening it again.  It found two gaps of every self-contained APlot, now closed: **Excel files** (openpyxl was left out) and **saving a picture as .svg, .eps or .ps** (matplotlib loads those writers by name). Linux, macOS and the plain `aplot.py` work as before. |
 | 1.6.2 | 2026-11-17 | Two completions of the `3D Surface`.  **A double click on the numbers of the X or the Y axis opens the page of that axis** in `Axes properties`, as it always did for the Z axis: the labels of the X and the Y axis are written slanted, and the upright rectangle around such a label - the one that was asked whether the pointer is on the label - reached over the numbers, so the double click opened the label instead (or did nothing).  A slanted text is now asked for along its own lines.  **`Parallel offset [px]`**, a new box to the right of `Number offset [px]` on the three axis pages: it slides the numbers **along** their axis in space - towards the end where the numbers grow when it is positive, the other way when it is negative, 0 to begin with - where `Number offset` moves them away from the axis.  It is saved with the diagram and taken back by `Undo`; on a flat diagram the box is grey.  Files of 1.6.x and before open as they were saved. |
 | 1.6.1 | 2026-11-16 | Two corrections of the `3D Surface`.  **The numbers of an axis no longer double when their font is made a little smaller**: the automatic ticks of the X and the Y axis of the box were those of the flat axes underneath, which are as long as the whole plot area - so at 11 pt instead of 12 pt twice as many numbers could be asked for as fit along the much shorter axis in space, and they stood on one another.  The automatic ticks of all three axes are now counted from the length the axis has in space and the size of its numbers; they do not change while the view is turned, and an interval typed into `Major ticks interval` is kept as before.  **The surface is no longer cut at the edge of the plot area**: the box in space reaches a little beyond the plot area it is drawn into, and at some views (an elevation of 42 and an azimuth of 56 degrees, for one) the corner of the surface nearest to the viewer was missing - the paper showed through.  The exported program draws the surface uncut too. |
@@ -196,109 +197,105 @@ that runs, and the update window says it too.
 ## Installable packages
 
 APlot can be installed from a package as well, like any other program -
-from the **Releases** page of <https://github.com/varallyay/APlot>.  Two
-kinds are made:
+from the **Releases** page of <https://github.com/varallyay/APlot>.  Every
+package of a release carries **its own Python** with everything APlot
+needs: nothing else has to be installed, and the computer needs no Python
+at all.
 
-| Package | For | Python |
-| --- | --- | --- |
-| `aplot_<version>_all.deb` | Debian, Ubuntu, Mint... | the distribution's: `python3-tk`, `python3-numpy`, `python3-pandas`, `python3-matplotlib` come with it |
-| `aplot-<version>-1.noarch.rpm` | Fedora, openSUSE, RHEL... | the distribution's, the same way |
-| `APlot-<version>-macOS-arm64.dmg`, `-x86_64.dmg` | macOS (Apple Silicon, Intel) | **its own** - nothing else to install |
-| `APlot-<version>-Windows.msi` | Windows | **its own** |
-| `APlot-<version>-Windows-portable.zip` | Windows, **nothing installed**: unpack and start | **its own** |
-| `APlot-<version>-Linux.flatpak` | any Linux with flatpak | **its own** (on the freedesktop runtime of Flathub) |
-| `APlot-<version>-macOS-light.dmg` | macOS | the Mac's: conda (recommended), python.org or Homebrew |
-| `APlot-<version>-Windows-light.msi` | Windows | the computer's: conda (recommended) or python.org |
+| Package | For |
+| --- | --- |
+| `APlot-<version>-Windows-portable.zip` | Windows, **nothing installed**: unpack anywhere (a server too) and start |
+| `APlot-<version>-Windows.msi` | Windows, installed for the user (Start menu, `.aplt` files) |
+| `APlot-<version>-macOS-arm64.dmg` | macOS on Apple Silicon (M1, M2...) |
+| `APlot-<version>-macOS-x86_64.dmg` | macOS on Intel |
+| `aplot_<version>_amd64.deb` | Debian 12, Ubuntu 22.04, Mint 21 and newer (64-bit Intel/AMD) |
+| `aplot-<version>-1.x86_64.rpm` | Fedora, openSUSE, RHEL 10 and the like (64-bit Intel/AMD) |
 
 Installing them:
 
-* **.deb**: `sudo apt install ./aplot_1.3.6_all.deb` (a double click opens
-  it in the software installer too).  APlot is then in the applications
-  menu, `aplot` starts it in a terminal, and the graph files have their icon
-  and picture; it lives in `/usr/share/aplot`.
-* **.rpm**: `sudo dnf install ./aplot-1.3.6-1.noarch.rpm` (openSUSE:
-  `sudo zypper install ...`).
-* **.flatpak**: `flatpak install --user APlot-1.3.6-Linux.flatpak`; flatpak
-  fetches the runtime from Flathub (add it once with `flatpak remote-add
-  --if-not-exists --user flathub
-  https://dl.flathub.org/repo/flathub.flatpakrepo`).  It may read and write
-  the home folder, draws with X11 (XWayland on a Wayland desktop) and
-  reaches the network for the updates.
+* **portable .zip** (Windows): unpack the folder `APlot` anywhere - the
+  desktop, a USB stick, a server or a network share several users start
+  it from - and start `APlot.exe` in it; delete the folder to remove it.
+  Windows SmartScreen may warn about an unknown publisher (APlot is not
+  signed): `More info > Run anyway`.  Each user's settings go to
+  `%USERPROFILE%\.aplot`, the updates to `%LOCALAPPDATA%\APlot\versions`
+  (see below): the folder itself is never written to.  `Read me first.txt`
+  in it says all this.
+* **.msi**: a double click installs APlot **for the user who runs it** - no
+  administrator is needed - into `%LOCALAPPDATA%\Programs\APlot`, with
+  APlot in the Start menu and the `.aplt` files opening in it.
+  SmartScreen may warn as above.  It is uninstalled in Settings > Apps.
 * **.dmg**: open it and drag APlot onto the Applications folder.  APlot is
   not signed by an Apple developer account, so macOS stops the first start:
   press Done, then System Settings > Privacy & Security > **Open Anyway**
   (once) - or in Terminal `xattr -dr com.apple.quarantine
-  /Applications/APlot.app`.  The light one finds conda in `/opt/anaconda3`,
-  `~/anaconda3`, `~/miniconda3` or `~/miniforge3`, then the Python of
-  python.org and of Homebrew; with none of them it offers the download page
-  of Anaconda.  "Read me first.txt" in the disk image says all this, and
-  the Quick Look extensions are in it as an optional `.zip`.
-* **.msi**: a double click installs APlot **for the user who runs it** - no
-  administrator is needed - into `%LOCALAPPDATA%\Programs\APlot`, with
-  APlot in the Start menu and the `.aplt` files opening in it.  Windows
-  SmartScreen may warn about an unknown publisher (the package is not
-  signed): `More info > Run anyway`.  The light one's `APlot.exe` looks for
-  conda (Anaconda, Miniconda, Miniforge), then for every Python registered
-  by its installer (python.org, the Microsoft Store), and offers the
-  download page of Anaconda when there is none; `APLOT_PYTHON` may name a
-  Python of one's own.  It is uninstalled in Settings > Apps.
-* **portable .zip** (Windows): nothing is installed and no Python is
-  needed - unpack the folder `APlot` anywhere (the desktop, a USB stick,
-  a server or a network share several users start it from) and start
-  `APlot.exe` in it; delete the folder to remove it.  SmartScreen may
-  warn as for the `.msi` (`More info > Run anyway`).  Each user's
-  settings go to `%USERPROFILE%\.aplot`, an update to
-  `%LOCALAPPDATA%\APlot` (see below): the folder itself is never written
-  to.  `Read me first.txt` in it says all this.
+  /Applications/APlot.app`.  "Read me first.txt" in the disk image says
+  this, and the Quick Look extensions are in it as an optional `.zip`.
+* **.deb**: `sudo apt install ./aplot_1.6.4_amd64.deb` (a double click
+  opens it in the software installer too).  **.rpm**: `sudo dnf install
+  ./aplot-1.6.4-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
+  `aplot` starts it in a terminal, and the graph files have their icon and
+  picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
+  the Python inside it.  An older `.deb` or `.rpm` of APlot (one that used
+  the distribution's Python) is simply replaced.
 
-**Updates of a packaged APlot** come from GitHub as before, and never
-write over the files of a package:
+**Updates of a packaged APlot** come from the **Releases** page: `Help >
+Check for updates...` (and the look once a week) asks GitHub for the
+newest release, and when it has the package of this computer, `Update now`
+downloads it - checked against the size and the SHA-256 that GitHub gives
+- and installs it:
 
-* a **self-contained** APlot (its own Python) puts the new `aplot.py` into
-  a folder of the user - `~/Library/Application Support/APlot`,
-  `%LOCALAPPDATA%\APlot` (the `.msi` and the portable `.zip` alike), or the
-  flatpak's own data folder - and starts the
-  newer of that and the one it came with; a newer package installed later
-  is never held back by an older update;
-* the **light** `.dmg` and `.msi` replace the `aplot.py` inside APlot.app or
-  in the install folder, as the APlot.app of `--make-app` does;
-* a **.deb or .rpm** leaves `/usr/share/aplot` to the package manager and
-  installs the new version for the user (`~/.local/share/aplot`, with its
-  menu entry); the menu entry and the `aplot` command of the package then
-  start whichever of the two is newer.
+* the **portable** APlot unpacks it for the user into
+  `%LOCALAPPDATA%\APlot\versions\APlot-<version>` and starts it; from then
+  on the `APlot.exe` of the old folder hands over to the newest copy there,
+  so a shared, read-only folder works for everybody.  To update the
+  folder itself, unpack the new `.zip` in its place;
+* the **.msi** runs its installer as APlot closes and starts the new one;
+* the **.dmg** puts the new APlot.app in the place of the old one (asking
+  for the password of an administrator when only one may write there) and
+  starts it - or opens the disk image when that cannot be done;
+* the **.deb and .rpm** are installed with the package manager (apt, dnf
+  or zypper), which asks for the password of an administrator; without it
+  APlot says the command to type.
+
+A release is published only when every package is in it, so APlot never
+finds a release without its package.  An APlot that runs on a Python of
+the computer - a plain `aplot.py`, or one installed with `--install` - is
+updated with the newest `aplot.py` of the `main` branch, as always.
 
 `Help > About APlot` says which package an APlot came from.
 
 **Building the packages.**  Everything is in the `packaging` folder:
 
-* `python3 packaging/build_packages.py` makes the `.deb`, the `.rpm`, the
-  light `.dmg` and the light `.msi` on any Linux (Ubuntu: `sudo apt install
-  rpm xorriso wixl gcc-mingw-w64-x86-64`); `packaging/windows/launcher.c`
-  is the `APlot.exe` of the light `.msi`;
-* `python packaging/build_frozen.py` makes the self-contained APlot with
-  PyInstaller on the system it is for (`python -m pip install pyinstaller
-  numpy pandas matplotlib pillow openpyxl tkinterdnd2`): on a Mac the
-  `.dmg` itself, on Windows and Linux the folder that `build_packages.py
-  msi --windows ...` and `build_packages.py flatpak --linux ...` turn into
-  the `.msi` and the `.flatpak`, and on Windows the portable `.zip` as
-  well; `packaging/frozen/aplot_frozen.py` is the small program inside
-  that starts `aplot.py`.  The built program is tested before it is
-  packed (`APlot --self-test REPORT`: every library, the windows, a
-  diagram drawn, saved and opened again) - always on Windows, with
-  `--self-test` on a Mac and on Linux;
-* **GitHub builds all of them by itself**: `.github/workflows/packages.yml`
-  runs on GitHub's own Mac, Windows and Linux machines whenever a version
-  tag is pushed, and puts every package on the Releases page:
+* `python packaging/build_frozen.py` makes APlot with its own Python with
+  PyInstaller, on the system it is for (the exact package versions are in
+  `packaging/requirements-frozen.txt`): on a Mac the `.dmg` itself, on
+  Windows the portable `.zip` (and the folder of the `.msi`), on Linux the
+  folder of the `.deb` and the `.rpm`.  `packaging/frozen/aplot_frozen.py`
+  is the small program inside that starts `aplot.py`.  The built program
+  is tested before it is packed (`APlot --self-test REPORT`: every library,
+  the windows, a diagram drawn, saved in every picture format and opened
+  again) - always on Windows, with `--self-test` on a Mac and on Linux;
+* `python3 packaging/build_packages.py deb rpm --linux <folder or .tar.gz>`
+  and `... msi --windows <folder or .zip>` make the `.deb`, the `.rpm` and
+  the `.msi` of those folders, on Linux (Ubuntu: `sudo apt install rpm
+  wixl gcc-mingw-w64-x86-64`).  Without `--linux` and `--windows` it makes
+  the light packages that use the computer's Python (and `dmg` the light
+  `.dmg`); they are not released any more, but can still be built;
+* **GitHub builds and tests all of them by itself**:
+  `.github/workflows/packages.yml` runs on GitHub's own Mac (Apple Silicon
+  and Intel), Windows and Linux machines, installs the `.deb` on Ubuntu,
+  the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
+  then publishes the release with every package at once:
 
-        git tag -a v1.3.6 -m "APlot 1.3.6"
-        git push origin v1.3.6
+        git tag -a v1.6.4 -m "APlot 1.6.4"
+        git push origin v1.6.4
 
-  (`Actions > Packages > Run workflow` builds them without a release.)
-  `.github/workflows/windows-portable.yml` builds the portable Windows
-  `.zip` on its own, with the exact package versions of
-  `packaging/requirements-windows.txt`, and attaches it to the release of
-  the tag (`Actions > Windows portable > Run workflow`: only a download
-  of that run).
+  (`Actions > Packages > Run workflow` builds and tests everything without
+  a release; the packages are then downloads of that run.)  The releases
+  of this repository are immutable - a published release takes no more
+  files - which is why everything is built before the release is made.
 
 
 ## What it needs

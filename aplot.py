@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.3 (2026-11-18) - see `APP_VERSION` below and "Version history" in the
+1.6.4 (2026-11-18) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -301,7 +301,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.3"
+APP_VERSION = "1.6.4"
 APP_VERSION_DATE = "2026-11-18"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -5894,6 +5894,8 @@ class UpdateDialog(ToolDialog):
             what = (f"This {APP_NAME} is a flatpak: the new version comes as a "
                     f"new .flatpak from {UPDATE_PAGE}/releases - Update now "
                     f"says how.")
+        if facts.get("asset"):
+            what = release_update_text(facts)
         if sys.platform == "darwin" and is_newer(facts.get("quicklook"),
                                                  QUICKLOOK_VERSION):
             what += ("  The Quick Look extensions (the pictures in the "
@@ -27179,7 +27181,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.3 (2026-11-18)**.  The number is written in one place
+This is **APlot 1.6.4 (2026-11-18)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27310,6 +27312,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.4 | 2026-11-18 | **Every package of the Releases page carries its own Python** - nothing else to install, no Python on the computer: besides the portable Windows `.zip` there are an `.msi` for Windows, a `.dmg` for Macs with Apple Silicon and one for Intel, and **the `.deb` and the `.rpm` now hold APlot with its own Python** in `/usr/lib/aplot` (the thumbnailer and "Preview all graphs" run on it too), replacing the ones that needed the distribution's Python.  **A self-contained APlot updates itself from the releases**: `Check for updates` asks GitHub for the newest release, downloads the package of this computer - checked against its size and SHA-256 - and installs it (the portable one unpacks it for the user, and the old folder hands over to it; the `.msi` runs its installer; the `.dmg` replaces APlot.app; the `.deb` and `.rpm` go through the package manager), instead of a new `aplot.py` that might need more than the Python inside.  A plain `aplot.py` is updated from `main` as before.  **GitHub builds, installs and tests every package** (`.github/workflows/packages.yml`) and only then publishes the release with all of them at once - the releases of the repository are immutable, which left 1.6.3 without its `.zip`. |
 | 1.6.3 | 2026-11-18 | **APlot on Windows without installing anything, and without Python**: `APlot-<version>-Windows-portable.zip` on the Releases page is the folder of the self-contained APlot (`APlot.exe` with a Python of its own) - unpack it anywhere, a server or a network share too, and start `APlot.exe`; nothing is installed and the registry is never touched.  The file `PORTABLE` beside `APlot.exe` tells it from the `.msi`'s (`Help > About APlot` says "portable"); an update goes, as for every self-contained APlot, into `%LOCALAPPDATA%\\APlot` of the user, so the folder itself may be read-only.  It is built by `.github/workflows/windows-portable.yml` on GitHub's Windows machine for every version tag (and by hand), with the exact package versions of `packaging/requirements-windows.txt`.  **The built program tests itself** before it is packed (`APlot.exe --self-test REPORT`): the libraries, the windows, a line diagram and a `3D Surface`, saving a graph and opening it again.  It found two gaps of every self-contained APlot, now closed: **Excel files** (openpyxl was left out) and **saving a picture as .svg, .eps or .ps** (matplotlib loads those writers by name). Linux, macOS and the plain `aplot.py` work as before. |
 | 1.6.2 | 2026-11-17 | Two completions of the `3D Surface`.  **A double click on the numbers of the X or the Y axis opens the page of that axis** in `Axes properties`, as it always did for the Z axis: the labels of the X and the Y axis are written slanted, and the upright rectangle around such a label - the one that was asked whether the pointer is on the label - reached over the numbers, so the double click opened the label instead (or did nothing).  A slanted text is now asked for along its own lines.  **`Parallel offset [px]`**, a new box to the right of `Number offset [px]` on the three axis pages: it slides the numbers **along** their axis in space - towards the end where the numbers grow when it is positive, the other way when it is negative, 0 to begin with - where `Number offset` moves them away from the axis.  It is saved with the diagram and taken back by `Undo`; on a flat diagram the box is grey.  Files of 1.6.x and before open as they were saved. |
 | 1.6.1 | 2026-11-16 | Two corrections of the `3D Surface`.  **The numbers of an axis no longer double when their font is made a little smaller**: the automatic ticks of the X and the Y axis of the box were those of the flat axes underneath, which are as long as the whole plot area - so at 11 pt instead of 12 pt twice as many numbers could be asked for as fit along the much shorter axis in space, and they stood on one another.  The automatic ticks of all three axes are now counted from the length the axis has in space and the size of its numbers; they do not change while the view is turned, and an interval typed into `Major ticks interval` is kept as before.  **The surface is no longer cut at the edge of the plot area**: the box in space reaches a little beyond the plot area it is drawn into, and at some views (an elevation of 42 and an azimuth of 56 degrees, for one) the corner of the surface nearest to the viewer was missing - the paper showed through.  The exported program draws the surface uncut too. |
@@ -27346,109 +27349,105 @@ that runs, and the update window says it too.
 ## Installable packages
 
 APlot can be installed from a package as well, like any other program -
-from the **Releases** page of <https://github.com/varallyay/APlot>.  Two
-kinds are made:
+from the **Releases** page of <https://github.com/varallyay/APlot>.  Every
+package of a release carries **its own Python** with everything APlot
+needs: nothing else has to be installed, and the computer needs no Python
+at all.
 
-| Package | For | Python |
-| --- | --- | --- |
-| `aplot_<version>_all.deb` | Debian, Ubuntu, Mint... | the distribution's: `python3-tk`, `python3-numpy`, `python3-pandas`, `python3-matplotlib` come with it |
-| `aplot-<version>-1.noarch.rpm` | Fedora, openSUSE, RHEL... | the distribution's, the same way |
-| `APlot-<version>-macOS-arm64.dmg`, `-x86_64.dmg` | macOS (Apple Silicon, Intel) | **its own** - nothing else to install |
-| `APlot-<version>-Windows.msi` | Windows | **its own** |
-| `APlot-<version>-Windows-portable.zip` | Windows, **nothing installed**: unpack and start | **its own** |
-| `APlot-<version>-Linux.flatpak` | any Linux with flatpak | **its own** (on the freedesktop runtime of Flathub) |
-| `APlot-<version>-macOS-light.dmg` | macOS | the Mac's: conda (recommended), python.org or Homebrew |
-| `APlot-<version>-Windows-light.msi` | Windows | the computer's: conda (recommended) or python.org |
+| Package | For |
+| --- | --- |
+| `APlot-<version>-Windows-portable.zip` | Windows, **nothing installed**: unpack anywhere (a server too) and start |
+| `APlot-<version>-Windows.msi` | Windows, installed for the user (Start menu, `.aplt` files) |
+| `APlot-<version>-macOS-arm64.dmg` | macOS on Apple Silicon (M1, M2...) |
+| `APlot-<version>-macOS-x86_64.dmg` | macOS on Intel |
+| `aplot_<version>_amd64.deb` | Debian 12, Ubuntu 22.04, Mint 21 and newer (64-bit Intel/AMD) |
+| `aplot-<version>-1.x86_64.rpm` | Fedora, openSUSE, RHEL 10 and the like (64-bit Intel/AMD) |
 
 Installing them:
 
-* **.deb**: `sudo apt install ./aplot_1.3.6_all.deb` (a double click opens
-  it in the software installer too).  APlot is then in the applications
-  menu, `aplot` starts it in a terminal, and the graph files have their icon
-  and picture; it lives in `/usr/share/aplot`.
-* **.rpm**: `sudo dnf install ./aplot-1.3.6-1.noarch.rpm` (openSUSE:
-  `sudo zypper install ...`).
-* **.flatpak**: `flatpak install --user APlot-1.3.6-Linux.flatpak`; flatpak
-  fetches the runtime from Flathub (add it once with `flatpak remote-add
-  --if-not-exists --user flathub
-  https://dl.flathub.org/repo/flathub.flatpakrepo`).  It may read and write
-  the home folder, draws with X11 (XWayland on a Wayland desktop) and
-  reaches the network for the updates.
+* **portable .zip** (Windows): unpack the folder `APlot` anywhere - the
+  desktop, a USB stick, a server or a network share several users start
+  it from - and start `APlot.exe` in it; delete the folder to remove it.
+  Windows SmartScreen may warn about an unknown publisher (APlot is not
+  signed): `More info > Run anyway`.  Each user's settings go to
+  `%USERPROFILE%\\.aplot`, the updates to `%LOCALAPPDATA%\\APlot\\versions`
+  (see below): the folder itself is never written to.  `Read me first.txt`
+  in it says all this.
+* **.msi**: a double click installs APlot **for the user who runs it** - no
+  administrator is needed - into `%LOCALAPPDATA%\\Programs\\APlot`, with
+  APlot in the Start menu and the `.aplt` files opening in it.
+  SmartScreen may warn as above.  It is uninstalled in Settings > Apps.
 * **.dmg**: open it and drag APlot onto the Applications folder.  APlot is
   not signed by an Apple developer account, so macOS stops the first start:
   press Done, then System Settings > Privacy & Security > **Open Anyway**
   (once) - or in Terminal `xattr -dr com.apple.quarantine
-  /Applications/APlot.app`.  The light one finds conda in `/opt/anaconda3`,
-  `~/anaconda3`, `~/miniconda3` or `~/miniforge3`, then the Python of
-  python.org and of Homebrew; with none of them it offers the download page
-  of Anaconda.  "Read me first.txt" in the disk image says all this, and
-  the Quick Look extensions are in it as an optional `.zip`.
-* **.msi**: a double click installs APlot **for the user who runs it** - no
-  administrator is needed - into `%LOCALAPPDATA%\\Programs\\APlot`, with
-  APlot in the Start menu and the `.aplt` files opening in it.  Windows
-  SmartScreen may warn about an unknown publisher (the package is not
-  signed): `More info > Run anyway`.  The light one's `APlot.exe` looks for
-  conda (Anaconda, Miniconda, Miniforge), then for every Python registered
-  by its installer (python.org, the Microsoft Store), and offers the
-  download page of Anaconda when there is none; `APLOT_PYTHON` may name a
-  Python of one's own.  It is uninstalled in Settings > Apps.
-* **portable .zip** (Windows): nothing is installed and no Python is
-  needed - unpack the folder `APlot` anywhere (the desktop, a USB stick,
-  a server or a network share several users start it from) and start
-  `APlot.exe` in it; delete the folder to remove it.  SmartScreen may
-  warn as for the `.msi` (`More info > Run anyway`).  Each user's
-  settings go to `%USERPROFILE%\\.aplot`, an update to
-  `%LOCALAPPDATA%\\APlot` (see below): the folder itself is never written
-  to.  `Read me first.txt` in it says all this.
+  /Applications/APlot.app`.  "Read me first.txt" in the disk image says
+  this, and the Quick Look extensions are in it as an optional `.zip`.
+* **.deb**: `sudo apt install ./aplot_1.6.4_amd64.deb` (a double click
+  opens it in the software installer too).  **.rpm**: `sudo dnf install
+  ./aplot-1.6.4-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
+  `aplot` starts it in a terminal, and the graph files have their icon and
+  picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
+  the Python inside it.  An older `.deb` or `.rpm` of APlot (one that used
+  the distribution's Python) is simply replaced.
 
-**Updates of a packaged APlot** come from GitHub as before, and never
-write over the files of a package:
+**Updates of a packaged APlot** come from the **Releases** page: `Help >
+Check for updates...` (and the look once a week) asks GitHub for the
+newest release, and when it has the package of this computer, `Update now`
+downloads it - checked against the size and the SHA-256 that GitHub gives
+- and installs it:
 
-* a **self-contained** APlot (its own Python) puts the new `aplot.py` into
-  a folder of the user - `~/Library/Application Support/APlot`,
-  `%LOCALAPPDATA%\\APlot` (the `.msi` and the portable `.zip` alike), or the
-  flatpak's own data folder - and starts the
-  newer of that and the one it came with; a newer package installed later
-  is never held back by an older update;
-* the **light** `.dmg` and `.msi` replace the `aplot.py` inside APlot.app or
-  in the install folder, as the APlot.app of `--make-app` does;
-* a **.deb or .rpm** leaves `/usr/share/aplot` to the package manager and
-  installs the new version for the user (`~/.local/share/aplot`, with its
-  menu entry); the menu entry and the `aplot` command of the package then
-  start whichever of the two is newer.
+* the **portable** APlot unpacks it for the user into
+  `%LOCALAPPDATA%\\APlot\\versions\\APlot-<version>` and starts it; from then
+  on the `APlot.exe` of the old folder hands over to the newest copy there,
+  so a shared, read-only folder works for everybody.  To update the
+  folder itself, unpack the new `.zip` in its place;
+* the **.msi** runs its installer as APlot closes and starts the new one;
+* the **.dmg** puts the new APlot.app in the place of the old one (asking
+  for the password of an administrator when only one may write there) and
+  starts it - or opens the disk image when that cannot be done;
+* the **.deb and .rpm** are installed with the package manager (apt, dnf
+  or zypper), which asks for the password of an administrator; without it
+  APlot says the command to type.
+
+A release is published only when every package is in it, so APlot never
+finds a release without its package.  An APlot that runs on a Python of
+the computer - a plain `aplot.py`, or one installed with `--install` - is
+updated with the newest `aplot.py` of the `main` branch, as always.
 
 `Help > About APlot` says which package an APlot came from.
 
 **Building the packages.**  Everything is in the `packaging` folder:
 
-* `python3 packaging/build_packages.py` makes the `.deb`, the `.rpm`, the
-  light `.dmg` and the light `.msi` on any Linux (Ubuntu: `sudo apt install
-  rpm xorriso wixl gcc-mingw-w64-x86-64`); `packaging/windows/launcher.c`
-  is the `APlot.exe` of the light `.msi`;
-* `python packaging/build_frozen.py` makes the self-contained APlot with
-  PyInstaller on the system it is for (`python -m pip install pyinstaller
-  numpy pandas matplotlib pillow openpyxl tkinterdnd2`): on a Mac the
-  `.dmg` itself, on Windows and Linux the folder that `build_packages.py
-  msi --windows ...` and `build_packages.py flatpak --linux ...` turn into
-  the `.msi` and the `.flatpak`, and on Windows the portable `.zip` as
-  well; `packaging/frozen/aplot_frozen.py` is the small program inside
-  that starts `aplot.py`.  The built program is tested before it is
-  packed (`APlot --self-test REPORT`: every library, the windows, a
-  diagram drawn, saved and opened again) - always on Windows, with
-  `--self-test` on a Mac and on Linux;
-* **GitHub builds all of them by itself**: `.github/workflows/packages.yml`
-  runs on GitHub's own Mac, Windows and Linux machines whenever a version
-  tag is pushed, and puts every package on the Releases page:
+* `python packaging/build_frozen.py` makes APlot with its own Python with
+  PyInstaller, on the system it is for (the exact package versions are in
+  `packaging/requirements-frozen.txt`): on a Mac the `.dmg` itself, on
+  Windows the portable `.zip` (and the folder of the `.msi`), on Linux the
+  folder of the `.deb` and the `.rpm`.  `packaging/frozen/aplot_frozen.py`
+  is the small program inside that starts `aplot.py`.  The built program
+  is tested before it is packed (`APlot --self-test REPORT`: every library,
+  the windows, a diagram drawn, saved in every picture format and opened
+  again) - always on Windows, with `--self-test` on a Mac and on Linux;
+* `python3 packaging/build_packages.py deb rpm --linux <folder or .tar.gz>`
+  and `... msi --windows <folder or .zip>` make the `.deb`, the `.rpm` and
+  the `.msi` of those folders, on Linux (Ubuntu: `sudo apt install rpm
+  wixl gcc-mingw-w64-x86-64`).  Without `--linux` and `--windows` it makes
+  the light packages that use the computer's Python (and `dmg` the light
+  `.dmg`); they are not released any more, but can still be built;
+* **GitHub builds and tests all of them by itself**:
+  `.github/workflows/packages.yml` runs on GitHub's own Mac (Apple Silicon
+  and Intel), Windows and Linux machines, installs the `.deb` on Ubuntu,
+  the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
+  then publishes the release with every package at once:
 
-        git tag -a v1.3.6 -m "APlot 1.3.6"
-        git push origin v1.3.6
+        git tag -a v1.6.4 -m "APlot 1.6.4"
+        git push origin v1.6.4
 
-  (`Actions > Packages > Run workflow` builds them without a release.)
-  `.github/workflows/windows-portable.yml` builds the portable Windows
-  `.zip` on its own, with the exact package versions of
-  `packaging/requirements-windows.txt`, and attaches it to the release of
-  the tag (`Actions > Windows portable > Run workflow`: only a download
-  of that run).
+  (`Actions > Packages > Run workflow` builds and tests everything without
+  a release; the packages are then downloads of that run.)  The releases
+  of this repository are immutable - a published release takes no more
+  files - which is why everything is built before the release is made.
 
 
 ## What it needs
@@ -32256,11 +32255,13 @@ class App:
             self._update_note("Looking for a new version of APlot on GitHub...")
 
         def work():
-            facts = check_for_update()
+            # a self-contained APlot: the newest release and its package
+            facts = check_for_release() if release_update_kind() else check_for_update()
             facts["history"] = []
             if facts["newer"]:
                 try:   # what is new: the version history of the README
-                    head = fetch_url(UPDATE_SOURCE + UPDATE_README,
+                    head = fetch_url((facts.get("source") or UPDATE_SOURCE)
+                                     + UPDATE_README,
                                      first_bytes=UPDATE_HEAD_BYTES)
                     facts["history"] = version_history(
                         head.decode("utf-8", "replace"), APP_VERSION)
@@ -32285,7 +32286,15 @@ class App:
             except OSError:
                 pass
             if not facts["newer"]:
-                if manual:
+                if manual and facts.get("missing"):
+                    messagebox.showinfo(
+                        "Check for updates",
+                        f"{APP_NAME} {facts['version']} is out, but its release "
+                        f"has no package for this computer "
+                        f"({release_update_kind()}).\n\nThis is {APP_NAME} "
+                        f"{APP_VERSION}.  The packages are on\n"
+                        f"{facts.get('release') or UPDATE_PAGE}", parent=self.root)
+                elif manual:
                     messagebox.showinfo(
                         "Check for updates",
                         f"{APP_NAME} {APP_VERSION} is up to date.\n\n"
@@ -32321,9 +32330,14 @@ class App:
         if not self._may_discard(f"Update {APP_NAME}"):
             return False                 # Cancel: nothing happens
         self._update_busy = True
-        self._update_note(f"Downloading {APP_NAME} {facts['version']}...")
+        asset = facts.get("asset")
+        size = (f" ({asset['size'] / 1e6:.0f} MB)"
+                if asset and asset.get("size") else "")
+        self._update_note(f"Downloading {APP_NAME} {facts['version']}{size}...")
 
         def work():
+            if asset:                    # the package of a release
+                return install_release(download_release(facts), facts)
             program = download_update(facts)
             return install_update(program, facts)
 
@@ -32350,10 +32364,13 @@ class App:
             kept = (f"A copy of {APP_VERSION} is kept in "
                     f"{short_path(result['backup'])}.\n"
                     if result.get("backup") else "")
-            messagebox.showinfo(
-                "Update",
+            done_text = (
+                f"{APP_NAME} {facts['version']} is installed as {APP_NAME} closes.\n"
+                if asset and facts.get("kind") == "msi" else
                 f"{APP_NAME} {facts['version']} has been installed in "
-                f"{short_path(result.get('where') or update_target())}.\n"
+                f"{short_path(result.get('where') or update_target())}.\n")
+            messagebox.showinfo(
+                "Update", done_text
                 + kept + "\n"
                 + (notes + "\n\n" if notes else "")
                 + f"{APP_NAME} starts again now.", parent=self.root)
@@ -33975,6 +33992,335 @@ def download_update(facts, source=None, folder=None):
     return path
 
 
+# --------------------------------------------------------------------------
+# a self-contained APlot (a Python of its own: the .dmg, the .msi, the
+# portable Windows .zip, the .deb and the .rpm of the Releases page) is not
+# updated with a new aplot.py from `main` - a new aplot.py may need more
+# than the Python packed with the old one.  It looks for the newest
+# *release* on GitHub instead, and installs the package of that release
+# that is made for this computer: a whole new APlot, with its own Python.
+# A release is published only when every package is in it, so a release
+# without the package of this computer is not offered.
+# --------------------------------------------------------------------------
+RELEASE_API = f"https://api.github.com/repos/{UPDATE_REPOSITORY}/releases/latest"
+RELEASE_DOWNLOAD_TIMEOUT = 900          # seconds for a whole package
+RELEASE_KINDS = ("portable", "msi", "dmg", "deb", "rpm", "flatpak")
+VERSIONS_MARK = "APLOT_VERSIONS"        # set by the bootstrap: versions_folder()
+
+
+def release_update_kind():
+    """The kind of self-contained APlot this is ("dmg", "msi", "portable",
+    "deb", "rpm", "flatpak", "frozen"), whose updates are the packages of
+    the releases - or "" for an APlot that runs on the computer's Python
+    (it is updated with the aplot.py of `main`, as always)."""
+    if not os.environ.get(FROZEN_MARK):
+        return ""
+    return package_kind() or "frozen"
+
+
+def release_asset_name(version, kind, machine=None, platform=None):
+    """The file of the release `version` that updates this kind of APlot,
+    or None when the releases have none for it."""
+    platform = platform or sys.platform
+    if machine is None:
+        import platform as _platform
+        machine = _platform.machine()
+    machine = str(machine or "").lower()
+    intel = machine in ("x86_64", "amd64", "x64")
+    arm = machine in ("arm64", "aarch64")
+    windows = platform.startswith("win")
+    if kind == "portable" and windows and intel:
+        return f"{APP_NAME}-{version}-Windows-portable.zip"
+    if kind == "msi" and windows and intel:
+        return f"{APP_NAME}-{version}-Windows.msi"
+    if kind == "dmg" and (intel or arm):
+        return f"{APP_NAME}-{version}-macOS-{'arm64' if arm else 'x86_64'}.dmg"
+    if kind == "deb" and intel:
+        return f"{DESKTOP_ID}_{version}_amd64.deb"
+    if kind == "rpm" and intel:
+        return f"{DESKTOP_ID}-{version}-1.x86_64.rpm"
+    if kind == "flatpak" and intel:
+        return f"{APP_NAME}-{version}-Linux.flatpak"
+    return None
+
+
+def check_for_release(current=None, kind=None, fetch=None, machine=None,
+                      platform=None):
+    """What the newest release on GitHub has: {"version", "date", "newer",
+    "asset" (name, url, size, digest - or None), "missing" (a newer
+    release without a package for this computer), "release" (its page),
+    "source" (where its README.md is)}."""
+    fetch = fetch or fetch_url
+    current = current or APP_VERSION
+    kind = release_update_kind() if kind is None else kind
+    try:
+        data = json.loads(fetch(RELEASE_API).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as error:
+        raise UpdateError(f"GitHub's answer about the releases could not be "
+                          f"read: {error}") from error
+    if not isinstance(data, dict):
+        raise UpdateError("GitHub's answer about the releases could not be read.")
+    tag = str(data.get("tag_name") or "")
+    version = tag.lstrip("vV")
+    if not version_tuple(version):
+        raise UpdateError("The newest release on GitHub does not say which "
+                          "version it is.")
+    name = release_asset_name(version, kind, machine, platform)
+    asset = None
+    for one in data.get("assets") or []:
+        if isinstance(one, dict) and name and one.get("name") == name:
+            asset = {"name": name, "url": str(one.get("browser_download_url") or ""),
+                     "size": int(one.get("size") or 0),
+                     "digest": str(one.get("digest") or "")}
+    newer = is_newer(version, current)
+    return {"version": version, "date": str(data.get("published_at") or "")[:10],
+            "quicklook": "", "tag": tag, "kind": kind, "asset": asset,
+            "newer": newer and asset is not None and bool(asset["url"]),
+            "missing": newer and (asset is None or not asset["url"]),
+            "release": str(data.get("html_url") or f"{UPDATE_PAGE}/releases"),
+            "source": f"https://raw.githubusercontent.com/{UPDATE_REPOSITORY}/{tag}/"}
+
+
+def download_release(facts, folder=None, fetch=None):
+    """Download the package of a release (`check_for_release`) into the
+    folder of the downloads, checked against the size and the SHA-256
+    GitHub gives for it; its path."""
+    asset = facts.get("asset") or {}
+    if not asset.get("url"):
+        raise UpdateError(f"The release {facts.get('version')} has no package "
+                          f"for this computer.")
+    data = (fetch or fetch_url)(asset["url"], timeout=RELEASE_DOWNLOAD_TIMEOUT)
+    if asset.get("size") and len(data) != int(asset["size"]):
+        raise UpdateError(f"{asset['name']} came incomplete ({len(data)} of "
+                          f"{asset['size']} bytes).")
+    digest = str(asset.get("digest") or "")
+    if digest.startswith("sha256:") and hashlib.sha256(data).hexdigest() != digest[7:].lower():
+        raise UpdateError(f"{asset['name']} is not the file of the release "
+                          f"(its SHA-256 differs).")
+    folder = Path(folder or UPDATE_FOLDER) / str(facts["version"])
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / asset["name"]
+    path.write_bytes(data)
+    return path
+
+
+def release_update_text(facts):
+    """What `Update now` does with the package of a release, in words."""
+    asset = facts.get("asset") or {}
+    size = f" ({asset['size'] / 1e6:.0f} MB)" if asset.get("size") else ""
+    got = (f"Update now downloads {asset.get('name')}{size} from the release on "
+           f"GitHub")
+    kind = facts.get("kind")
+    if kind == "portable":
+        return (f"{got}, unpacks it for you in {short_path(versions_folder())} - "
+                f"the folder of this {APP_NAME} stays as it is - and starts the "
+                f"new {APP_NAME}; from then on this one hands over to it.")
+    if kind == "msi":
+        return (f"{got} and installs it with its installer as {APP_NAME} "
+                f"closes; the new {APP_NAME} starts by itself.")
+    if kind == "dmg":
+        return (f"{got}, puts its {APP_NAME}.app in the place of this one and "
+                f"starts it.")
+    if kind in ("deb", "rpm"):
+        return (f"{got} and installs it with the package manager - the "
+                f"password of an administrator is asked for - then starts it.")
+    return f"{got} and says how to install it."
+
+
+def versions_folder():
+    """Where a portable APlot unpacks its updates, for this user: one
+    folder APlot-<version> each (the bootstrap starts the newest)."""
+    told = os.environ.get(VERSIONS_MARK)
+    if told:
+        return Path(told)
+    if os.name == "nt":
+        home = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / APP_NAME
+    else:
+        data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+        home = Path(data) / DESKTOP_ID
+    return home / "versions"
+
+
+def unpack_portable(archive, version, folder=None):
+    """A portable .zip (or .tar.gz) unpacked as `<folder>/APlot-<version>`;
+    that folder.  It is unpacked beside first and renamed in one step, so
+    a folder of that name is always whole; the older ones are taken away."""
+    folder = Path(folder or versions_folder())
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{APP_NAME}-{version}"
+    temporary = Path(tempfile.mkdtemp(prefix=".unpack-", dir=str(folder)))
+    try:
+        if str(archive).lower().endswith(".zip"):
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(temporary)
+        else:
+            import tarfile
+            with tarfile.open(archive) as bundle:
+                bundle.extractall(temporary, filter="tar")
+        inside = temporary / APP_NAME
+        program = inside / (APP_NAME + (".exe" if os.name == "nt" else ""))
+        if not program.is_file():
+            raise UpdateError(f"{Path(archive).name} does not hold {APP_NAME}/"
+                              f"{program.name}.")
+        if os.name != "nt":
+            os.chmod(program, 0o755)
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        os.replace(inside, target)
+    except (OSError, zipfile.BadZipFile) as error:
+        raise UpdateError(f"{Path(archive).name} could not be unpacked in "
+                          f"{short_path(folder)}: {error}") from error
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+    running = Path(sys.executable).resolve().parent
+    for older in folder.glob(f"{APP_NAME}-*"):
+        if older != target and older.is_dir() and older.resolve() != running:
+            shutil.rmtree(older, ignore_errors=True)  # in use: stays till later
+    return target
+
+
+def linux_package_command(kind, path):
+    """The command that installs the .deb or .rpm `path` (run as root)."""
+    path = str(Path(path).resolve())
+    if kind == "deb":
+        if shutil.which("apt-get"):
+            return ["apt-get", "install", "-y", "--allow-downgrades", path]
+        return ["dpkg", "-i", path]
+    if shutil.which("dnf"):
+        return ["dnf", "install", "-y", path]
+    if shutil.which("zypper"):
+        return ["zypper", "--non-interactive", "install", "--allow-unsigned-rpm", path]
+    return ["rpm", "-U", "--replacepkgs", path]
+
+
+def install_release(package, facts, kind=None, platform=None,
+                    administrator=None, executable=None):
+    """Install the downloaded package of a release; what was done:
+    {"installed", "backup", "command" (that starts the new version),
+    "where", "notes"} - as `install_update` says it."""
+    platform = platform or sys.platform
+    kind = kind or facts.get("kind") or release_update_kind()
+    administrator = administrator or run_as_administrator
+    executable = Path(executable or sys.executable).resolve()
+    package, version = Path(package), str(facts["version"])
+    release = facts.get("release") or f"{UPDATE_PAGE}/releases"
+    result = {"installed": False, "backup": None, "command": [],
+              "where": None, "notes": []}
+    if kind == "portable":
+        target = unpack_portable(package, version)
+        program = target / (APP_NAME + (".exe" if os.name == "nt" else ""))
+        result.update(installed=True, command=[str(program)], where=target)
+        result["notes"].append(
+            f"The folder this {APP_NAME} was started from is left as it is "
+            f"(it may be shared, or read-only): {APP_NAME} {version} has been "
+            f"unpacked for you in {short_path(target)}, and the {APP_NAME} of "
+            f"that folder starts it from now on.  To bring the folder itself "
+            f"up to date - for everybody who starts it - unpack "
+            f"{package.name} from {release} in its place.")
+    elif kind == "msi":
+        # the installer cannot replace the files of a running APlot: a small
+        # script runs it after APlot has closed, and starts the new one
+        script = package.parent / "install-update.cmd"
+        script.write_text(
+            "@echo off\r\n"
+            f'msiexec /i "{package}" /passive /norestart\r\n'
+            f'start "" "{executable}" %*\r\n', encoding="utf-8")
+        result.update(installed=True, command=["cmd", "/c", str(script)],
+                      where=executable.parent)
+        result["notes"].append(
+            f"The installer of {APP_NAME} {version} runs when {APP_NAME} has "
+            f"closed, and starts it again when it is done.")
+    elif kind == "dmg":
+        bundle = next((one for one in executable.parents
+                       if one.name.endswith(".app")), None)
+        why = _replace_app_bundle(package, bundle, platform, administrator)
+        if why:
+            subprocess.run(["/usr/bin/open", str(package)], check=False)
+            result["notes"].append(
+                f"{APP_NAME}.app could not be replaced ({why}).  The disk image "
+                f"of {APP_NAME} {version} has been opened ({short_path(package)}): "
+                f"quit {APP_NAME} and drag the new one onto the Applications "
+                f"folder.")
+            return result
+        result.update(installed=True, where=bundle,
+                      command=["/usr/bin/open", "-n", str(bundle), "--args"])
+    elif kind in ("deb", "rpm"):
+        command = linux_package_command(kind, package)
+        done, why = administrator(command, platform)
+        if not done:
+            result["notes"].append(
+                f"The .{kind} package of {APP_NAME} {version} was not installed "
+                f"({why}).  It has been downloaded to {short_path(package)}; "
+                f"install it in a terminal with\n\n    sudo "
+                + " ".join(shlex.quote(one) for one in command))
+            return result
+        result.update(installed=True, command=[str(executable)],
+                      where=executable.parent)
+    elif kind == "flatpak":
+        result["notes"].append(
+            f"This {APP_NAME} is a flatpak, and flatpak installs the new "
+            f"version: {APP_NAME} {version} has been downloaded to "
+            f"{short_path(package)}; install it with\n\n"
+            f"    flatpak install --user {shlex.quote(str(package))}")
+    else:
+        result["notes"].append(
+            f"{APP_NAME} {version} has been downloaded to {short_path(package)}; "
+            f"this {APP_NAME} was not made from a release, so it is not "
+            f"installed by itself.")
+    return result
+
+
+def _replace_app_bundle(image, bundle, platform="darwin", administrator=None):
+    """Put the APlot.app of the disk image `image` in the place of `bundle`;
+    "" when done, otherwise why not."""
+    if platform != "darwin" or bundle is None:
+        return f"this {APP_NAME} is not an {APP_NAME}.app"
+    mount = Path(tempfile.mkdtemp(prefix="aplot-image-"))
+    try:
+        done = subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse",
+                               "-readonly", "-noautoopen", "-mountpoint",
+                               str(mount), str(image)],
+                              capture_output=True, text=True, timeout=300)
+        if done.returncode != 0:
+            return (done.stderr or "the disk image could not be opened").strip()
+        try:
+            source = mount / f"{APP_NAME}.app"
+            if not source.is_dir():
+                return f"the disk image holds no {APP_NAME}.app"
+            fresh = bundle.parent / f".{APP_NAME}.app.new-{os.getpid()}"
+            old = bundle.parent / f".{APP_NAME}.app.old-{os.getpid()}"
+            # ditto keeps the signature and everything else of the bundle
+            steps = [["/usr/bin/ditto", str(source), str(fresh)],
+                     ["/bin/mv", str(bundle), str(old)],
+                     ["/bin/mv", str(fresh), str(bundle)],
+                     ["/bin/rm", "-rf", str(old)]]
+            if os.access(bundle.parent, os.W_OK):
+                for step in steps:
+                    ran = subprocess.run(step, capture_output=True, text=True,
+                                         timeout=600)
+                    if ran.returncode != 0:
+                        if not bundle.exists() and old.exists():
+                            os.replace(old, bundle)     # put back as it was
+                        shutil.rmtree(fresh, ignore_errors=True)
+                        return (ran.stderr or "it could not be copied").strip()
+                return ""
+            line = " && ".join(" ".join(shlex.quote(one) for one in step)
+                               for step in steps)
+            copied, why = (administrator or run_as_administrator)(
+                ["/bin/sh", "-c", line], platform)
+            return "" if copied else f"only an administrator may write it, and {why}"
+        finally:
+            subprocess.run(["/usr/bin/hdiutil", "detach", "-quiet", str(mount)],
+                           capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as error:
+        return str(error)
+    finally:
+        try:
+            mount.rmdir()
+        except OSError:
+            pass
+
+
 def update_target():
     """The program file that is running (where an update is written) - or,
     for a self-contained APlot, the place its bootstrap names: an update
@@ -34462,7 +34808,8 @@ def restart_program(command, root=None):
         except tk.TclError:
             pass
     if sys.platform.startswith("win"):
-        subprocess.Popen(command, close_fds=True)
+        hidden = 0x08000000 if str(command[0]).lower() == "cmd" else 0  # no console
+        subprocess.Popen(command, close_fds=True, creationflags=hidden)
         os._exit(0)
     # the same process (and on a Mac the same place in the Dock) goes on
     # with the new program
@@ -34551,11 +34898,16 @@ USAGE = f"""{APP_NAME} {APP_VERSION} - plotting and editing tabular data
 def command_line_update(install=False, out=print):
     """`--check-update` and `--update`: the same as the Help menu, in a
     terminal (and without starting the program again)."""
+    kind = release_update_kind()
     try:
-        facts = check_for_update()
+        facts = check_for_release() if kind else check_for_update()
     except UpdateError as error:
         out(f"GitHub could not be asked: {error}")
         return 1
+    if facts.get("missing"):
+        out(f"{APP_NAME} {facts['version']} is out, but its release has no "
+            f"package for this computer ({kind}): {facts.get('release')}")
+        return 0
     if not facts["newer"]:
         out(f"{APP_NAME} {APP_VERSION} is up to date "
             f"(the newest on GitHub is {facts['version']}).")
@@ -34563,10 +34915,18 @@ def command_line_update(install=False, out=print):
     out(f"{APP_NAME} {facts['version']} ({facts['date']}) is available; "
         f"this is {APP_VERSION}.")
     if not install:
-        out(f"Install it with:  python3 {shlex.quote(str(update_target()))} --update")
+        if kind:
+            out(f"Install it with:  {shlex.quote(sys.executable)} --update")
+        else:
+            out(f"Install it with:  python3 {shlex.quote(str(update_target()))} --update")
         return 0
     try:
-        result = install_update(download_update(facts), facts)
+        if kind:
+            result = install_release(download_release(facts), facts)
+            if result["installed"] and kind == "msi":
+                subprocess.Popen(result["command"], close_fds=True)  # after we end
+        else:
+            result = install_update(download_update(facts), facts)
     except UpdateError as error:
         out(f"It could not be updated: {error}")
         return 1

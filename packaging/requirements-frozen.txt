@@ -1,0 +1,15 @@
+# Packages for building the self-contained APlot (its own Python) with
+# packaging/build_frozen.py on Windows, macOS and Linux:
+#     python -m pip install -r packaging/requirements-frozen.txt
+# used by .github/workflows/packages.yml.  The built program needs none of them.
+# Exact versions: this combination was built and self-tested together (Python 3.12).
+# PyInstaller must be newer than NumPy's internals; update them together.
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.10
+numpy==2.5.5
+pandas==3.1.1
+matplotlib==3.11.2
+pillow==13.0.0
+openpyxl==3.1.5
+tkinterdnd2==0.7.0
+pyobjc-framework-Cocoa==13.0; sys_platform == "darwin"

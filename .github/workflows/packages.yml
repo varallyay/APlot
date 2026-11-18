@@ -1,18 +1,28 @@
-# The installable packages of APlot, built on GitHub's own machines.
+# The packages of APlot that carry their own Python - nothing else to
+# install, no Python needed on the computer - built and tested on GitHub's
+# own machines, and published together as one release.
 #
-# Runs when a version tag is pushed (git tag -a v1.3.6 -m "APlot 1.3.6";
-# git push origin v1.3.6) and by hand (Actions > Packages > Run workflow).
-# A tag also puts every package on the Releases page of the repository.
+#   frozen          APlot with its own Python, by PyInstaller (build_frozen.py),
+#                   each tested by itself (APlot --self-test):
+#                     Windows      -> APlot-<v>-Windows-portable.zip
+#                     macOS arm64  -> APlot-<v>-macOS-arm64.dmg
+#                     macOS x86_64 -> APlot-<v>-macOS-x86_64.dmg
+#                     Linux        -> the folder for the .deb and the .rpm
+#   linux-packages  aplot_<v>_amd64.deb, aplot-<v>-1.x86_64.rpm and
+#                   APlot-<v>-Windows.msi (build_packages.py); the .deb is
+#                   installed and tested on Ubuntu, the .rpm on Fedora
+#   msi-test        the .msi installed and tested on Windows
+#   release         (version tags only) the release with every package
 #
-#   light         .deb  .rpm  light .dmg  light .msi        (Ubuntu)
-#   frozen        APlot with its own Python, by PyInstaller:
-#                   macOS arm64 and x86_64 -> self-contained .dmg
-#                   Windows                -> folder for the .msi
-#                   Linux                  -> folder for the .flatpak
-#   selfcontained the self-contained .msi and .flatpak of those folders (Ubuntu)
-#   release       everything on the Releases page (tags only)
+# The repository has immutable releases: a published release takes no more
+# files.  So the release is made as a draft, gets all the packages at once,
+# and is published only then - nobody ever sees a release with a package
+# missing (the updater of a self-contained APlot relies on that).
 #
-# See packaging/build_packages.py and packaging/build_frozen.py.
+# Runs when a version tag is pushed (git tag -a v1.6.4 -m "APlot 1.6.4";
+# git push origin v1.6.4); the tag must match APP_VERSION in aplot.py.
+# By hand (Actions > Packages > Run workflow) it builds and tests
+# everything and keeps the packages as downloads of that run.
 name: Packages
 
 on:
@@ -21,115 +31,195 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write  # to make the release
 
 jobs:
-  light:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3-tk python3-numpy python3-pandas python3-matplotlib \
-            python3-pil python3-pil.imagetk rpm xorriso wixl \
-            gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
-      - name: Build
-        run: python3 packaging/build_packages.py deb rpm dmg msi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: light
-          path: packaging/dist/*
-
   frozen:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14          # Apple Silicon
-            name: macos-arm64
-          - os: macos-13          # Intel
-            name: macos-x86_64
           - os: windows-latest
             name: windows
-          - os: ubuntu-24.04
+          - os: macos-14          # Apple Silicon
+            name: macos-arm64
+          - os: macos-15-intel    # Intel
+            name: macos-x86_64
+          - os: ubuntu-22.04      # an older glibc: runs on more distributions
             name: linux
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
-      - name: Tk (Linux)
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/requirements-frozen.txt
+      - name: Tk and a screen (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libtk8.6 tk
-      - name: Packages
-        run: >
-          python -m pip install --upgrade pip &&
-          python -m pip install pyinstaller numpy pandas matplotlib pillow
-          openpyxl tkinterdnd2
-      - name: pyobjc (macOS)
-        if: runner.os == 'macOS'
-        run: python -m pip install pyobjc-framework-Cocoa
-      - name: Check
-        run: python -c "import tkinter, numpy, pandas, matplotlib; print(tkinter.TkVersion, numpy.__version__, pandas.__version__, matplotlib.__version__)"
-      - name: Build
+        run: sudo apt-get update && sudo apt-get install -y libtk8.6 tk xvfb
+      - name: The build packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r packaging/requirements-frozen.txt
+      - name: Version
+        shell: bash
+        run: |
+          version=$(python -c "import re; print(re.search(r'^APP_VERSION\s*=\s*\"([^\"]+)\"', open('aplot.py', encoding='utf-8').read(), re.M).group(1))")
+          echo "APP_VERSION is $version"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match APP_VERSION $version in aplot.py."
+            exit 1
+          fi
+      - name: Build and self-test (Windows)
+        if: runner.os == 'Windows'
         run: python packaging/build_frozen.py
+      - name: Build and self-test (macOS)
+        if: runner.os == 'macOS'
+        run: python packaging/build_frozen.py --self-test
+      - name: Build and self-test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python packaging/build_frozen.py --self-test
       - uses: actions/upload-artifact@v4
         with:
           name: frozen-${{ matrix.name }}
           path: packaging/dist/*
+          if-no-files-found: error
 
-  selfcontained:
+  linux-packages:
     needs: frozen
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/requirements-frozen.txt
       - name: Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3-tk python3-numpy python3-pandas python3-matplotlib \
-            python3-pil python3-pil.imagetk wixl flatpak \
-            gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
-      - uses: actions/download-artifact@v4
-        with:
-          name: frozen-windows
-          path: frozen
+          sudo apt-get install -y --no-install-recommends libtk8.6 tk xvfb rpm \
+            wixl gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          python -m pip install -r packaging/requirements-frozen.txt
       - uses: actions/download-artifact@v4
         with:
           name: frozen-linux
           path: frozen
-      - name: Build
+      - uses: actions/download-artifact@v4
+        with:
+          name: frozen-windows
+          path: frozen
+      - name: Build the .deb, the .rpm and the .msi
         run: |
-          python3 packaging/build_packages.py msi --windows frozen/APlot-*-Windows-frozen.zip
-          python3 packaging/build_packages.py flatpak --linux frozen/APlot-*-Linux-frozen.tar.gz
+          python packaging/build_packages.py deb rpm --linux frozen/APlot-*-Linux-frozen.tar.gz
+          python packaging/build_packages.py msi --windows frozen/APlot-*-Windows-frozen.zip
+          ls -la packaging/dist
+      - name: Test the .deb on Ubuntu (installed, started, thumbnailer)
+        run: |
+          sudo apt-get install -y ./packaging/dist/aplot_*_amd64.deb
+          APLOT_SELF_TEST_GRAPH="$PWD/test.aplt" xvfb-run -a aplot --self-test deb-report.txt || true
+          cat deb-report.txt
+          grep -q "ALL OK" deb-report.txt
+          grep -q "package deb" deb-report.txt
+          aplot-thumbnailer test.aplt test.png 128
+          test -s test.png
+          aplot-preview --extract test.aplt
+          sudo apt-get remove -y aplot
+          test ! -e /usr/lib/aplot/APlot
+      - name: Test the .rpm on Fedora (installed, started, thumbnailer)
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w fedora:latest bash -c '
+            set -e
+            dnf install -y ./packaging/dist/aplot-*.x86_64.rpm xorg-x11-server-Xvfb xorg-x11-xauth dejavu-sans-fonts
+            APLOT_SELF_TEST_GRAPH=/tmp/test.aplt xvfb-run -a aplot --self-test /w/rpm-report.txt || true
+            cat /w/rpm-report.txt
+            grep -q "ALL OK" /w/rpm-report.txt
+            grep -q "package rpm" /w/rpm-report.txt
+            aplot-thumbnailer /tmp/test.aplt /tmp/test.png 128
+            test -s /tmp/test.png
+            dnf remove -y aplot'
       - uses: actions/upload-artifact@v4
         with:
-          name: selfcontained
+          name: linux-packages
           path: |
+            packaging/dist/*.deb
+            packaging/dist/*.rpm
             packaging/dist/*.msi
-            packaging/dist/*.flatpak
+          if-no-files-found: error
+
+  msi-test:
+    needs: linux-packages
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: packages
+      - name: Install the .msi, start it, test it, uninstall it
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem packages\APlot-*-Windows.msi).FullName
+          $install = Start-Process msiexec -ArgumentList "/i", "`"$msi`"", "/qn", "/l*v", "msi.log" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { Get-Content msi.log -Tail 40; exit 1 }
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\APlot\APlot.exe"
+          $report = Join-Path $PWD "msi-report.txt"
+          $test = Start-Process $exe -ArgumentList "--self-test", "`"$report`"" -Wait -PassThru
+          Get-Content $report
+          if ($test.ExitCode -ne 0) { exit 1 }
+          if (-not (Select-String -Path $report -Pattern "package msi" -Quiet)) { exit 1 }
+          $remove = Start-Process msiexec -ArgumentList "/x", "`"$msi`"", "/qn" -Wait -PassThru
+          if ($remove.ExitCode -ne 0) { exit 1 }
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [light, frozen, selfcontained]
+    if: github.ref_type == 'tag'
+    needs: [frozen, linux-packages, msi-test]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: all
           merge-multiple: true
-      - name: The packages
-        run: ls -la all
-      - uses: softprops/action-gh-release@v2
-        with:
-          name: APlot ${{ github.ref_name }}
-          files: |
-            all/*.deb
-            all/*.rpm
-            all/*.dmg
-            all/*.msi
-            all/*.flatpak
-            all/*.app.zip
+      - name: Publish the release with every package at once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          files=(
+            "all/APlot-$version-Windows-portable.zip"
+            "all/APlot-$version-Windows.msi"
+            "all/APlot-$version-macOS-arm64.dmg"
+            "all/APlot-$version-macOS-x86_64.dmg"
+            "all/aplot_${version}_amd64.deb"
+            "all/aplot-$version-1.x86_64.rpm"
+          )
+          for one in "${files[@]}"; do
+            test -s "$one" || { echo "::error::$one is missing"; ls -la all; exit 1; }
+          done
+          python3 - "$version" > notes.md <<'EOF'
+          import re, sys
+          version = sys.argv[1]
+          text = open("README.md", encoding="utf-8").read()
+          row = re.search(rf"^\| {re.escape(version)} \| [0-9-]+ \| (.+?) \|\s*$", text, re.M)
+          print(row.group(1) if row else f"APlot {version}")
+          print()
+          print("Every package carries its own Python - nothing else to install:")
+          print()
+          print(f"* **Windows**: `APlot-{version}-Windows-portable.zip` - unpack anywhere (a server too) and start `APlot.exe`, nothing is installed; or `APlot-{version}-Windows.msi`, installed for the user (Start menu, `.aplt` files).")
+          print(f"* **macOS**: `APlot-{version}-macOS-arm64.dmg` (Apple Silicon) or `-x86_64.dmg` (Intel).")
+          print(f"* **Linux**: `aplot_{version}_amd64.deb` (Debian, Ubuntu, Mint...) or `aplot-{version}-1.x86_64.rpm` (Fedora, openSUSE, RHEL...).")
+          print()
+          print("A plain `aplot.py` (run with your own Python) updates itself from the `main` branch as before.")
+          EOF
+          cat notes.md
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "::error::The release $GITHUB_REF_NAME exists already (a published release takes no more files)."
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" --draft --verify-tag \
+            --title "APlot $version" --notes-file notes.md
+          gh release edit "$GITHUB_REF_NAME" --draft=false
