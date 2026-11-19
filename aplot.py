@@ -110,7 +110,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.4 (2026-11-18) - see `APP_VERSION` below and "Version history" in the
+1.6.5 (2026-11-19) - see `APP_VERSION` below and "Version history" in the
 documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -301,8 +301,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in "Version history" of DOCUMENTATION, the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.4"
-APP_VERSION_DATE = "2026-11-18"
+APP_VERSION = "1.6.5"
+APP_VERSION_DATE = "2026-11-19"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -13630,16 +13630,16 @@ class DataTable(ttk.Frame):
         if bounds is None or not rows:
             return False
         r0, c0 = bounds[0], bounds[1]
+        # Text larger than the sheet makes the sheet larger - downwards and
+        # to the right - so nothing pasted is cut off.  All the missing rows
+        # and columns at once, and unannounced: the paste is one step for
+        # Undo, not one step for every new row or column.
         needed = r0 + len(rows)
         if needed > len(self.df):
-            if self.config_obj.get("table", "auto_extend"):
-                # all the missing rows at once, and unannounced: the paste
-                # is one step for Undo, not one step for every new row
-                self.grow_rows(needed - len(self.df))
-            else:
-                rows = rows[:len(self.df) - r0]
-        if not rows:
-            return False
+            self.grow_rows(needed - len(self.df))
+        needed = c0 + max(len(line) for line in rows)
+        if needed > len(self.df.columns):
+            self.grow_columns(needed - len(self.df.columns))
         columns = len(self.df.columns)
         names = list(self.df.columns)
         # Written a whole column at a time: writing 100 000 cells one by one
@@ -27181,7 +27181,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.4 (2026-11-18)**.  The number is written in one place
+This is **APlot 1.6.5 (2026-11-19)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27312,6 +27312,7 @@ that runs, and the update window says it too.
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.5 | 2026-11-19 | **A block pasted into the data sheet that is larger than the sheet makes the sheet larger** (`Ctrl/Cmd+V`): it gets new columns on the right and new rows at the bottom, so nothing pasted is cut off - three columns pasted at column I of a 10-column sheet fill I, J and a new column K, where the third column used to be lost.  The new rows come whether or not `Add a new row when leaving the last one` is ticked (that setting is about moving past the last row while typing), and `Undo` takes the paste back together with the new rows and columns, in one step. |
 | 1.6.4 | 2026-11-18 | **Every package of the Releases page carries its own Python** - nothing else to install, no Python on the computer: besides the portable Windows `.zip` there are an `.msi` for Windows, a `.dmg` for Macs with Apple Silicon and one for Intel, and **the `.deb` and the `.rpm` now hold APlot with its own Python** in `/usr/lib/aplot` (the thumbnailer and "Preview all graphs" run on it too), replacing the ones that needed the distribution's Python.  **A self-contained APlot updates itself from the releases**: `Check for updates` asks GitHub for the newest release, downloads the package of this computer - checked against its size and SHA-256 - and installs it (the portable one unpacks it for the user, and the old folder hands over to it; the `.msi` runs its installer; the `.dmg` replaces APlot.app; the `.deb` and `.rpm` go through the package manager), instead of a new `aplot.py` that might need more than the Python inside.  A plain `aplot.py` is updated from `main` as before.  **GitHub builds, installs and tests every package** (`.github/workflows/packages.yml`) and only then publishes the release with all of them at once - the releases of the repository are immutable, which left 1.6.3 without its `.zip`. |
 | 1.6.3 | 2026-11-18 | **APlot on Windows without installing anything, and without Python**: `APlot-<version>-Windows-portable.zip` on the Releases page is the folder of the self-contained APlot (`APlot.exe` with a Python of its own) - unpack it anywhere, a server or a network share too, and start `APlot.exe`; nothing is installed and the registry is never touched.  The file `PORTABLE` beside `APlot.exe` tells it from the `.msi`'s (`Help > About APlot` says "portable"); an update goes, as for every self-contained APlot, into `%LOCALAPPDATA%\\APlot` of the user, so the folder itself may be read-only.  It is built by `.github/workflows/windows-portable.yml` on GitHub's Windows machine for every version tag (and by hand), with the exact package versions of `packaging/requirements-windows.txt`.  **The built program tests itself** before it is packed (`APlot.exe --self-test REPORT`): the libraries, the windows, a line diagram and a `3D Surface`, saving a graph and opening it again.  It found two gaps of every self-contained APlot, now closed: **Excel files** (openpyxl was left out) and **saving a picture as .svg, .eps or .ps** (matplotlib loads those writers by name). Linux, macOS and the plain `aplot.py` work as before. |
 | 1.6.2 | 2026-11-17 | Two completions of the `3D Surface`.  **A double click on the numbers of the X or the Y axis opens the page of that axis** in `Axes properties`, as it always did for the Z axis: the labels of the X and the Y axis are written slanted, and the upright rectangle around such a label - the one that was asked whether the pointer is on the label - reached over the numbers, so the double click opened the label instead (or did nothing).  A slanted text is now asked for along its own lines.  **`Parallel offset [px]`**, a new box to the right of `Number offset [px]` on the three axis pages: it slides the numbers **along** their axis in space - towards the end where the numbers grow when it is positive, the other way when it is negative, 0 to begin with - where `Number offset` moves them away from the axis.  It is saved with the diagram and taken back by `Undo`; on a flat diagram the box is grey.  Files of 1.6.x and before open as they were saved. |
@@ -27383,9 +27384,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.4_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.6.5_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.4-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.6.5-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -27441,8 +27442,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.4 -m "APlot 1.6.4"
-        git push origin v1.6.4
+        git tag -a v1.6.5 -m "APlot 1.6.5"
+        git push origin v1.6.5
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -28813,7 +28814,7 @@ The block is what the data operations work on:
 | Keys | What happens |
 | --- | --- |
 | `Ctrl/Cmd+C` | Copies the block as tab separated text - several rows and columns at once, ready for a spreadsheet program. |
-| `Ctrl/Cmd+V` | Writes tab separated text (from this program or another one) into the table, starting at the **top left cell of the block**; the shape of the text decides the shape of what is written, so a block of two columns fills two columns even when only one cell is selected.  The table grows if the text has more rows.  This also works while a cell is being edited - only a single value (no tabs, no line breaks) is pasted into the text of that cell. |
+| `Ctrl/Cmd+V` | Writes tab separated text (from this program or another one) into the table, starting at the **top left cell of the block**; the shape of the text decides the shape of what is written, so a block of two columns fills two columns even when only one cell is selected.  The table grows if the text is larger than the table: it gets new rows at the bottom and new columns on the right, so nothing pasted is cut off, and `Undo` takes the paste and the new rows and columns back in one step.  This also works while a cell is being edited - only a single value (no tabs, no line breaks) is pasted into the text of that cell. |
 | `Ctrl/Cmd+X` | Copies the block and empties it (inside a cell editor it cuts the selected text instead). |
 | `Ctrl/Cmd+D` | `Edit > Duplicate`: the block again, in the rows just under it.  (Filling down keeps the fill handle and the `Fill Down` line of the right click menu.) |
 | `Ctrl/Cmd+Z` | Takes the last change back; `Shift+Ctrl/Cmd+Z` does it again (see section 3). |
