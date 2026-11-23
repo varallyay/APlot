@@ -29,7 +29,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.6 (2026-11-23)**.  The number is written in one place
+This is **APlot 1.6.7 (2026-11-23)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -201,9 +201,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.6_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.6.7_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.6-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.6.7-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -267,8 +267,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.6 -m "APlot 1.6.6"
-        git push origin v1.6.6
+        git tag -a v1.6.7 -m "APlot 1.6.7"
+        git push origin v1.6.7
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -774,10 +774,15 @@ of sheets that are stuck together is a **group**: the X columns are matched
 up and every curve of the group stands in the same diagram.
 
 The X columns do not have to agree.  Whole numbers in one sheet and
-fractions in the other are compared as fractions, X values that are words
-are compared as words, and an X value that only one of the sheets has
-simply carries **no point** for the other one - its curve is not broken
-there.  An **empty cell inside** a sheet is a different matter: it stays a
+fractions in the other are compared as fractions, and an X value that only
+one of the sheets has simply carries **no point** for the other one - its
+curve is not broken there.  A **word** among the numbers of an X column -
+the column titles typed or pasted into the first row, say - is no number
+to put on the axis: its row carries no point, just as when the sheet is
+drawn on its own, and the other X values are still matched up and sorted
+**as numbers**.  Only when an X column holds no number at all are its
+values compared as words.  An **empty cell inside** a sheet is a
+different matter: it stays a
 real hole in that curve, exactly as it would be if the sheet were drawn on
 its own.
 

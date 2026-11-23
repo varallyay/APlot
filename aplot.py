@@ -111,7 +111,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.6 (2026-11-23) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+1.6.7 (2026-11-23) - see `APP_VERSION` below and VERSION_HISTORY.md (the
 same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -304,7 +304,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.6"
+APP_VERSION = "1.6.7"
 APP_VERSION_DATE = "2026-11-23"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -27326,7 +27326,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.6 (2026-11-23)**.  The number is written in one place
+This is **APlot 1.6.7 (2026-11-23)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27498,9 +27498,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.6_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.6.7_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.6-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.6.7-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -27564,8 +27564,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.6 -m "APlot 1.6.6"
-        git push origin v1.6.6
+        git tag -a v1.6.7 -m "APlot 1.6.7"
+        git push origin v1.6.7
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -28071,10 +28071,15 @@ of sheets that are stuck together is a **group**: the X columns are matched
 up and every curve of the group stands in the same diagram.
 
 The X columns do not have to agree.  Whole numbers in one sheet and
-fractions in the other are compared as fractions, X values that are words
-are compared as words, and an X value that only one of the sheets has
-simply carries **no point** for the other one - its curve is not broken
-there.  An **empty cell inside** a sheet is a different matter: it stays a
+fractions in the other are compared as fractions, and an X value that only
+one of the sheets has simply carries **no point** for the other one - its
+curve is not broken there.  A **word** among the numbers of an X column -
+the column titles typed or pasted into the first row, say - is no number
+to put on the axis: its row carries no point, just as when the sheet is
+drawn on its own, and the other X values are still matched up and sorted
+**as numbers**.  Only when an X column holds no number at all are its
+values compared as words.  An **empty cell inside** a sheet is a
+different matter: it stays a
 real hole in that curve, exactly as it would be if the sheet were drawn on
 its own.
 
@@ -31047,6 +31052,7 @@ The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.7 | 2026-11-23 | **Sheets drawn together (`Plot with previous tab`) whose first row holds the column titles are drawn right**: a word in the X column made the whole column text, so the X values were sorted alphabetically (`-0.0, -179, -180, ..., 195, 25`) and the curves ran back and forth across the diagram.  The X values are now matched up as numbers whenever every sheet has numbers there; a word in X carries no point, as it does when the sheet is drawn alone.  **Faster too**: the empty rows at the end of the sheets were paired with each other - two sheets of a thousand rows made a table of almost a million rows for the diagram; rows without X are now left out before the sheets are matched up. |
 | 1.6.6 | 2026-11-23 | **A diagram copied on Windows (`Ctrl+C`) pastes into PowerPoint with a white page, not a grey one**: the picture is put on the clipboard of Windows as a PNG - what PowerPoint, Word and the browsers take, a see-through page and all, as on a Mac - and as a bitmap laid on white for the programs that know no PNG.  The .NET way used before laid the picture on light grey, so a diagram with a white or a see-through page arrived grey.  **The version history has a file of its own**, `VERSION_HISTORY.md`, instead of being a part of the README; `Help > Version history` shows it, and `Check for updates` reads what is new from it.  **Updates of the packages made safer**: the helper that installs the `.msi` waits until APlot has closed and works outside the folder of APlot (as FSP Viewer showed, Windows cannot replace a folder that a process stands in), and it is a batch file again that gets its paths in environment variables - a graph whose path had a space or a bracket in it kept the old helper from starting at all; the `.dmg` copies the new APlot.app beside the old one and puts it in place only when APlot has closed, instead of replacing the bundle of the running APlot; the new APlot starts afresh, in the home folder; and when the new version could not be put in place, the old one says so at its next start, with the reason, instead of starting as if it had been updated. |
 | 1.6.5 | 2026-11-19 | **A block pasted into the data sheet that is larger than the sheet makes the sheet larger** (`Ctrl/Cmd+V`): it gets new columns on the right and new rows at the bottom, so nothing pasted is cut off - three columns pasted at column I of a 10-column sheet fill I, J and a new column K, where the third column used to be lost.  The new rows come whether or not `Add a new row when leaving the last one` is ticked (that setting is about moving past the last row while typing), and `Undo` takes the paste back together with the new rows and columns, in one step. |
 | 1.6.4 | 2026-11-18 | **Every package of the Releases page carries its own Python** - nothing else to install, no Python on the computer: besides the portable Windows `.zip` there are an `.msi` for Windows, a `.dmg` for Macs with Apple Silicon and one for Intel, and **the `.deb` and the `.rpm` now hold APlot with its own Python** in `/usr/lib/aplot` (the thumbnailer and "Preview all graphs" run on it too), replacing the ones that needed the distribution's Python.  **A self-contained APlot updates itself from the releases**: `Check for updates` asks GitHub for the newest release, downloads the package of this computer - checked against its size and SHA-256 - and installs it (the portable one unpacks it for the user, and the old folder hands over to it; the `.msi` runs its installer; the `.dmg` replaces APlot.app; the `.deb` and `.rpm` go through the package manager), instead of a new `aplot.py` that might need more than the Python inside.  A plain `aplot.py` is updated from `main` as before.  **GitHub builds, installs and tests every package** (`.github/workflows/packages.yml`) and only then publishes the release with all of them at once - the releases of the repository are immutable, which left 1.6.3 without its `.zip`. |
@@ -33857,6 +33863,20 @@ class App:
         return int(numbers.notna().sum()) == int(present.sum())
 
     @staticmethod
+    def has_numbers(values):
+        """True when at least one value of the column is a number.
+
+        A diagram only ever draws a number on its X axis: a word in the X
+        column - the title of the column typed into its first row, say - is
+        a hole in the curve, just as an empty cell is.  So the X values of
+        a group of sheets are matched up as numbers as soon as every sheet
+        has numbers there at all; one word among them must not make the
+        whole column text, sorted alphabetically (-0.5, -10, -2, 1, 15, 3),
+        and the curves zigzag across the diagram.
+        """
+        return bool(pd.to_numeric(values, errors="coerce").notna().any())
+
+    @staticmethod
     def merge_key(values, numeric):
         """The X column of one sheet, in the dtype the whole group shares.
 
@@ -33934,7 +33954,7 @@ class App:
         pieces = [(own_x, names, self.tables[number].plot_dataframe(1).copy())
                   for number, own_x, names in parts]
         # the whole group is matched up on one kind of X value
-        numeric = all(self.all_numbers(frame[own_x])
+        numeric = all(self.has_numbers(frame[own_x])
                       for own_x, _names, frame in pieces)
         merged = None
         for own_x, names, frame in pieces:
@@ -33945,6 +33965,15 @@ class App:
                 # an empty row keeps its place among the others, and so
                 # stays a hole in the curve
                 frame[own_x] = self.hold_hole_places(frame[own_x])
+                placed = frame[own_x].notna()
+            else:
+                placed = ~frame[own_x].isin(["", "None", "nan"])
+            # a row still without X is before the first or after the last
+            # row of the sheet (the unused rows at its end, a title in its
+            # first row): it is not drawn, and left in, the merge would pair
+            # the empty rows of one sheet with every empty row of the other
+            # - a thousand times a thousand rows
+            frame = frame[placed]
             frame = frame.rename(columns={**names, own_x: base_x})
             if merged is None:
                 merged = frame
