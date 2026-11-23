@@ -44,7 +44,8 @@ Files
 * .aplt (a ZIP container: the JSON document plus a PNG picture of the
   graph) for the data together with every property of every open
   diagram - File > Save graph / Open graph
-* Help > Documentation shows README.md (the same text is in this file)
+* Help > Documentation shows README.md (the same text is in this file),
+  Help > Version history VERSION_HISTORY.md (also in this file)
 
 Plot window
 -----------
@@ -110,8 +111,8 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.5 (2026-11-19) - see `APP_VERSION` below and "Version history" in the
-documentation.  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
+1.6.6 (2026-11-23) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
 ----------
@@ -132,6 +133,7 @@ import os
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -238,6 +240,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import (LightSource, LogNorm, Normalize, to_hex,
                                to_rgba)
 from matplotlib.figure import Figure
+import matplotlib.image
 from matplotlib.image import BboxImage
 from matplotlib.legend import Legend
 from matplotlib.legend_handler import HandlerTuple
@@ -298,11 +301,11 @@ APP_NAME = "APlot"
 #   MINOR  (1.0.1 -> 1.1.0)  something new; files of older versions open
 #   MAJOR  (1.1.0 -> 2.0.0)  a change older versions cannot follow (the
 #                            .aplt file changed in a way they cannot read)
-# Each release also gets a line in "Version history" of DOCUMENTATION, the
+# Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.5"
-APP_VERSION_DATE = "2026-11-19"
+APP_VERSION = "1.6.6"
+APP_VERSION_DATE = "2026-11-23"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -941,24 +944,166 @@ def make_letter_icon(letter="T", size=24, color="#000000"):
     return icon
 
 
-def copy_png_to_clipboard(path):
+def png_pixels_on_white(path):
+    """The pixels of a PNG file laid on white paper: rows of 8-bit RGB.
+
+    What is see-through in the picture becomes white, and what is half
+    see-through (the soft edge of a line) is mixed with white - what the
+    picture looks like on a white page.
+    """
+    pixels = np.asarray(matplotlib.image.imread(str(path)))
+    if pixels.dtype.kind in "ui":                      # 0 ... 255
+        pixels = pixels.astype(np.float64) / 255.0
+    if pixels.ndim == 2:                               # grey
+        pixels = np.dstack([pixels] * 3)
+    pixels = pixels.astype(np.float64)
+    colour = pixels[..., :3]
+    if pixels.shape[2] == 4:
+        alpha = pixels[..., 3:4]
+        colour = colour * alpha + (1.0 - alpha)
+    return np.clip(np.rint(colour * 255.0), 0, 255).astype(np.uint8)
+
+
+def dib_from_pixels(rgb, dpi=None):
+    """A device independent bitmap (`CF_DIB`): rows of 8-bit RGB as a
+    24-bit BITMAPINFOHEADER and its pixels, bottom row first."""
+    height, width = int(rgb.shape[0]), int(rgb.shape[1])
+    stride = (width * 3 + 3) & ~3                  # rows end on 4 bytes
+    rows = np.zeros((height, stride), dtype=np.uint8)
+    rows[:, :width * 3] = rgb[::-1, :, ::-1].reshape(height, width * 3)
+    per_metre = int(round(float(dpi) / 0.0254)) if dpi else 0
+    header = struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0,
+                         stride * height, per_metre, per_metre, 0, 0)
+    return header + rows.tobytes()
+
+
+def windows_clipboard_put(items):
+    """Put several formats on the clipboard of Windows at once.
+
+    `items` are (format, bytes) pairs; a format is a number (`CF_DIB` is
+    8) or the name of a registered one ("PNG").  Written straight through
+    the Win32 calls: nothing has to be installed, and no other program
+    changes the picture on its way.  True when at least one was put there.
+    """
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+    user32.RegisterClipboardFormatW.restype = wintypes.UINT
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.restype = wintypes.HGLOBAL
+    moveable = 0x0002                                  # GMEM_MOVEABLE
+    # another program may hold the clipboard for a moment
+    for _attempt in range(20):
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        return False
+    put = 0
+    try:
+        if not user32.EmptyClipboard():
+            return False
+        for kind, data in items:
+            code = kind if isinstance(kind, int) \
+                else user32.RegisterClipboardFormatW(str(kind))
+            data = bytes(data)
+            if not code or not data:
+                continue
+            handle = kernel32.GlobalAlloc(moveable, len(data))
+            if not handle:
+                continue
+            pointer = kernel32.GlobalLock(handle)
+            if not pointer:
+                kernel32.GlobalFree(handle)
+                continue
+            ctypes.memmove(pointer, data, len(data))
+            kernel32.GlobalUnlock(handle)
+            # the system owns the memory from now on - unless it refused it
+            if user32.SetClipboardData(code, handle):
+                put += 1
+            else:
+                kernel32.GlobalFree(handle)
+    finally:
+        user32.CloseClipboard()
+    return put > 0
+
+
+def copy_png_to_clipboard_windows(path, dpi=None):
+    """The picture on the clipboard of Windows, in the two forms programs
+    read: the PNG itself ("PNG" - what PowerPoint, Word and the browsers
+    take, see-through parts and all, as on a Mac) and a bitmap laid on
+    white (`CF_DIB`) for the programs that know no PNG.
+
+    The .NET way (`Clipboard.SetImage`) turned the picture into a bitmap
+    laid on light grey, so a diagram with a white or see-through page
+    arrived grey in PowerPoint.  It is only the last resort here, and it
+    is given a picture already laid on white.
+    """
+    path = str(path)
+    try:
+        with open(path, "rb") as handle:
+            png = handle.read()
+        white = png_pixels_on_white(path)
+    except (OSError, ValueError, SyntaxError) as _error:
+        return False
+    try:
+        if windows_clipboard_put([("PNG", png),
+                                  (8, dib_from_pixels(white, dpi))]):
+            return True
+    except (OSError, AttributeError, ValueError, TypeError):
+        pass
+    # the last resort: no see-through part left for .NET to make grey
+    opaque = os.path.splitext(path)[0] + "_white.png"
+    try:
+        matplotlib.image.imsave(opaque, white, dpi=dpi or 100)
+    except (OSError, ValueError):
+        return False
+    if shutil.which("powershell") is None:
+        return False
+    powershell = (
+        "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+        "[System.Windows.Forms.Clipboard]::SetImage("
+        f"[System.Drawing.Image]::FromFile('{opaque}'))")
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-Command", powershell],
+                       check=True, timeout=20, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def copy_png_to_clipboard(path, dpi=None):
     """Put a PNG file on the clipboard of the system.
 
     Every desktop does this its own way and none of them through Tk, so the
-    small command line tool of the platform is used.  Returns True when one
-    of them was there and did the work.
+    small command line tool of the platform is used (on Windows the Win32
+    calls themselves).  Returns True when one of them was there and did
+    the work.
     """
     path = str(path)
+    if sys.platform.startswith("win"):
+        return copy_png_to_clipboard_windows(path, dpi=dpi)
     if sys.platform == "darwin":
         script = ('set the clipboard to '
                   f'(read (POSIX file "{path}") as \u00abclass PNGf\u00bb)')
         commands = [["osascript", "-e", script]]
-    elif sys.platform.startswith("win"):
-        powershell = (
-            "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
-            "[System.Windows.Forms.Clipboard]::SetImage("
-            f"[System.Drawing.Image]::FromFile('{path}'))")
-        commands = [["powershell", "-NoProfile", "-Command", powershell]]
     else:
         commands = [["xclip", "-selection", "clipboard", "-t", "image/png",
                      "-i", path],
@@ -24365,7 +24510,7 @@ class PlotWindow(tk.Toplevel):
             messagebox.showerror("Error", f"Could not draw the picture: {error}",
                                  parent=self)
             return False
-        if copy_png_to_clipboard(path):
+        if copy_png_to_clipboard(path, dpi=CLIPBOARD_DPI):
             PlotWindow._figure_stamp = time.monotonic()
             self.remember_clipboard()
             self.flash("The diagram is on the clipboard as a picture")
@@ -27181,7 +27326,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.5 (2026-11-19)**.  The number is written in one place
+This is **APlot 1.6.6 (2026-11-23)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27197,8 +27342,10 @@ The numbers follow **Semantic Versioning**, `MAJOR.MINOR.PATCH`:
 
 A release is made in four small steps: raise `APP_VERSION` and set
 `APP_VERSION_DATE`, write the same number into the description at the top
-of `aplot.py`, add a line to the **Version history** below, and - with git
-keeping the history of the code - commit and tag it:
+of `aplot.py`, add a line at the top of the table in
+`VERSION_HISTORY.md` and the same line in `VERSION_HISTORY` of `aplot.py`
+(the program carries the history too), and - with git keeping the history
+of the code - commit and tag it:
 
     git commit -am "APlot 1.0.1"
     git tag -a v1.0.1 -m "APlot 1.0.1"
@@ -27209,10 +27356,10 @@ exactly as it was.  Pushing the tag (`git push origin v1.0.1`) also builds
 every installable package on GitHub (see `Installable packages`).
 
 **Publishing a release** for everybody's `Check for updates` is pushing
-the new `aplot.py` and `README.md` to the `main` branch of
-<https://github.com/varallyay/APlot> - the updates read the version from
-the `aplot.py` there, and what is new from the version history of the
-`README.md` there.  When the Quick Look extensions of the Mac have changed,
+the new `aplot.py`, `README.md` and `VERSION_HISTORY.md` to the `main`
+branch of <https://github.com/varallyay/APlot> - the updates read the
+version from the `aplot.py` there, and what is new from the
+`VERSION_HISTORY.md` there.  When the Quick Look extensions of the Mac have changed,
 raise `QUICKLOOK_VERSION` (next to `APP_VERSION`) and push the new
 `APlotQuickLook.zip` too: an update then tells Mac users to build them
 again.
@@ -27238,7 +27385,7 @@ the version is the newest, nothing is said at all.
   APlot and be the version that was announced - keeps a **copy of the old
   version** in `~/.aplot/backups` (`aplot-1.2.0.py`, say), puts the new
   one in place of the running file in one step, updates a `README.md`
-  lying beside it, and **starts APlot again**, with the graph that was
+  and a `VERSION_HISTORY.md` lying beside it, and **starts APlot again**, with the graph that was
   open.  On a Mac it stays the same program in the Dock.  Nothing is left
   for the user to do - wherever the running file lies:
   * **the installed APlot** (`APlot.app`, or the copy the Linux menu
@@ -27310,42 +27457,9 @@ that runs, and the update window says it too.
 
 ### Version history
 
-| Version | Date | What changed |
-| --- | --- | --- |
-| 1.6.5 | 2026-11-19 | **A block pasted into the data sheet that is larger than the sheet makes the sheet larger** (`Ctrl/Cmd+V`): it gets new columns on the right and new rows at the bottom, so nothing pasted is cut off - three columns pasted at column I of a 10-column sheet fill I, J and a new column K, where the third column used to be lost.  The new rows come whether or not `Add a new row when leaving the last one` is ticked (that setting is about moving past the last row while typing), and `Undo` takes the paste back together with the new rows and columns, in one step. |
-| 1.6.4 | 2026-11-18 | **Every package of the Releases page carries its own Python** - nothing else to install, no Python on the computer: besides the portable Windows `.zip` there are an `.msi` for Windows, a `.dmg` for Macs with Apple Silicon and one for Intel, and **the `.deb` and the `.rpm` now hold APlot with its own Python** in `/usr/lib/aplot` (the thumbnailer and "Preview all graphs" run on it too), replacing the ones that needed the distribution's Python.  **A self-contained APlot updates itself from the releases**: `Check for updates` asks GitHub for the newest release, downloads the package of this computer - checked against its size and SHA-256 - and installs it (the portable one unpacks it for the user, and the old folder hands over to it; the `.msi` runs its installer; the `.dmg` replaces APlot.app; the `.deb` and `.rpm` go through the package manager), instead of a new `aplot.py` that might need more than the Python inside.  A plain `aplot.py` is updated from `main` as before.  **GitHub builds, installs and tests every package** (`.github/workflows/packages.yml`) and only then publishes the release with all of them at once - the releases of the repository are immutable, which left 1.6.3 without its `.zip`. |
-| 1.6.3 | 2026-11-18 | **APlot on Windows without installing anything, and without Python**: `APlot-<version>-Windows-portable.zip` on the Releases page is the folder of the self-contained APlot (`APlot.exe` with a Python of its own) - unpack it anywhere, a server or a network share too, and start `APlot.exe`; nothing is installed and the registry is never touched.  The file `PORTABLE` beside `APlot.exe` tells it from the `.msi`'s (`Help > About APlot` says "portable"); an update goes, as for every self-contained APlot, into `%LOCALAPPDATA%\\APlot` of the user, so the folder itself may be read-only.  It is built by `.github/workflows/windows-portable.yml` on GitHub's Windows machine for every version tag (and by hand), with the exact package versions of `packaging/requirements-windows.txt`.  **The built program tests itself** before it is packed (`APlot.exe --self-test REPORT`): the libraries, the windows, a line diagram and a `3D Surface`, saving a graph and opening it again.  It found two gaps of every self-contained APlot, now closed: **Excel files** (openpyxl was left out) and **saving a picture as .svg, .eps or .ps** (matplotlib loads those writers by name). Linux, macOS and the plain `aplot.py` work as before. |
-| 1.6.2 | 2026-11-17 | Two completions of the `3D Surface`.  **A double click on the numbers of the X or the Y axis opens the page of that axis** in `Axes properties`, as it always did for the Z axis: the labels of the X and the Y axis are written slanted, and the upright rectangle around such a label - the one that was asked whether the pointer is on the label - reached over the numbers, so the double click opened the label instead (or did nothing).  A slanted text is now asked for along its own lines.  **`Parallel offset [px]`**, a new box to the right of `Number offset [px]` on the three axis pages: it slides the numbers **along** their axis in space - towards the end where the numbers grow when it is positive, the other way when it is negative, 0 to begin with - where `Number offset` moves them away from the axis.  It is saved with the diagram and taken back by `Undo`; on a flat diagram the box is grey.  Files of 1.6.x and before open as they were saved. |
-| 1.6.1 | 2026-11-16 | Two corrections of the `3D Surface`.  **The numbers of an axis no longer double when their font is made a little smaller**: the automatic ticks of the X and the Y axis of the box were those of the flat axes underneath, which are as long as the whole plot area - so at 11 pt instead of 12 pt twice as many numbers could be asked for as fit along the much shorter axis in space, and they stood on one another.  The automatic ticks of all three axes are now counted from the length the axis has in space and the size of its numbers; they do not change while the view is turned, and an interval typed into `Major ticks interval` is kept as before.  **The surface is no longer cut at the edge of the plot area**: the box in space reaches a little beyond the plot area it is drawn into, and at some views (an elevation of 42 and an azimuth of 56 degrees, for one) the corner of the surface nearest to the viewer was missing - the paper showed through.  The exported program draws the surface uncut too. |
-| 1.6.0 | 2026-11-16 | The axes of a `3D Surface` have **minor ticks** and can be **logarithmic** - all three of them.  **Minor ticks**: `Minor ticks` of an axis page draws that many between two major ticks of the X, the Y and the Z axis of the box; they are shorter than the major ones (by what `Minor tick length` is of `Major tick length` in `Frame and origin`), carry no numbers, and draw no lines on the walls unless `Minor grid lines` is switched on.  **Logarithmic axes**: the `Scale` box of the `Z axis` page is no longer grey, and `Log 10`, `Log 2` and `Log (natural)` of the X and the Y page now really spread the surface logarithmically (until now the box in space stayed linear whatever they said).  The numbers are written as powers, `Major ticks interval` counts powers and the minor ticks stand on 2, 3 ... 9, as on a flat diagram; values at or below zero have no place on such an axis and are left out; the colours and the colour bar go on counting in the values.  **The matplotlib underneath is looked at when the program starts**: from matplotlib 3.11 on a logarithmic axis in space is drawn by matplotlib itself; on an older one APlot draws the logarithms of the values on a linear axis and writes the numbers as powers - the picture is the same.  The exported program writes such an axis that second way, so it runs on every matplotlib.  Besides, on matplotlib 3.11 a **dragged label** of an axis in space is no longer cut off the copied picture (matplotlib 3.11 measures the labels itself, but where they stood before they were dragged).  Files of 1.5.x open as they were saved. |
-| 1.5.3 | 2026-11-16 | A correction of the `3D Surface`: **the copied picture no longer cuts through the label of the Z axis**.  `Copy figure to the clipboard`, a saved picture, the preview and the thumbnail cut the graph out of the page, and the labels of the three axes in space were not counted into its size - so a label standing at the edge of the graph, mostly that of the Z axis, lost most of its letters.  The three labels are measured in now, wherever they were dragged. |
-| 1.5.2 | 2026-11-15 | The **Z axis** of a `3D Surface` has **the same page as the X and the Y axis** in `Axes properties`: direction (`No Z axis`, `Standard`, `Reverse`), the label with its switch, font, colour and offset, the numbers with their switch, font, colour and offset, the automatic range and `Begin and end on a major tick`, `From` / `To`, the interval of the major ticks, the colour of the axis and its grid.  Those settings now act on **all three** axes of the box - the grid of each axis is the net its numbers draw on the walls, in the colour, style and width of its page - and a 3D surface opens with the three grids switched on.  The Z range and the Z label have left the curve properties for that page.  The curve properties of a 3D surface have the **`Shading`** of the colour surface: `Flat` paints every cell of the grid in one colour, `Smooth` draws up to four times as many points between the points, so that the steps of colour disappear - and a new switch, **`Light and shadow on the surface`**, lights the surface from the upper left so that its shape shows.  Files of 1.5.0 and 1.5.1 open as they were saved. |
-| 1.5.1 | 2026-11-15 | Four corrections of the `3D Surface`.  **(1)** A range of an axis made **smaller than the data** no longer lets the surface hang out of the box over the numbers and the labels: the surface is drawn from the points inside the three ranges only, and drawn again whenever a range changes (the exported program cuts it the same way).  **(2)** `Axes properties` has a **`Z axis` page** while the diagram is in space: the label with its font, the range (`Automatic`, `From`, `To`), the step of the numbers and their font.  **(3)** A **double click on the numbers** of the X, the Y or the Z axis opens the page of that axis, as in every other diagram - and so does a double click on the line of an axis; a single press on the numbers carries the graph.  **(4)** The **frame style** acts on the box: `No frame` draws the three axes alone, without the walls and their net; the other styles draw the walls, with the ticks pointing in or out as the style says.  The thickness of the frame, the length of the ticks, the colour of each axis and the colour of the plot area are taken over as well.  A diagram that opens as a 3D surface starts with `Full frame`. |
-| 1.5.0 | 2026-11-15 | The first version that draws in **three dimensions**: the new plot style `3D Surface` draws x, y, z columns - the same columns a `Colour Surface (pcolor)` reads - as a **surface in space** (`ax.plot_surface`; points that stand on no grid are joined into triangles).  **Dragging the surface turns it** in any direction, and the two angles of the view (`Elevation`, `Azimuth`) stand in the curve properties, where they can be typed in and where they follow the pointer.  **An axis is selected by a click on its line** and made **longer or shorter by its two ends**, as the axes of every other diagram are; dragging the line carries the whole graph.  The **labels of the three axes** are dragged, written in place by a slow second click and opened by a double click like any other label.  The colour scale, its range and the logarithmic scale are those of the colour surface; the **colour bar is off to begin with** and is switched on in the curve properties.  The view is taken back by `Undo`, saved with the diagram and written into the exported matplotlib program.  Besides, a diagram that opens as a `Colour Surface (pcolor)`, as `Contour Lines` or as `Filled Contours` now has **`Frame with ticks (outward)`** to begin with. |
-| 1.4.5 | 2026-11-13 | The **range of the colours** is set at the colour bar itself: a **double click on the bar** opens a new `Colour bar` window with `Lowest` and `Highest` value of the colour scale.  The two fields show the **whole range of the data** to begin with; another number typed in lays the whole colour scale over a **narrower** range (the colours spread out over the part that matters - what a logarithmic scale of many decades needs to show its features) or over a **wider** one (they are squeezed).  An end left as it was goes on following the data, `Whole range of the data` lets both ends go again, and the window also holds the `Logarithmic colour scale` switch, the label of the bar and a `Curve properties...` button.  A **2D Histogram** has the range too (`Lowest count`, `Highest count`, also in its curve properties), and its colour bar can now have a label.  The **label of the colour bar is a text of its own**: it is **dragged with the pointer** like the label of an axis - without its bar - and moved by the arrow keys; it follows the bar when that is moved, its place is saved with the diagram, taken back by `Undo`, written into the exported program, and `Reset dragged texts` puts it back beside the bar. |
-| 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
-| 1.4.3 | 2026-11-13 | The axes of the three **x, y, z** styles - `Colour Surface (pcolor)`, `Contour Lines` and `Filled Contours` - **begin and end on a major tick**, as the axes of every other plot style do: the automatic range is rounded out to the ticks around the surface instead of stopping at its edge.  Where the surface ends between two ticks a narrow strip of the plot area stays empty beside it; `Begin and end on a major tick` of `Axes properties` switches the rounding off for one axis, and the surface fills its plot area to the edge again.  A diagram saved by 1.4.0 - 1.4.2 opens as it was saved.  `Exchange the X and Y axes (turn the picture)` turns contour lines and filled contours exactly as it turns a colour surface - over a grid or over scattered points - and the ticks at the two ends of the axes change places with the rest. |
-| 1.4.2 | 2026-11-13 | The report at the first start after an update - *"APlot has been updated from ... to ..."*, what is new and what is left to do - is a window of its own with a **scroll bar** instead of a message box, which grew with its text until its button was below the screen: the window is never taller than the main (data sheet) window, the rest is reached by scrolling, and it lists every version since the one that was updated, not only the newest six; `OK`, `Return` or `Esc` closes it, and the program can be used while it is open.  The window that offers a newer version keeps within the height of the main window too, and shows up to 20 lines of what is new. |
-| 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
-| 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
-| 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
-| 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
-| 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
-| 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
-| 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
-| 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
-| 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
-| 1.3.3 | 2026-10-07 | APlot opened and closed again without anything done to it closes without asking about saving: the empty columns the blank sheet grows to fill a wider window are no edit any more, and a cell that was only clicked into (its editor opened and left with the same text) stays exactly as it was - before, it could come back as another type and count as a change. |
-| 1.3.2 | 2026-10-06 | Works with pandas 3, which a fresh `pip install pandas` brings (a number calculated by Column Math into an empty column was refused); opening an Excel file no longer reports an error after reading it; a missing package is named with the command that installs it; new section `Installing Python and the packages` (why `pip` is "command not found", python.org Python on a Mac, apt on Linux, a virtual environment anywhere). |
-| 1.3.1 | 2026-10-05 | The cells of the sheet are divided by a light grey net, one pixel wide, beside the row numbers too; it lies under the blue outline, and a click, a drag or the wheel on a line reaches the cell under it (`SHEET_GRID`, `SHEET_GRID_COLOR` at the top of `aplot.py`). |
-| 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
-| 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
-| 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
-| 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
-| 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
-| 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
-| 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
-
+What changed in each version is in its own file,
+[`VERSION_HISTORY.md`](VERSION_HISTORY.md), the newest version first;
+in APlot, `Help > Version history` shows it.
 
 ## Installable packages
 
@@ -27384,9 +27498,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.5_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.6.6_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.5-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.6.6-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -27404,13 +27518,21 @@ downloads it - checked against the size and the SHA-256 that GitHub gives
   on the `APlot.exe` of the old folder hands over to the newest copy there,
   so a shared, read-only folder works for everybody.  To update the
   folder itself, unpack the new `.zip` in its place;
-* the **.msi** runs its installer as APlot closes and starts the new one;
-* the **.dmg** puts the new APlot.app in the place of the old one (asking
+* the **.msi** runs its installer when APlot has closed - a small helper
+  waits for that, outside the folder of APlot, which the installer
+  replaces - and starts the new one;
+* the **.dmg** copies the new APlot.app beside the old one, and a small
+  helper puts it in the place of the old one when APlot has closed (asking
   for the password of an administrator when only one may write there) and
-  starts it - or opens the disk image when that cannot be done;
+  starts it - or opens the disk image when it cannot be copied;
 * the **.deb and .rpm** are installed with the package manager (apt, dnf
   or zypper), which asks for the password of an administrator; without it
   APlot says the command to type.
+
+When the new version could not be put in place - the installer failed, the
+old APlot.app could not be moved - the old one is started again and **says
+so at its start**, with the reason, instead of going on as if it had been
+updated; `Help > Check for updates...` then tries again.
 
 A release is published only when every package is in it, so APlot never
 finds a release without its package.  An APlot that runs on a Python of
@@ -27442,8 +27564,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.5 -m "APlot 1.6.5"
-        git push origin v1.6.5
+        git tag -a v1.6.6 -m "APlot 1.6.6"
+        git push origin v1.6.6
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -30909,6 +31031,59 @@ that are **already open** as well, so the effect can be seen at once.
 """
 
 
+# The version history: the same text as VERSION_HISTORY.md (Help >
+# Version history, and the first start after an update says from it
+# what is new).
+VERSION_HISTORY = """\
+# APlot - Version history
+
+What changed in each version of APlot, the newest first.  The version
+that runs is named in `Help > About APlot`; this list is also in the
+program itself (`Help > Version history`), and `Check for updates`
+reads what is new in a newer version from this file on GitHub.
+
+The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
+`Version` in `README.md`.
+
+| Version | Date | What changed |
+| --- | --- | --- |
+| 1.6.6 | 2026-11-23 | **A diagram copied on Windows (`Ctrl+C`) pastes into PowerPoint with a white page, not a grey one**: the picture is put on the clipboard of Windows as a PNG - what PowerPoint, Word and the browsers take, a see-through page and all, as on a Mac - and as a bitmap laid on white for the programs that know no PNG.  The .NET way used before laid the picture on light grey, so a diagram with a white or a see-through page arrived grey.  **The version history has a file of its own**, `VERSION_HISTORY.md`, instead of being a part of the README; `Help > Version history` shows it, and `Check for updates` reads what is new from it.  **Updates of the packages made safer**: the helper that installs the `.msi` waits until APlot has closed and works outside the folder of APlot (as FSP Viewer showed, Windows cannot replace a folder that a process stands in), and it is a batch file again that gets its paths in environment variables - a graph whose path had a space or a bracket in it kept the old helper from starting at all; the `.dmg` copies the new APlot.app beside the old one and puts it in place only when APlot has closed, instead of replacing the bundle of the running APlot; the new APlot starts afresh, in the home folder; and when the new version could not be put in place, the old one says so at its next start, with the reason, instead of starting as if it had been updated. |
+| 1.6.5 | 2026-11-19 | **A block pasted into the data sheet that is larger than the sheet makes the sheet larger** (`Ctrl/Cmd+V`): it gets new columns on the right and new rows at the bottom, so nothing pasted is cut off - three columns pasted at column I of a 10-column sheet fill I, J and a new column K, where the third column used to be lost.  The new rows come whether or not `Add a new row when leaving the last one` is ticked (that setting is about moving past the last row while typing), and `Undo` takes the paste back together with the new rows and columns, in one step. |
+| 1.6.4 | 2026-11-18 | **Every package of the Releases page carries its own Python** - nothing else to install, no Python on the computer: besides the portable Windows `.zip` there are an `.msi` for Windows, a `.dmg` for Macs with Apple Silicon and one for Intel, and **the `.deb` and the `.rpm` now hold APlot with its own Python** in `/usr/lib/aplot` (the thumbnailer and "Preview all graphs" run on it too), replacing the ones that needed the distribution's Python.  **A self-contained APlot updates itself from the releases**: `Check for updates` asks GitHub for the newest release, downloads the package of this computer - checked against its size and SHA-256 - and installs it (the portable one unpacks it for the user, and the old folder hands over to it; the `.msi` runs its installer; the `.dmg` replaces APlot.app; the `.deb` and `.rpm` go through the package manager), instead of a new `aplot.py` that might need more than the Python inside.  A plain `aplot.py` is updated from `main` as before.  **GitHub builds, installs and tests every package** (`.github/workflows/packages.yml`) and only then publishes the release with all of them at once - the releases of the repository are immutable, which left 1.6.3 without its `.zip`. |
+| 1.6.3 | 2026-11-18 | **APlot on Windows without installing anything, and without Python**: `APlot-<version>-Windows-portable.zip` on the Releases page is the folder of the self-contained APlot (`APlot.exe` with a Python of its own) - unpack it anywhere, a server or a network share too, and start `APlot.exe`; nothing is installed and the registry is never touched.  The file `PORTABLE` beside `APlot.exe` tells it from the `.msi`'s (`Help > About APlot` says "portable"); an update goes, as for every self-contained APlot, into `%LOCALAPPDATA%\\APlot` of the user, so the folder itself may be read-only.  It is built by `.github/workflows/windows-portable.yml` on GitHub's Windows machine for every version tag (and by hand), with the exact package versions of `packaging/requirements-windows.txt`.  **The built program tests itself** before it is packed (`APlot.exe --self-test REPORT`): the libraries, the windows, a line diagram and a `3D Surface`, saving a graph and opening it again.  It found two gaps of every self-contained APlot, now closed: **Excel files** (openpyxl was left out) and **saving a picture as .svg, .eps or .ps** (matplotlib loads those writers by name). Linux, macOS and the plain `aplot.py` work as before. |
+| 1.6.2 | 2026-11-17 | Two completions of the `3D Surface`.  **A double click on the numbers of the X or the Y axis opens the page of that axis** in `Axes properties`, as it always did for the Z axis: the labels of the X and the Y axis are written slanted, and the upright rectangle around such a label - the one that was asked whether the pointer is on the label - reached over the numbers, so the double click opened the label instead (or did nothing).  A slanted text is now asked for along its own lines.  **`Parallel offset [px]`**, a new box to the right of `Number offset [px]` on the three axis pages: it slides the numbers **along** their axis in space - towards the end where the numbers grow when it is positive, the other way when it is negative, 0 to begin with - where `Number offset` moves them away from the axis.  It is saved with the diagram and taken back by `Undo`; on a flat diagram the box is grey.  Files of 1.6.x and before open as they were saved. |
+| 1.6.1 | 2026-11-16 | Two corrections of the `3D Surface`.  **The numbers of an axis no longer double when their font is made a little smaller**: the automatic ticks of the X and the Y axis of the box were those of the flat axes underneath, which are as long as the whole plot area - so at 11 pt instead of 12 pt twice as many numbers could be asked for as fit along the much shorter axis in space, and they stood on one another.  The automatic ticks of all three axes are now counted from the length the axis has in space and the size of its numbers; they do not change while the view is turned, and an interval typed into `Major ticks interval` is kept as before.  **The surface is no longer cut at the edge of the plot area**: the box in space reaches a little beyond the plot area it is drawn into, and at some views (an elevation of 42 and an azimuth of 56 degrees, for one) the corner of the surface nearest to the viewer was missing - the paper showed through.  The exported program draws the surface uncut too. |
+| 1.6.0 | 2026-11-16 | The axes of a `3D Surface` have **minor ticks** and can be **logarithmic** - all three of them.  **Minor ticks**: `Minor ticks` of an axis page draws that many between two major ticks of the X, the Y and the Z axis of the box; they are shorter than the major ones (by what `Minor tick length` is of `Major tick length` in `Frame and origin`), carry no numbers, and draw no lines on the walls unless `Minor grid lines` is switched on.  **Logarithmic axes**: the `Scale` box of the `Z axis` page is no longer grey, and `Log 10`, `Log 2` and `Log (natural)` of the X and the Y page now really spread the surface logarithmically (until now the box in space stayed linear whatever they said).  The numbers are written as powers, `Major ticks interval` counts powers and the minor ticks stand on 2, 3 ... 9, as on a flat diagram; values at or below zero have no place on such an axis and are left out; the colours and the colour bar go on counting in the values.  **The matplotlib underneath is looked at when the program starts**: from matplotlib 3.11 on a logarithmic axis in space is drawn by matplotlib itself; on an older one APlot draws the logarithms of the values on a linear axis and writes the numbers as powers - the picture is the same.  The exported program writes such an axis that second way, so it runs on every matplotlib.  Besides, on matplotlib 3.11 a **dragged label** of an axis in space is no longer cut off the copied picture (matplotlib 3.11 measures the labels itself, but where they stood before they were dragged).  Files of 1.5.x open as they were saved. |
+| 1.5.3 | 2026-11-16 | A correction of the `3D Surface`: **the copied picture no longer cuts through the label of the Z axis**.  `Copy figure to the clipboard`, a saved picture, the preview and the thumbnail cut the graph out of the page, and the labels of the three axes in space were not counted into its size - so a label standing at the edge of the graph, mostly that of the Z axis, lost most of its letters.  The three labels are measured in now, wherever they were dragged. |
+| 1.5.2 | 2026-11-15 | The **Z axis** of a `3D Surface` has **the same page as the X and the Y axis** in `Axes properties`: direction (`No Z axis`, `Standard`, `Reverse`), the label with its switch, font, colour and offset, the numbers with their switch, font, colour and offset, the automatic range and `Begin and end on a major tick`, `From` / `To`, the interval of the major ticks, the colour of the axis and its grid.  Those settings now act on **all three** axes of the box - the grid of each axis is the net its numbers draw on the walls, in the colour, style and width of its page - and a 3D surface opens with the three grids switched on.  The Z range and the Z label have left the curve properties for that page.  The curve properties of a 3D surface have the **`Shading`** of the colour surface: `Flat` paints every cell of the grid in one colour, `Smooth` draws up to four times as many points between the points, so that the steps of colour disappear - and a new switch, **`Light and shadow on the surface`**, lights the surface from the upper left so that its shape shows.  Files of 1.5.0 and 1.5.1 open as they were saved. |
+| 1.5.1 | 2026-11-15 | Four corrections of the `3D Surface`.  **(1)** A range of an axis made **smaller than the data** no longer lets the surface hang out of the box over the numbers and the labels: the surface is drawn from the points inside the three ranges only, and drawn again whenever a range changes (the exported program cuts it the same way).  **(2)** `Axes properties` has a **`Z axis` page** while the diagram is in space: the label with its font, the range (`Automatic`, `From`, `To`), the step of the numbers and their font.  **(3)** A **double click on the numbers** of the X, the Y or the Z axis opens the page of that axis, as in every other diagram - and so does a double click on the line of an axis; a single press on the numbers carries the graph.  **(4)** The **frame style** acts on the box: `No frame` draws the three axes alone, without the walls and their net; the other styles draw the walls, with the ticks pointing in or out as the style says.  The thickness of the frame, the length of the ticks, the colour of each axis and the colour of the plot area are taken over as well.  A diagram that opens as a 3D surface starts with `Full frame`. |
+| 1.5.0 | 2026-11-15 | The first version that draws in **three dimensions**: the new plot style `3D Surface` draws x, y, z columns - the same columns a `Colour Surface (pcolor)` reads - as a **surface in space** (`ax.plot_surface`; points that stand on no grid are joined into triangles).  **Dragging the surface turns it** in any direction, and the two angles of the view (`Elevation`, `Azimuth`) stand in the curve properties, where they can be typed in and where they follow the pointer.  **An axis is selected by a click on its line** and made **longer or shorter by its two ends**, as the axes of every other diagram are; dragging the line carries the whole graph.  The **labels of the three axes** are dragged, written in place by a slow second click and opened by a double click like any other label.  The colour scale, its range and the logarithmic scale are those of the colour surface; the **colour bar is off to begin with** and is switched on in the curve properties.  The view is taken back by `Undo`, saved with the diagram and written into the exported matplotlib program.  Besides, a diagram that opens as a `Colour Surface (pcolor)`, as `Contour Lines` or as `Filled Contours` now has **`Frame with ticks (outward)`** to begin with. |
+| 1.4.5 | 2026-11-13 | The **range of the colours** is set at the colour bar itself: a **double click on the bar** opens a new `Colour bar` window with `Lowest` and `Highest` value of the colour scale.  The two fields show the **whole range of the data** to begin with; another number typed in lays the whole colour scale over a **narrower** range (the colours spread out over the part that matters - what a logarithmic scale of many decades needs to show its features) or over a **wider** one (they are squeezed).  An end left as it was goes on following the data, `Whole range of the data` lets both ends go again, and the window also holds the `Logarithmic colour scale` switch, the label of the bar and a `Curve properties...` button.  A **2D Histogram** has the range too (`Lowest count`, `Highest count`, also in its curve properties), and its colour bar can now have a label.  The **label of the colour bar is a text of its own**: it is **dragged with the pointer** like the label of an axis - without its bar - and moved by the arrow keys; it follows the bar when that is moved, its place is saved with the diagram, taken back by `Undo`, written into the exported program, and `Reset dragged texts` puts it back beside the bar. |
+| 1.4.4 | 2026-11-13 | The **colour bar** of a `Colour Surface (pcolor)`, of `Contour Lines`, of `Filled Contours` and of a `2D Histogram` is an object of the diagram, handled **with the pointer**: one click selects it and shows its control points, dragging it moves it anywhere on the page, and dragging a control point resizes it; made wider than it is tall it **lies down** and becomes a horizontal bar with its numbers under it.  The arrow keys move a selected bar, `Undo` puts it back, and its place is saved with the diagram and written into the exported matplotlib program.  The **label of the colour bar** (the Z label) is edited like the title and the axis labels: a slow second click - within 1.5 seconds - **writes it in place**, and a double click opens a window with its text, font size and colour; dragging the label carries the bar.  A double click on the bar itself opens the curve properties, where its colour scale is set.  A diagram saved by an earlier version opens with its bar where it has always been. |
+| 1.4.3 | 2026-11-13 | The axes of the three **x, y, z** styles - `Colour Surface (pcolor)`, `Contour Lines` and `Filled Contours` - **begin and end on a major tick**, as the axes of every other plot style do: the automatic range is rounded out to the ticks around the surface instead of stopping at its edge.  Where the surface ends between two ticks a narrow strip of the plot area stays empty beside it; `Begin and end on a major tick` of `Axes properties` switches the rounding off for one axis, and the surface fills its plot area to the edge again.  A diagram saved by 1.4.0 - 1.4.2 opens as it was saved.  `Exchange the X and Y axes (turn the picture)` turns contour lines and filled contours exactly as it turns a colour surface - over a grid or over scattered points - and the ticks at the two ends of the axes change places with the rest. |
+| 1.4.2 | 2026-11-13 | The report at the first start after an update - *"APlot has been updated from ... to ..."*, what is new and what is left to do - is a window of its own with a **scroll bar** instead of a message box, which grew with its text until its button was below the screen: the window is never taller than the main (data sheet) window, the rest is reached by scrolling, and it lists every version since the one that was updated, not only the newest six; `OK`, `Return` or `Esc` closes it, and the program can be used while it is open.  The window that offers a newer version keeps within the height of the main window too, and shows up to 20 lines of what is new. |
+| 1.4.1 | 2026-11-13 | A diagram whose range is smaller than its data: the part of a surface or a curve that is cut away at the edge of the plot area no longer takes the clicks meant for the numbers and the labels of the axes, so `Axes properties` and the frame can be opened again by a double click - on the edge of the plot area too, where a colour surface covers the frame lines.  A row of cells pasted into a column heading (`Ctrl/Cmd+V`) names that column and the ones after it, one name each, instead of writing every name into one heading.  In an x, y, z diagram the label of the Y axis follows the name of its column, as the label of the X axis does; a renamed column keeps the axis it was ticked for, and a surface no longer loses its Z values when a column is renamed.  New in `Curve properties` of the three x, y, z styles: `Exchange the X and Y axes (turn the picture)`, which draws the Y column across and the X column upwards; the labels, the ranges and the steps of the two axes change places with it, and it is saved with the graph and written into the exported matplotlib program. |
+| 1.4.0 | 2026-11-13 | Three new plot styles for **x, y, z** data - a field over a plane, as a simulation writes it out: `Colour Surface (pcolor)` (`ax.pcolormesh`, the `pcolor` of MATLAB), `Contour Lines` (`ax.contour`) and `Filled Contours` (`ax.contourf`).  The columns are read in pairs after the first one - `x`, `y`, `z` - and the Z column can be any other column of the table.  Points that stand on a grid are drawn as that grid, in whatever order their rows are; points scattered freely are joined into triangles.  `Curve properties` has the colour scale (the 21 colour maps of the 2D histogram, each of which can be turned round), its lowest and highest Z, a logarithmic scale, the opacity, a colour bar with its own label, flat or smooth shading and cell edges for the surface, and the number of levels, the width, style and colour of the lines and the values written on them for the contours.  All of it is saved with the graph and written into the exported matplotlib program.  That program now keeps twelve significant digits of every number instead of six to ten decimals, so data given in metres (1.25e-06) is no longer rounded away in it. |
+| 1.3.10 | 2026-11-13 | A long table is quick in the data sheet: pasting some ten thousand rows (100 000 cells) took minutes, because every cell was written by itself into the data and into the table, and every missing row was added by itself - now the rows are added at once, the cells are written a whole column at a time and the table is redrawn a row at a time, and the paste is one step for `Undo`.  The same for clearing a large block, copying it, the second copy of `Duplicate` and the sums of a large selection in the status line.  Moving the selection and scrolling no longer falter on a sheet of some ten thousand rows: only the rows whose highlight changes are touched, and of a long selected block only the rows on the screen are looked at. |
+| 1.3.9 | 2026-11-05 | Every axis begins and ends exactly on a major tick, with its number, as diagrams for print are drawn: the automatic range is no longer the data plus five per cent but is rounded out to the ticks around the data - on a linear axis to the next whole step (0 ... 50 for data from 3.2 to 47.9), on a logarithmic one to whole powers of its base (0.1 ... 10000 on `Log 10`, also `Log 2`, `ln` and a step of several decades) - for both Y axes, a reversed axis and at any size of the window; a range typed in that is a whole number of a nice step (0 ... 7) gets numbers at both ends too.  New switch `Begin and end on a major tick` on every axis page (saved with the graph) and setting `Axes begin and end on a tick` (on).  Installing is the same on Linux as on a Mac: the first start of a plain `aplot.py` opens the window `Install APlot` - only for me (`~/.local`, `~/Applications/APlot.app`) or for every user (`/usr/local`, `/Applications/APlot.app`, with the administrator's password asked by the system) - asked once, and `Install APlot...` in the menu (Help on Linux, APlot on a Mac) opens it at any time; no command line switches are needed any more. |
+| 1.3.8 | 2026-11-04 | The keyboard, checked with real key presses (four new tests): keys typed faster than the next cell opened - quick typing, a busy moment of the computer - are no longer lost or written into the cell just left; `Tab` and `Shift+Tab` on the table walk along the row instead of sending the keyboard to the formula bar; `Shift+Enter` moves up, and `Shift+Tab` in the very first cell stays there; `Enter` in the formula bar and the address box give the keyboard back to the sheet; the shortcuts work with Caps Lock on (`Ctrl/Cmd+O`, `S`, `E`, `R`, `I`, `Z`, `Q` did nothing then), and with Num Lock on Linux `Ctrl+O`, `S`, `E` are no longer taken for `Ctrl+Alt+O`, `S`, `E`; `Update` gives the keyboard to the diagram it brings to the front, so the arrow keys move its selected object at once - they also do so while a property window of the diagram is in front (after `Apply`).  The regression window stops growing at seven parameters: the list scrolls, and so does a long answer, so the `Fit` and `Close` buttons stay on the screen at any order of a polynomial. |
+| 1.3.7 | 2026-10-22 | An empty row stays a gap in the curve when sheets are drawn together (`Plot with previous tab`): the rows are matched up on X and sorted, and a row without X was sorted away from its place, so the curve ran across it - and the empty cell made the X values count as text, sorted alphabetically.  The settings button of the main window is a gear icon instead of the words `Settings...`. |
+| 1.3.6 | 2026-10-16 | Installable packages (`packaging/`): `.deb` and `.rpm` (they bring the distribution's Python packages), a light `.dmg` and a light `.msi` (they use the computer's Python, conda recommended), and self-contained `.dmg`, `.msi` and `.flatpak` with a Python of their own (PyInstaller, `packaging/build_frozen.py`), all built on GitHub by `.github/workflows/packages.yml` when a version tag is pushed.  The updater never writes over the files of a package (a `.deb` or `.rpm` is updated into the user's own copy, which is then started; a self-contained APlot writes its update into a folder of the user); APlot.app finds conda, python.org or Homebrew Python by itself; `.icns` icons are written without Apple's tools; `Help > About APlot` names the package. |
+| 1.3.5 | 2026-10-15 | Every curve drawn with markers gets a different kind - circle, square, triangle, diamond and so on - used again from the start when there are more curves than kinds; new setting `A different marker for every curve` (on); a chosen marker and saved graphs keep theirs. |
+| 1.3.4 | 2026-10-07 | Documentation: conda (Anaconda) is the recommended Python on a Mac - `conda activate base` and `conda config --set auto_activate_base true` make `/opt/anaconda3/bin/python3` the Python of the Terminal instead of the Mac's own `/usr/bin/python3`; the message about a missing tkinter names conda as well. |
+| 1.3.3 | 2026-10-07 | APlot opened and closed again without anything done to it closes without asking about saving: the empty columns the blank sheet grows to fill a wider window are no edit any more, and a cell that was only clicked into (its editor opened and left with the same text) stays exactly as it was - before, it could come back as another type and count as a change. |
+| 1.3.2 | 2026-10-06 | Works with pandas 3, which a fresh `pip install pandas` brings (a number calculated by Column Math into an empty column was refused); opening an Excel file no longer reports an error after reading it; a missing package is named with the command that installs it; new section `Installing Python and the packages` (why `pip` is "command not found", python.org Python on a Mac, apt on Linux, a virtual environment anywhere). |
+| 1.3.1 | 2026-10-05 | The cells of the sheet are divided by a light grey net, one pixel wide, beside the row numbers too; it lies under the blue outline, and a click, a drag or the wheel on a line reaches the cell under it (`SHEET_GRID`, `SHEET_GRID_COLOR` at the top of `aplot.py`). |
+| 1.3.0 | 2026-10-05 | The installed APlot is a program of its own: APlot.app (`--make-app`) and the Linux menu entry (`--install-desktop`, also the new `aplot` command) hold and start a copy of the program instead of the `aplot.py` they were made from, which can then be edited freely (an older installation is converted at the first start); updates install themselves wherever the program lies - `git pull` for a clean git working copy, the administrator password for a system folder, otherwise an installed copy for the user, which is then started; `Help > About APlot` and the update window name the program file. |
+| 1.2.1 | 2026-10-03 | A saved graph opens again with each diagram window at its saved size and place, scrolled to the same point of the page (and at the same zoom), and it appears there at once instead of jumping; scrolling or moving a window is not counted as an edit. |
+| 1.2.0 | 2026-10-03 | Updates from GitHub: once a week at the start, and with `Help > Check for updates...`; a newer version is offered with what is new, installed (the old one is kept) and started; the first start of it renews the desktop files of Linux and APlot.app, and tells Mac users when the Quick Look extensions have to be built again; `--check-update` and `--update` in a terminal. |
+| 1.1.2 | 2026-10-03 | The property windows appear directly at their place (no flash in the middle of the screen); a right click on a diagram behind a property window opens its menu; the graph window scrolls half as far per notch (or trackpad push) as before; the opacity boxes of the curve window are a character wider. |
+| 1.1.1 | 2026-10-03 | The property windows open fully on the screen - they were measured before they were complete and could stick out past the right edge or behind the Dock; diagram windows are fitted to the screen as well; new setting `Text size of the windows`, 85 % on a Mac. |
+| 1.1.0 | 2026-10-03 | The black fill square pulled past the last row (or the last column) adds new rows (columns) for as long as the button is held, and scrolls faster the further past the edge it is; a new sheet has 1000 rows (a settings file still holding the old 40 is brought up to 1000 once). |
+| 1.0.0 | 2026-10-01 | The first numbered version: the spreadsheet with its sheets, formulas and fits, the diagrams with every property window, drawings, arrows and pictures, the `.aplt` container with its pictures and the previews of macOS and Linux. |
+"""
+
+
 def load_documentation():
     """The README next to the program if it exists, otherwise the built-in text."""
     try:
@@ -30920,12 +31095,24 @@ def load_documentation():
     return DOCUMENTATION
 
 
+def load_version_history():
+    """VERSION_HISTORY.md next to the program if it exists, otherwise the
+    built-in text."""
+    try:
+        found = Path(__file__).with_name(UPDATE_HISTORY)
+        if found.is_file():
+            return found.read_text(encoding="utf-8")
+    except (OSError, NameError):
+        pass
+    return VERSION_HISTORY
+
+
 class HelpWindow(tk.Toplevel):
     """Read-only documentation viewer."""
 
-    def __init__(self, master, text):
+    def __init__(self, master, text, title=None):
         super().__init__(master)
-        self.title(f"{APP_NAME} documentation")
+        self.title(title or f"{APP_NAME} documentation")
         self.geometry("820x640")
         frame = ttk.Frame(self, padding=8)
         frame.pack(fill="both", expand=True)
@@ -32075,6 +32262,8 @@ class App:
 
         help_menu = tk.Menu(menubar, tearoff=0, name="help")
         help_menu.add_command(label="Documentation", command=self.show_documentation)
+        help_menu.add_command(label="Version history",
+                              command=self.show_version_history)
         help_menu.add_command(label="Check for updates...",
                               command=self.check_for_updates)
         if sys.platform != "darwin" and self.install_offered():
@@ -32096,6 +32285,18 @@ class App:
             return self._help_window
         self._help_window = HelpWindow(self.root, load_documentation())
         return self._help_window
+
+    def show_version_history(self):
+        """Help > Version history: what changed in each version."""
+        window = getattr(self, "_history_window", None)
+        if window is not None and window.winfo_exists():
+            window.lift()
+            window.focus_force()
+            return window
+        self._history_window = HelpWindow(
+            self.root, load_version_history(),
+            title=f"{APP_NAME} version history")
+        return self._history_window
 
     # -- installing APlot: for this user or for every user ----------------
     def install_offered(self):
@@ -32260,14 +32461,19 @@ class App:
             facts = check_for_release() if release_update_kind() else check_for_update()
             facts["history"] = []
             if facts["newer"]:
-                try:   # what is new: the version history of the README
-                    head = fetch_url((facts.get("source") or UPDATE_SOURCE)
-                                     + UPDATE_README,
-                                     first_bytes=UPDATE_HEAD_BYTES)
+                # what is new: VERSION_HISTORY.md - or the README, where the
+                # history was up to 1.6.5
+                source = facts.get("source") or UPDATE_SOURCE
+                for name in (UPDATE_HISTORY, UPDATE_README):
+                    try:
+                        head = fetch_url(source + name,
+                                         first_bytes=UPDATE_HEAD_BYTES)
+                    except UpdateError:
+                        continue
                     facts["history"] = version_history(
                         head.decode("utf-8", "replace"), APP_VERSION)
-                except UpdateError:
-                    pass
+                    if facts["history"]:
+                        break
             return facts
 
         def done(facts, error):
@@ -32356,6 +32562,11 @@ class App:
                 messagebox.showinfo("Update", notes, parent=self.root)
                 return
             self.settings.set("update_state", "updated_from", APP_VERSION)
+            # ... and to what, where: the next start of this very program
+            # can tell whether the new version is in place
+            self.settings.set("update_state", "updated_to", str(facts["version"]))
+            self.settings.set("update_state", "updated_where",
+                              str(result.get("where") or update_target()))
             self.settings.set("update_state", "notes", notes)
             self.settings.set("update_state", "skipped", "")
             try:
@@ -32375,10 +32586,17 @@ class App:
                 + kept + "\n"
                 + (notes + "\n\n" if notes else "")
                 + f"{APP_NAME} starts again now.", parent=self.root)
-            command = list(result["command"])
+            command = result["command"]
+            command = command if isinstance(command, str) else list(command)
+            env = dict(result.get("env") or {})
             if self.project_path and Path(self.project_path).exists():
-                command.append(str(self.project_path))   # the graph again
-            restart_program(command, self.root)
+                graph = str(Path(self.project_path).resolve())   # the graph again
+                if result.get("open_variable"):
+                    env[result["open_variable"]] = graph
+                else:
+                    command.append(graph)
+            restart_program(command, self.root, env=env,
+                            detached=bool(result.get("detached")))
 
         self._in_background(work, done)
         return True
@@ -32396,14 +32614,24 @@ class App:
         return notes
 
     def _greet_new_version(self):
-        """The first start after an update: what is new, what is left to do."""
+        """The first start after an update: what is new, what is left to do
+        - or why the new version is not the one that started."""
         try:
+            reason = take_update_failure()
             info = after_update(self.settings)
         except Exception:                # never keep the program from starting
             return None
-        if not info:
-            return None
-        rows = version_history(DOCUMENTATION, info["from"])
+        if reason or (info and info.get("failed")):
+            messagebox.showwarning(
+                "Update", reason or (
+                    f"{APP_NAME} was to be updated to {info['failed']}, but "
+                    f"{APP_NAME} {APP_VERSION} has started again: the new "
+                    f"version was not put in place.\n\nHelp > Check for "
+                    f"updates tries again; the newest version is also on "
+                    f"{UPDATE_PAGE}/releases."), parent=self.root)
+        if not info or info.get("failed"):
+            return info
+        rows = version_history(VERSION_HISTORY, info["from"])
         heading = (f"{APP_NAME} has been updated from {info['from']} to "
                    f"{APP_VERSION}.")
         # a window of its own, with a scroll bar: a message box grows with
@@ -33839,6 +34067,7 @@ UPDATE_SOURCE = (f"https://raw.githubusercontent.com/{UPDATE_REPOSITORY}/"
 UPDATE_PAGE = f"https://github.com/{UPDATE_REPOSITORY}"
 UPDATE_PROGRAM = "aplot.py"             # the files of the repository
 UPDATE_README = "README.md"
+UPDATE_HISTORY = "VERSION_HISTORY.md"
 UPDATE_QUICKLOOK = "APlotQuickLook.zip"
 UPDATE_EVERY_DAYS = 7
 UPDATE_FIRST_DELAY_MS = 6000            # after the start, before looking
@@ -33847,6 +34076,12 @@ UPDATE_HEAD_BYTES = 32768               # the version is in the first lines
 UPDATE_FOLDER = CONFIG_FILE.parent / "updates"     # downloads
 UPDATE_BACKUPS = CONFIG_FILE.parent / "backups"    # the replaced versions
 UPDATE_SMALLEST = 200_000               # bytes: anything shorter is not APlot
+# what the helper that finishes an update writes when it could not put the new
+# version in place - the next start of APlot tells it
+UPDATE_FAILED = CONFIG_FILE.parent / "update-failed.txt"
+# a self-contained APlot that starts the new one: the new one starts afresh,
+# not as a child of this one (PyInstaller's bootloader reads it)
+RELAUNCH_ENV = {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
 
 
 class UpdateError(Exception):
@@ -33880,9 +34115,9 @@ def program_facts(text):
 
 
 def version_history(text, newer_than=None):
-    """[(version, date, what changed)] of the "Version history" table in
-    the documentation of a program file - only the versions after
-    `newer_than` when it is given, the newest first."""
+    """[(version, date, what changed)] of the version history table
+    (VERSION_HISTORY.md, or the README of 1.6.5 and older) - only the
+    versions after `newer_than` when it is given, the newest first."""
     rows = []
     for found in re.finditer(r"^\| (\d+(?:\.\d+)+) \| (\d{4}-\d{2}-\d{2}) \| (.+?) \|\s*$",
                              text, re.M):
@@ -34194,17 +34429,103 @@ def linux_package_command(kind, path):
     return ["rpm", "-U", "--replacepkgs", path]
 
 
+# The helper of the .msi: a batch file, because PowerShell scripts may be
+# switched off on a managed Windows.  Everything it needs comes in
+# environment variables (APLOT_UPDATE_*) - no path is written into the file,
+# where cmd would read it in the wrong code page - and it runs in the home
+# folder: Windows cannot remove a folder that is the current folder of a
+# process, and the installer replaces the folder APlot was started in.
+MSI_UPDATE_SCRIPT = """@echo off
+rem Written by APlot: installs the new APlot when this one has closed, then starts it.
+cd /d "%USERPROFILE%"
+set /a APLOT_UPDATE_WAITED=0
+:wait
+tasklist /FI "PID eq %APLOT_UPDATE_PID%" /NH 2>NUL | find /I "%APLOT_UPDATE_NAME%" >NUL
+if errorlevel 1 goto install
+set /a APLOT_UPDATE_WAITED+=1
+if %APLOT_UPDATE_WAITED% GEQ 300 goto install
+ping -n 2 127.0.0.1 >NUL
+goto wait
+:install
+start "" /wait msiexec.exe /i "%APLOT_UPDATE_PACKAGE%" /passive /norestart /l*v "%APLOT_UPDATE_LOG%"
+set APLOT_UPDATE_CODE=%ERRORLEVEL%
+if "%APLOT_UPDATE_CODE%"=="0" goto start
+copy /y "%APLOT_UPDATE_MESSAGE%" "%APLOT_UPDATE_FAILED%" >NUL
+>>"%APLOT_UPDATE_FAILED%" echo %APLOT_UPDATE_CODE%.
+:start
+set PYINSTALLER_RESET_ENVIRONMENT=1
+if "%APLOT_UPDATE_OPEN%"=="" goto plain
+start "" "%APLOT_UPDATE_PROGRAM%" "%APLOT_UPDATE_OPEN%"
+goto end
+:plain
+start "" "%APLOT_UPDATE_PROGRAM%"
+:end
+"""
+
+# The helper of the .dmg: the new APlot.app is copied beside the old one
+# while APlot runs, and put in its place only when APlot has closed - a
+# running APlot reads its own bundle until its very end.
+MAC_UPDATE_SCRIPT = """#!/bin/sh
+# Written by APlot {old}: puts APlot {new} in place when APlot has closed, then starts it
+cd / || exit 1
+while kill -0 {pid} 2>/dev/null; do sleep 0.3; done
+swap={swap}
+if {plain}; then
+    /bin/sh -c "$swap"
+else
+    /usr/bin/osascript -e 'on run argv' -e 'do shell script (item 1 of argv) with administrator privileges' -e 'end run' "$swap"
+fi
+if [ $? -eq 0 ]; then
+    {lsregister} -f {bundle} >/dev/null 2>&1
+else
+    printf '%s\\n' {failed_text} > {failed}
+    /bin/rm -rf {staged}
+fi
+/usr/bin/open -n {bundle} --args "$@"
+"""
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+              "LaunchServices.framework/Support/lsregister")
+
+
+def take_update_failure():
+    """What the helper of an update wrote because it could not put the new
+    version in place ("" when nothing); it is told once, so it is removed."""
+    try:
+        text = UPDATE_FAILED.read_text(encoding="utf-8-sig", errors="replace")
+        UPDATE_FAILED.unlink()
+    except OSError:
+        return ""
+    return text.strip()
+
+
+def _runs_from(where):
+    """True when this APlot is the program at `where` (a program file, the
+    folder of a program, or an APlot.app)."""
+    try:
+        where = Path(where).resolve()
+        here = (Path(sys.executable) if os.environ.get(FROZEN_MARK)
+                else update_target()).resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+    return here == where or where in here.parents
+
+
 def install_release(package, facts, kind=None, platform=None,
-                    administrator=None, executable=None):
+                    administrator=None, executable=None, pid=None):
     """Install the downloaded package of a release; what was done:
     {"installed", "backup", "command" (that starts the new version),
-    "where", "notes"} - as `install_update` says it."""
+    "where", "notes"} - as `install_update` says it - and, for the helpers
+    that finish the work when APlot has closed (the .msi, the .dmg),
+    "detached" (the command is such a helper; it waits for the process
+    `pid`, this one by default), "env" (what it is told in environment
+    variables) and "open_variable" (the variable a graph to open goes in)."""
     platform = platform or sys.platform
     kind = kind or facts.get("kind") or release_update_kind()
     administrator = administrator or run_as_administrator
     executable = Path(executable or sys.executable).resolve()
-    package, version = Path(package), str(facts["version"])
+    package, version = Path(package).resolve(), str(facts["version"])
     release = facts.get("release") or f"{UPDATE_PAGE}/releases"
+    pid = int(pid or os.getpid())
     result = {"installed": False, "backup": None, "command": [],
               "where": None, "notes": []}
     if kind == "portable":
@@ -34220,21 +34541,44 @@ def install_release(package, facts, kind=None, platform=None,
             f"{package.name} from {release} in its place.")
     elif kind == "msi":
         # the installer cannot replace the files of a running APlot: a small
-        # script runs it after APlot has closed, and starts the new one
-        script = package.parent / "install-update.cmd"
-        script.write_text(
-            "@echo off\r\n"
-            f'msiexec /i "{package}" /passive /norestart\r\n'
-            f'start "" "{executable}" %*\r\n', encoding="utf-8")
-        result.update(installed=True, command=["cmd", "/c", str(script)],
-                      where=executable.parent)
+        # script runs it after APlot has closed, and starts the new one; if
+        # the installer fails, the reason is told at the next start
+        folder = package.parent
+        script = folder / "install-update.cmd"
+        message = folder / "install-update-failed.txt"
+        log = folder / "install-update.log"
+        script.write_bytes(MSI_UPDATE_SCRIPT.replace("\n", "\r\n").encode("ascii"))
+        # the code of msiexec is written after this text
+        message.write_text(
+            f"{APP_NAME} {version} could not be installed: its installer did "
+            f"not finish, so {APP_NAME} {APP_VERSION} is still the one in use."
+            f"\n\nThe log of the installer: {log}\nThe new version can be "
+            f"installed by hand with a double click on {package}, or from "
+            f"{release}.\n\n(3010 or 1641: Windows has to be restarted to "
+            f"finish it; 1618: another installation was running.)\n"
+            f"The installer (msiexec) ended with the code ", encoding="utf-8")
+        UPDATE_FAILED.parent.mkdir(parents=True, exist_ok=True)
+        result.update(
+            installed=True, where=executable.parent, detached=True,
+            # /s: cmd takes the line between the outer quotes as it is,
+            # whatever the path of the script holds (spaces, brackets)
+            command=f'cmd.exe /d /s /c ""{script}""',
+            open_variable="APLOT_UPDATE_OPEN",
+            env={"APLOT_UPDATE_PID": str(pid),
+                 "APLOT_UPDATE_NAME": executable.name,
+                 "APLOT_UPDATE_PACKAGE": str(package),
+                 "APLOT_UPDATE_LOG": str(log),
+                 "APLOT_UPDATE_MESSAGE": str(message),
+                 "APLOT_UPDATE_FAILED": str(UPDATE_FAILED),
+                 "APLOT_UPDATE_PROGRAM": str(executable),
+                 "APLOT_UPDATE_OPEN": ""})
         result["notes"].append(
             f"The installer of {APP_NAME} {version} runs when {APP_NAME} has "
             f"closed, and starts it again when it is done.")
     elif kind == "dmg":
         bundle = next((one for one in executable.parents
                        if one.name.endswith(".app")), None)
-        why = _replace_app_bundle(package, bundle, platform, administrator)
+        staged, why = _stage_app_bundle(package, bundle, version, platform)
         if why:
             subprocess.run(["/usr/bin/open", str(package)], check=False)
             result["notes"].append(
@@ -34243,8 +34587,14 @@ def install_release(package, facts, kind=None, platform=None,
                 f"quit {APP_NAME} and drag the new one onto the Applications "
                 f"folder.")
             return result
-        result.update(installed=True, where=bundle,
-                      command=["/usr/bin/open", "-n", str(bundle), "--args"])
+        script = _mac_update_script(bundle, staged, version, pid,
+                                    package.parent)
+        result.update(installed=True, where=bundle, detached=True,
+                      command=["/bin/sh", str(script)])
+        if not os.access(bundle.parent, os.W_OK):
+            result["notes"].append(
+                f"Only an administrator may write {short_path(bundle.parent)}: "
+                f"when {APP_NAME} has closed, the password is asked for.")
     elif kind in ("deb", "rpm"):
         command = linux_package_command(kind, package)
         done, why = administrator(command, platform)
@@ -34271,11 +34621,17 @@ def install_release(package, facts, kind=None, platform=None,
     return result
 
 
-def _replace_app_bundle(image, bundle, platform="darwin", administrator=None):
-    """Put the APlot.app of the disk image `image` in the place of `bundle`;
-    "" when done, otherwise why not."""
+def _stage_app_bundle(image, bundle, version, platform="darwin"):
+    """Copy the APlot.app of the disk image `image` beside `bundle` (or,
+    where only an administrator may write, into the folder of the
+    downloads), to be put in its place when APlot has closed.  (the copy,
+    "") - or (None, why not)."""
     if platform != "darwin" or bundle is None:
-        return f"this {APP_NAME} is not an {APP_NAME}.app"
+        return None, f"this {APP_NAME} is not an {APP_NAME}.app"
+    if os.access(bundle.parent, os.W_OK):
+        staged = bundle.parent / f".{APP_NAME}.app.new-{version}"
+    else:
+        staged = Path(image).parent / f"{APP_NAME}.app"
     mount = Path(tempfile.mkdtemp(prefix="aplot-image-"))
     try:
         done = subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse",
@@ -34283,43 +34639,55 @@ def _replace_app_bundle(image, bundle, platform="darwin", administrator=None):
                                str(mount), str(image)],
                               capture_output=True, text=True, timeout=300)
         if done.returncode != 0:
-            return (done.stderr or "the disk image could not be opened").strip()
+            return None, (done.stderr or "the disk image could not be opened").strip()
         try:
             source = mount / f"{APP_NAME}.app"
             if not source.is_dir():
-                return f"the disk image holds no {APP_NAME}.app"
-            fresh = bundle.parent / f".{APP_NAME}.app.new-{os.getpid()}"
-            old = bundle.parent / f".{APP_NAME}.app.old-{os.getpid()}"
+                return None, f"the disk image holds no {APP_NAME}.app"
+            shutil.rmtree(staged, ignore_errors=True)
             # ditto keeps the signature and everything else of the bundle
-            steps = [["/usr/bin/ditto", str(source), str(fresh)],
-                     ["/bin/mv", str(bundle), str(old)],
-                     ["/bin/mv", str(fresh), str(bundle)],
-                     ["/bin/rm", "-rf", str(old)]]
-            if os.access(bundle.parent, os.W_OK):
-                for step in steps:
-                    ran = subprocess.run(step, capture_output=True, text=True,
-                                         timeout=600)
-                    if ran.returncode != 0:
-                        if not bundle.exists() and old.exists():
-                            os.replace(old, bundle)     # put back as it was
-                        shutil.rmtree(fresh, ignore_errors=True)
-                        return (ran.stderr or "it could not be copied").strip()
-                return ""
-            line = " && ".join(" ".join(shlex.quote(one) for one in step)
-                               for step in steps)
-            copied, why = (administrator or run_as_administrator)(
-                ["/bin/sh", "-c", line], platform)
-            return "" if copied else f"only an administrator may write it, and {why}"
+            ran = subprocess.run(["/usr/bin/ditto", str(source), str(staged)],
+                                 capture_output=True, text=True, timeout=600)
+            if ran.returncode != 0:
+                shutil.rmtree(staged, ignore_errors=True)
+                return None, (ran.stderr or "it could not be copied").strip()
+            return staged, ""
         finally:
             subprocess.run(["/usr/bin/hdiutil", "detach", "-quiet", str(mount)],
                            capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
+        shutil.rmtree(staged, ignore_errors=True)
+        return None, str(error)
     finally:
         try:
             mount.rmdir()
         except OSError:
             pass
+
+
+def _mac_update_script(bundle, staged, version, pid, folder):
+    """The helper that puts `staged` in the place of `bundle` when the
+    process `pid` has ended, and starts it; if that cannot be done, the old
+    APlot.app is put back, started, and told why at its start."""
+    q = shlex.quote
+    old = bundle.parent / f".{APP_NAME}.app.old-{version}"
+    swap = (f"/bin/rm -rf {q(str(old))} && /bin/mv {q(str(bundle))} {q(str(old))} && "
+            f"if /bin/mv {q(str(staged))} {q(str(bundle))}; then /bin/rm -rf {q(str(old))}; "
+            f"else /bin/mv {q(str(old))} {q(str(bundle))}; false; fi")
+    failed_text = (f"{APP_NAME} {version} could not be put in the place of "
+                   f"{bundle}, so {APP_NAME} {APP_VERSION} is still the one in "
+                   f"use.\n\nHelp > Check for updates tries again; or install "
+                   f"it by hand from {UPDATE_PAGE}/releases.")
+    UPDATE_FAILED.parent.mkdir(parents=True, exist_ok=True)
+    script = Path(folder) / "install-update.sh"
+    script.write_text(MAC_UPDATE_SCRIPT.format(
+        old=APP_VERSION, new=version, pid=int(pid), swap=q(swap),
+        plain="true" if os.access(bundle.parent, os.W_OK) else "false",
+        lsregister=q(LSREGISTER), bundle=q(str(bundle)),
+        failed_text=q(failed_text), failed=q(str(UPDATE_FAILED)),
+        staged=q(str(staged))), encoding="utf-8")
+    os.chmod(script, 0o755)
+    return script
 
 
 def update_target():
@@ -34746,11 +35114,18 @@ def install_update(new_program, facts, target=None, source=None,
                 pass
             raise UpdateError(f"{target} could not be replaced: {error}") from error
         result["installed"] = True
-        # the documentation beside it, when there is one
-        readme = target.parent / UPDATE_README
-        if readme.exists() and os.access(readme, os.W_OK):
+        # the documentation beside it, when there is one - and the version
+        # history with it (a README of 1.6.5 or older still had it inside)
+        has_readme = (target.parent / UPDATE_README).exists()
+        for name in (UPDATE_README, UPDATE_HISTORY):
+            beside = target.parent / name
+            if not (beside.exists() or (name == UPDATE_HISTORY and has_readme)):
+                continue
+            if not os.access(beside if beside.exists() else target.parent,
+                             os.W_OK):
+                continue
             try:
-                readme.write_bytes(fetch(source + UPDATE_README))
+                beside.write_bytes(fetch(source + name))
             except (UpdateError, OSError):
                 pass                       # the program carries it as well
     if not result["installed"]:
@@ -34801,20 +35176,39 @@ def install_update(new_program, facts, target=None, source=None,
     return result
 
 
-def restart_program(command, root=None):
-    """Start the program again, as `command`, in place of this one."""
+def restart_program(command, root=None, env=None, detached=False):
+    """Start the program again, as `command`, in place of this one.
+
+    `env` is added to the environment, and a self-contained APlot is told
+    to start afresh (RELAUNCH_ENV) instead of as a child of this one.  It
+    runs in the home folder, never in the folder of the program: Windows
+    cannot remove or rename a folder that is the current folder of a
+    process, and an update may have to.  `detached`: `command` is a helper
+    that waits for this process to end, so it is started beside it and this
+    one ends (on Windows always so); otherwise this very process goes on as
+    the new program (on a Mac with the same place in the Dock).
+    """
+    environment = dict(os.environ, **RELAUNCH_ENV, **(env or {}))
+    home = Path.home()
+    cwd = str(home) if home.is_dir() else tempfile.gettempdir()
     if root is not None:
         try:
             root.destroy()
         except tk.TclError:
             pass
     if sys.platform.startswith("win"):
-        hidden = 0x08000000 if str(command[0]).lower() == "cmd" else 0  # no console
-        subprocess.Popen(command, close_fds=True, creationflags=hidden)
+        hidden = 0x08000000 if detached else 0      # a helper: no console
+        subprocess.Popen(command, close_fds=True, creationflags=hidden,
+                         env=environment, cwd=cwd)
         os._exit(0)
-    # the same process (and on a Mac the same place in the Dock) goes on
-    # with the new program
-    os.execv(command[0], command)
+    if detached:
+        subprocess.Popen(command, start_new_session=True, env=environment,
+                         cwd=cwd, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True)
+        os._exit(0)
+    os.chdir(cwd)
+    os.execve(command[0], command, environment)
 
 
 def after_update(settings, platform=None):
@@ -34824,8 +35218,27 @@ def after_update(settings, platform=None):
     platform = platform or sys.platform
     state = settings.section("update_state")
     old = str(state.get("updated_from") or "")
-    if not old or not is_newer(APP_VERSION, old):
-        return None          # (an older copy leaves it to the new version)
+    if not old:
+        return None
+
+    def forget():
+        for key in ("updated_from", "updated_to", "updated_where", "notes"):
+            settings.set("update_state", key, "")
+        try:
+            settings.save()
+        except OSError:
+            pass
+
+    if not is_newer(APP_VERSION, old):
+        # the very program that was updated, still the old version: the new
+        # one was not put in place (an older copy of APlot elsewhere leaves
+        # it to the new version)
+        wanted = str(state.get("updated_to") or "")
+        where = state.get("updated_where")
+        if wanted and is_newer(wanted, APP_VERSION) and where and _runs_from(where):
+            forget()
+            return {"from": old, "failed": wanted, "notes": []}
+        return None
     notes = [one for one in str(state.get("notes") or "").split("\n\n") if one]
     program = update_target()
     if os.environ.get(FROZEN_MARK):
@@ -34859,12 +35272,7 @@ def after_update(settings, platform=None):
                 bundle.parent, name=bundle.name[:-len(".app")],
                 program=program, platform=platform) is not None:
             notes.append(f"{short_path(bundle)} has been brought up to date.")
-    settings.set("update_state", "updated_from", "")
-    settings.set("update_state", "notes", "")
-    try:
-        settings.save()
-    except OSError:
-        pass
+    forget()
     return {"from": old, "notes": notes}
 
 

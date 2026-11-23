@@ -73,6 +73,7 @@ WORK = HERE / "build"
 UPSTREAM = HERE / "upstream"           # LICENSE, APlotQuickLook.zip
 PROGRAM = ROOT / "aplot.py"
 README = ROOT / "README.md"
+HISTORY = ROOT / "VERSION_HISTORY.md"
 
 
 def run(command, **options):
@@ -99,7 +100,7 @@ def license_text():
 
 def history(limit=8):
     """The newest lines of the version history, for the changelogs."""
-    return aplot.version_history(README.read_text(encoding="utf-8"))[:limit]
+    return aplot.version_history(HISTORY.read_text(encoding="utf-8"))[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ def linux_tree(kind):
     docs = root / "usr" / "share" / "doc" / "aplot"
     docs.mkdir(parents=True, exist_ok=True)
     shutil.copy2(README, docs / "README.md")
+    shutil.copy2(HISTORY, docs / "VERSION_HISTORY.md")
     for path in root.rglob("*"):
         if path.is_dir():
             os.chmod(path, 0o755)
@@ -381,6 +383,7 @@ def build_dmg():
         if not (resources / name).is_file():
             raise RuntimeError(f"{name} is missing from APlot.app")
     shutil.copy2(README, resources / "README.md")
+    shutil.copy2(HISTORY, resources / "VERSION_HISTORY.md")
     (volume / "Applications").symlink_to("/Applications")
     (volume / "Read me first.txt").write_text(
         MAC_README.format(version=VERSION, homepage=HOMEPAGE), encoding="utf-8")
@@ -558,6 +561,7 @@ def build_msi(payload=None):
         target = DIST / f"{NAME}-{VERSION}-Windows-light.msi"
         description = f"{NAME} {VERSION} - {SUMMARY}"
     shutil.copy2(README, folder / "README.md")
+    shutil.copy2(HISTORY, folder / "VERSION_HISTORY.md")
     (folder / "LICENSE.txt").write_text(license_text(), encoding="utf-8")
     for name in ("aplot.ico", "aplot-document.ico"):
         shutil.copy2(tools / name, folder / name)

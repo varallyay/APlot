@@ -258,9 +258,11 @@ unpacked files, unpack again after Properties > Unblock on the downloaded
 
 Where APlot writes, for each user who starts it: the settings into
 %USERPROFILE%\\.aplot\\config.json, and an update from GitHub (Help > Check
-for updates...) into %LOCALAPPDATA%\\APlot\\aplot.py, which APlot.exe starts
-from then on.  This folder stays as it was unpacked, so it may be read-only
-(a folder on a server that several users start APlot from).
+for updates...) - the portable .zip of the new release - unpacked into
+%LOCALAPPDATA%\\APlot\\versions\\APlot-<version>; the APlot.exe of this
+folder starts that one from then on.  This folder stays as it was unpacked,
+so it may be read-only (a folder on a server that several users start APlot
+from).
 
 The file PORTABLE marks this folder as the portable APlot (About APlot says
 so).  README.md is the full manual.
@@ -286,6 +288,7 @@ def finish_windows(out):
     folder = out / NAME
     (folder / PORTABLE_MARK).unlink(missing_ok=True)
     shutil.copy2(ROOT / "README.md", folder / "README.md")
+    shutil.copy2(ROOT / "VERSION_HISTORY.md", folder / "VERSION_HISTORY.md")
     portable = write_zip(folder, DIST / f"{NAME}-{VERSION}-Windows-portable.zip", {
         PORTABLE_MARK: f"{NAME} {VERSION} portable: started from this folder, "
                        "not installed.\n",
@@ -299,6 +302,7 @@ def finish_windows(out):
 def finish_folder(out, suffix, archive_kind):
     folder = out / NAME
     shutil.copy2(ROOT / "README.md", folder / "README.md")
+    shutil.copy2(ROOT / "VERSION_HISTORY.md", folder / "VERSION_HISTORY.md")
     target = DIST / f"{NAME}-{VERSION}-{suffix}"
     if archive_kind == "zip":
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zipped:

@@ -75,6 +75,20 @@ jobs:
       - name: Build and self-test (Windows)
         if: runner.os == 'Windows'
         run: python packaging/build_frozen.py
+      - name: Update test (Windows portable)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # the old APlot.exe unpacks the new release for the user and starts it
+          $zip = (Get-ChildItem packaging\dist\APlot-*-Windows-portable.zip).FullName
+          $old = Join-Path $env:RUNNER_TEMP "portable (old)"
+          Expand-Archive $zip -DestinationPath $old
+          $exe = Join-Path $old "APlot\APlot.exe"
+          $report = Join-Path $PWD "portable-update-report.txt"
+          $script = Join-Path $PWD "packaging\test_portable_update.py"
+          $test = Start-Process $exe -ArgumentList "--script", "`"$script`"", "`"$report`"", "`"$zip`"" -Wait -PassThru
+          if (Test-Path $report) { Get-Content $report } else { "no report written" }
+          if ($test.ExitCode -ne 0) { exit 1 }
       - name: Build and self-test (macOS)
         if: runner.os == 'macOS'
         run: python packaging/build_frozen.py --self-test
@@ -155,11 +169,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: linux-packages
           path: packages
-      - name: Install the .msi, start it, test it, uninstall it
+      - name: Install the .msi, start it, test it and its update, uninstall it
         shell: pwsh
         run: |
           $msi = (Get-ChildItem packages\APlot-*-Windows.msi).FullName
@@ -171,6 +186,12 @@ jobs:
           Get-Content $report
           if ($test.ExitCode -ne 0) { exit 1 }
           if (-not (Select-String -Path $report -Pattern "package msi" -Quiet)) { exit 1 }
+          # the helper of Update now: waits for APlot to end, installs, starts it again
+          $updateReport = Join-Path $PWD "msi-update-report.txt"
+          $script = Join-Path $PWD "packaging\test_msi_update.py"
+          $update = Start-Process $exe -ArgumentList "--script", "`"$script`"", "`"$updateReport`"", "`"$msi`"" -Wait -PassThru
+          if (Test-Path $updateReport) { Get-Content $updateReport } else { "no report written" }
+          if ($update.ExitCode -ne 0) { exit 1 }
           $remove = Start-Process msiexec -ArgumentList "/x", "`"$msi`"", "/qn" -Wait -PassThru
           if ($remove.ExitCode -ne 0) { exit 1 }
 
@@ -203,7 +224,7 @@ jobs:
           python3 - "$version" > notes.md <<'EOF'
           import re, sys
           version = sys.argv[1]
-          text = open("README.md", encoding="utf-8").read()
+          text = open("VERSION_HISTORY.md", encoding="utf-8").read()
           row = re.search(rf"^\| {re.escape(version)} \| [0-9-]+ \| (.+?) \|\s*$", text, re.M)
           print(row.group(1) if row else f"APlot {version}")
           print()
