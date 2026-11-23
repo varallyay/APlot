@@ -26,10 +26,15 @@ import time
 from pathlib import Path
 
 lines = []
+report_file = None
 
 
 def say(text):
+    """Noted, and written down at once: a test that hangs still tells how far it got."""
     lines.append(text)
+    if report_file:
+        with open(report_file, "w", encoding="utf-8") as handle:
+            handle.write("msi update test: RUNNING\n\n" + "\n".join(lines) + "\n")
 
 
 def until(test, seconds):
@@ -42,6 +47,8 @@ def until(test, seconds):
 
 
 def main(report, msi):
+    global report_file
+    report_file = report
     sys.path.insert(0, getattr(sys, "_MEIPASS", ""))
     import aplot
     exe = Path(sys.executable).resolve()
@@ -74,16 +81,20 @@ def main(report, msi):
         env["APLOT_UPDATE_PROGRAM"] = str(program)
         env[result["open_variable"]] = str(graph)
         # started in the folder of the installed APlot (as from the Start menu)
-        subprocess.Popen(result["command"], creationflags=0x08000000, env=env,
-                         cwd=str(exe.parent), close_fds=True)
+        helper = subprocess.Popen(result["command"], creationflags=0x08000000, env=env,
+                                  cwd=str(exe.parent), close_fds=True)
+        say(f"..    {case}: helper {helper.pid} started, waiting for APlot {stand_in.pid}")
         log = Path(result["env"]["APLOT_UPDATE_LOG"])
         time.sleep(4)
         if log.exists() or started.exists():
             say(f"FAIL  {case}: msiexec ran while the APlot it waits for was running")
             failed += 1
         stand_in.wait()
+        say(f"..    {case}: APlot {stand_in.pid} ended")
         if not until(started.exists, 300):
-            say(f"FAIL  {case}: the program was not started after the installer")
+            say(f"FAIL  {case}: the program was not started after the installer "
+                f"(helper {'still running' if helper.poll() is None else 'ended'}, "
+                f"installer log {'written' if log.exists() else 'not written'})")
             failed += 1
             continue
         time.sleep(1)
@@ -107,7 +118,10 @@ def main(report, msi):
         else:
             say(f"ok    {case}: installer run after APlot ended, program started with "
                 f"the graph" + (f"; reason kept: ...{reason[-40:]!r}" if reason else ""))
-    shutil.rmtree(work, ignore_errors=True)
+    if failed:
+        say(f"the files of the test are kept in {work}")
+    else:
+        shutil.rmtree(work, ignore_errors=True)
     text = (f"msi update test: {'ALL OK' if not failed else 'FAILED'}\n\n"
             + "\n".join(lines) + "\n")
     with open(report, "w", encoding="utf-8") as handle:

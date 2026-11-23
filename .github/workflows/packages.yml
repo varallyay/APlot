@@ -189,8 +189,17 @@ jobs:
           # the helper of Update now: waits for APlot to end, installs, starts it again
           $updateReport = Join-Path $PWD "msi-update-report.txt"
           $script = Join-Path $PWD "packaging\test_msi_update.py"
-          $update = Start-Process $exe -ArgumentList "--script", "`"$script`"", "`"$updateReport`"", "`"$msi`"" -Wait -PassThru
+          # waits for the test alone: -Wait would also wait for every process it started
+          $update = Start-Process $exe -ArgumentList "--script", "`"$script`"", "`"$updateReport`"", "`"$msi`"" -PassThru
+          $null = $update.Handle   # keeps the exit code readable
+          $ended = $update.WaitForExit(900000)
           if (Test-Path $updateReport) { Get-Content $updateReport } else { "no report written" }
+          "processes still running:"
+          Get-CimInstance Win32_Process | Where-Object { $_.Name -in "cmd.exe", "msiexec.exe", "APlot.exe", "tasklist.exe", "PING.EXE", "find.exe" } |
+            Format-Table ProcessId, ParentProcessId, Name, CommandLine -AutoSize -Wrap | Out-String -Width 400
+          Get-ChildItem $env:TEMP -Filter "install-update.log" -Recurse -ErrorAction SilentlyContinue |
+            ForEach-Object { "== $($_.FullName)"; Get-Content $_.FullName -Tail 40 }
+          if (-not $ended) { "the update test did not end in 15 minutes"; exit 1 }
           if ($update.ExitCode -ne 0) { exit 1 }
           $remove = Start-Process msiexec -ArgumentList "/x", "`"$msi`"", "/qn" -Wait -PassThru
           if ($remove.ExitCode -ne 0) { exit 1 }
