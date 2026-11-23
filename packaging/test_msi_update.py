@@ -51,7 +51,10 @@ def main(report, msi):
     sleeper.write_text("import time\ntime.sleep(8)\n", encoding="utf-8")
     started = work / "started.txt"
     program = work / "fake APlot.cmd"
-    program.write_text(f'@echo off\r\n>>"{started}" echo started %1\r\n', encoding="ascii")
+    # `start` runs a batch file as `cmd /K`, which stays open after it; `exit`
+    # ends it - else Start-Process -Wait in packages.yml waits for it forever
+    program.write_text(f'@echo off\r\n>>"{started}" echo started %1\r\nexit\r\n',
+                       encoding="ascii")
     graph = work / "my graph (2).aplt"
     graph.write_text("graph", encoding="utf-8")
     failed = 0
