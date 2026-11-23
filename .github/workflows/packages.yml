@@ -130,7 +130,11 @@ jobs:
         run: |
           python packaging/build_packages.py deb rpm --linux frozen/APlot-*-Linux-frozen.tar.gz
           python packaging/build_packages.py msi --windows frozen/APlot-*-Windows-frozen.zip
-          ls -la packaging/dist
+          # a newer version of the same .msi, for msi-test (not for the release)
+          python packaging/build_packages.py msi --windows frozen/APlot-*-Windows-frozen.zip --version 9.9.9
+          mkdir -p msi-update-test
+          mv packaging/dist/APlot-9.9.9-Windows.msi msi-update-test/
+          ls -la packaging/dist msi-update-test
       - name: Test the .deb on Ubuntu (installed, started, thumbnailer)
         run: |
           sudo apt-get install -y ./packaging/dist/aplot_*_amd64.deb
@@ -163,6 +167,11 @@ jobs:
             packaging/dist/*.rpm
             packaging/dist/*.msi
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi-update-test
+          path: msi-update-test/APlot-9.9.9-Windows.msi
+          if-no-files-found: error
 
   msi-test:
     needs: linux-packages
@@ -174,6 +183,10 @@ jobs:
         with:
           name: linux-packages
           path: packages
+      - uses: actions/download-artifact@v4
+        with:
+          name: msi-update-test
+          path: msi-update-test
       - name: Install the .msi, start it, test it and its update, uninstall it
         shell: pwsh
         run: |
@@ -186,23 +199,29 @@ jobs:
           Get-Content $report
           if ($test.ExitCode -ne 0) { exit 1 }
           if (-not (Select-String -Path $report -Pattern "package msi" -Quiet)) { exit 1 }
-          # the helper of Update now: waits for APlot to end, installs, starts it again
+          # the helper of Update now: waits for APlot to end, installs, starts it again;
+          # the test upgrades to 9.9.9, run from a copy (not the files the installer replaces)
+          $newer = (Get-ChildItem msi-update-test\APlot-9.9.9-Windows.msi).FullName
+          $copy = Join-Path $env:RUNNER_TEMP "APlot (copy)"
+          Copy-Item (Split-Path $exe) $copy -Recurse
           $updateReport = Join-Path $PWD "msi-update-report.txt"
           $script = Join-Path $PWD "packaging\test_msi_update.py"
           # waits for the test alone: -Wait would also wait for every process it started
-          $update = Start-Process $exe -ArgumentList "--script", "`"$script`"", "`"$updateReport`"", "`"$msi`"" -PassThru
+          $update = Start-Process (Join-Path $copy "APlot.exe") -ArgumentList "--script", "`"$script`"", "`"$updateReport`"", "`"$newer`"" -PassThru
           $null = $update.Handle   # keeps the exit code readable
           $ended = $update.WaitForExit(900000)
           if (Test-Path $updateReport) { Get-Content $updateReport } else { "no report written" }
           "processes still running:"
           Get-CimInstance Win32_Process | Where-Object { $_.Name -in "cmd.exe", "msiexec.exe", "APlot.exe", "tasklist.exe", "PING.EXE", "find.exe" } |
             Format-Table ProcessId, ParentProcessId, Name, CommandLine -AutoSize -Wrap | Out-String -Width 400
-          Get-ChildItem $env:TEMP -Filter "install-update.log" -Recurse -ErrorAction SilentlyContinue |
-            ForEach-Object { "== $($_.FullName)"; Get-Content $_.FullName -Tail 40 }
+          if (-not $ended -or $update.ExitCode -ne 0) {
+            Get-ChildItem $env:TEMP -Filter "install-update.log" -Recurse -ErrorAction SilentlyContinue |
+              ForEach-Object { "== $($_.FullName)"; Select-String -Path $_.FullName -Pattern "Return value 3", "Error \d{4}", "error status" -Context 12, 2 | Select-Object -First 4 | Out-String -Width 400 }
+          }
           if (-not $ended) { "the update test did not end in 15 minutes"; exit 1 }
           if ($update.ExitCode -ne 0) { exit 1 }
-          $remove = Start-Process msiexec -ArgumentList "/x", "`"$msi`"", "/qn" -Wait -PassThru
-          if ($remove.ExitCode -ne 0) { exit 1 }
+          $remove = Start-Process msiexec -ArgumentList "/x", "`"$newer`"", "/qn" -Wait -PassThru
+          if ($remove.ExitCode -ne 0) { "uninstall of 9.9.9 ended with $($remove.ExitCode)"; exit 1 }
 
   release:
     if: github.ref_type == 'tag'

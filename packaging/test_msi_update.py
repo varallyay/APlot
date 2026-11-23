@@ -1,8 +1,11 @@
 """The update helper of the .msi, tried for real on Windows (packages.yml,
 job msi-test):  APlot.exe --script packaging/test_msi_update.py REPORT MSI
 
-It runs inside the installed APlot.exe - its own Python - and uses APlot's
-own `install_release`, as `Help > Check for updates > Update now` does:
+MSI is a newer version (9.9.9, built with build_packages.py --version) of the
+installed APlot, so that the installer upgrades it as it does for the users.
+It runs inside a copy of the installed APlot.exe - its own Python, and not
+the files the installer replaces - and uses APlot's own `install_release`,
+as `Help > Check for updates > Update now` does:
 
 * the helper waits until the APlot that asked for the update has ended (a
   second APlot.exe stands in for it here) and only then runs msiexec;
@@ -13,8 +16,11 @@ own `install_release`, as `Help > Check for updates > Update now` does:
   was open; a broken one leaves the reason (the code of msiexec) for the next
   start of APlot, and APlot is started all the same.
 
-The program started at the end is a small batch file here, which writes
-down what it was given; that APlot.exe itself starts is the self-test's work.
+The program started at the end is the Python of the runner here, and the
+"graph" a script that writes down the name it was started with; that
+APlot.exe itself starts is the self-test's work.  (Not a batch file: `start`
+runs one as `cmd /K`, which mangles the quotes of the path and its argument
+and stays open.)
 Writes what it found into REPORT; exit code 0 when all is well.
 """
 import os
@@ -52,18 +58,20 @@ def main(report, msi):
     sys.path.insert(0, getattr(sys, "_MEIPASS", ""))
     import aplot
     exe = Path(sys.executable).resolve()
+    installed = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "APlot"
+    python = shutil.which("python.exe")
+    if not python:
+        say("FAIL  no python.exe on PATH to stand in for the program started at the end")
+        return 1
     work = Path(tempfile.mkdtemp(prefix="update test (1) ")).resolve()
     aplot.UPDATE_FAILED = work / "update-failed.txt"
     sleeper = work / "sleep.py"
     sleeper.write_text("import time\ntime.sleep(8)\n", encoding="utf-8")
     started = work / "started.txt"
-    program = work / "fake APlot.cmd"
-    # `start` runs a batch file as `cmd /K`, which stays open after it; `exit`
-    # ends it - else Start-Process -Wait in packages.yml waits for it forever
-    program.write_text(f'@echo off\r\n>>"{started}" echo started %1\r\nexit\r\n',
-                       encoding="ascii")
     graph = work / "my graph (2).aplt"
-    graph.write_text("graph", encoding="utf-8")
+    graph.write_text("import sys\n"
+                     f"with open({str(started)!r}, 'a', encoding='ascii') as handle:\n"
+                     "    handle.write('started \"%s\"\\n' % sys.argv[0])\n", encoding="utf-8")
     failed = 0
 
     for case, package_bytes in (("good", Path(msi).read_bytes()), ("broken", b"not an msi")):
@@ -78,11 +86,11 @@ def main(report, msi):
         result = aplot.install_release(package, {"version": "9.9.9"}, kind="msi",
                                        executable=exe, pid=stand_in.pid)
         env = dict(os.environ, **aplot.RELAUNCH_ENV, **result["env"])
-        env["APLOT_UPDATE_PROGRAM"] = str(program)
+        env["APLOT_UPDATE_PROGRAM"] = python
         env[result["open_variable"]] = str(graph)
         # started in the folder of the installed APlot (as from the Start menu)
         helper = subprocess.Popen(result["command"], creationflags=0x08000000, env=env,
-                                  cwd=str(exe.parent), close_fds=True)
+                                  cwd=str(installed), close_fds=True)
         say(f"..    {case}: helper {helper.pid} started, waiting for APlot {stand_in.pid}")
         log = Path(result["env"]["APLOT_UPDATE_LOG"])
         time.sleep(4)

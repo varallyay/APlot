@@ -737,7 +737,13 @@ def main():
                         help="the self-contained Linux folder of "
                              "build_frozen.py: flatpak, and the "
                              "self-contained deb and rpm, are built of it")
+    parser.add_argument("--version", metavar="VERSION",
+                        help="for tests: the packages say this version (the "
+                             "program in them stays the same)")
     options = parser.parse_args()
+    if options.version:
+        global VERSION
+        VERSION = options.version
     kinds = options.kinds or ["deb", "rpm", "dmg", "msi"]
     wrong = [one for one in kinds if one not in KINDS]
     if wrong:
