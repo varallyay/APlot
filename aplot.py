@@ -111,7 +111,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.7 (2026-11-23) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+1.6.8 (2026-11-24) - see `APP_VERSION` below and VERSION_HISTORY.md (the
 same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -304,8 +304,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.7"
-APP_VERSION_DATE = "2026-11-23"
+APP_VERSION = "1.6.8"
+APP_VERSION_DATE = "2026-11-24"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -27326,7 +27326,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.7 (2026-11-23)**.  The number is written in one place
+This is **APlot 1.6.8 (2026-11-24)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27498,9 +27498,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.7_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.6.8_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.7-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.6.8-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -27564,8 +27564,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.7 -m "APlot 1.6.7"
-        git push origin v1.6.7
+        git tag -a v1.6.8 -m "APlot 1.6.8"
+        git push origin v1.6.8
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -31052,6 +31052,7 @@ The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.8 | 2026-11-24 | **Renaming a sheet of a group drawn together (`Plot with previous tab`) keeps its curves as they are**: a curve of that sheet carries the name of the sheet (`Y1 (Data 2)`), and the diagram took the curve under the new name for a new one - the legend text written for it was lost and it was drawn in the next colour and marker of the cycle, so the curves of the sheets added after it were out of order as well.  The diagram now follows the new name of the sheet, as it does when a column is renamed: the legend text, colour, marker and every other setting of the curve stay. |
 | 1.6.7 | 2026-11-23 | **Sheets drawn together (`Plot with previous tab`) whose first row holds the column titles are drawn right**: a word in the X column made the whole column text, so the X values were sorted alphabetically (`-0.0, -179, -180, ..., 195, 25`) and the curves ran back and forth across the diagram.  The X values are now matched up as numbers whenever every sheet has numbers there; a word in X carries no point, as it does when the sheet is drawn alone.  **Faster too**: the empty rows at the end of the sheets were paired with each other - two sheets of a thousand rows made a table of almost a million rows for the diagram; rows without X are now left out before the sheets are matched up. |
 | 1.6.6 | 2026-11-23 | **A diagram copied on Windows (`Ctrl+C`) pastes into PowerPoint with a white page, not a grey one**: the picture is put on the clipboard of Windows as a PNG - what PowerPoint, Word and the browsers take, a see-through page and all, as on a Mac - and as a bitmap laid on white for the programs that know no PNG.  The .NET way used before laid the picture on light grey, so a diagram with a white or a see-through page arrived grey.  **The version history has a file of its own**, `VERSION_HISTORY.md`, instead of being a part of the README; `Help > Version history` shows it, and `Check for updates` reads what is new from it.  **Updates of the packages made safer**: the helper that installs the `.msi` waits until APlot has closed and works outside the folder of APlot (as FSP Viewer showed, Windows cannot replace a folder that a process stands in), and it is a batch file again that gets its paths in environment variables - a graph whose path had a space or a bracket in it kept the old helper from starting at all; the `.dmg` copies the new APlot.app beside the old one and puts it in place only when APlot has closed, instead of replacing the bundle of the running APlot; the new APlot starts afresh, in the home folder; and when the new version could not be put in place, the old one says so at its next start, with the reason, instead of starting as if it had been updated. |
 | 1.6.5 | 2026-11-19 | **A block pasted into the data sheet that is larger than the sheet makes the sheet larger** (`Ctrl/Cmd+V`): it gets new columns on the right and new rows at the bottom, so nothing pasted is cut off - three columns pasted at column I of a 10-column sheet fill I, J and a new column K, where the third column used to be lost.  The new rows come whether or not `Add a new row when leaving the last one` is ticked (that setting is about moving past the last row while typing), and `Undo` takes the paste back together with the new rows and columns, in one step. |
@@ -31603,10 +31604,53 @@ class App:
         name = str(name).strip()
         if not name or not (0 <= int(idx) < len(self.tables)):
             return None
+        idx = int(idx)
+        # a curve of this sheet may carry its name: "Signal (Monday)".  The
+        # diagrams must know it is the same curve under a new name, or they
+        # would drop it - its legend text, colour and marker with it - and
+        # draw a "new" curve in the next colour of the cycle
+        windows = []
+        for window in self.open_windows():
+            chain = self.tab_chain(self.window_tab(window))
+            if idx in chain:
+                windows.append((window, chain, self.curve_names(chain)))
         self.notebook.tab(idx, text=name)
-        # a curve of this sheet carries its name: "Signal (Monday)"
+        for window, chain, before in windows:
+            after = self.curve_names(chain)
+            moves = [(old, after[key]) for key, old in before.items()
+                     if key in after and after[key] != old
+                     and old in window.series]
+            self.move_curves(window, moves)
         self.refresh_windows(idx)
         return name
+
+    def curve_names(self, chain):
+        """{(sheet, column): the name of its curve} in a group of sheets."""
+        _x, parts = self.chain_columns(chain)
+        return {(number, column): drawn for number, _own, names in parts
+                for column, drawn in names.items()}
+
+    @staticmethod
+    def move_curves(window, moves):
+        """Rename several curves of one diagram at once.
+
+        A curve may take the name another one is giving up, so every one
+        goes to a name nobody has first and only then to its new name.
+        """
+        moves = [(old, new) for old, new in moves if old != new]
+        if not moves:
+            return 0
+        olds = {old for old, _new in moves}
+        if any(new in olds for _old, new in moves):
+            parked = []
+            for number, (old, new) in enumerate(moves):
+                spare = f"\x00aplot-rename-{number}"
+                window.rename_series(old, spare)
+                parked.append((spare, new))
+            moves = parked
+        for old, new in moves:
+            window.rename_series(old, new)
+        return len(moves)
 
     def refresh_windows(self, index=None):
         """Bring the diagrams up to date without asking any questions.
