@@ -675,6 +675,11 @@ BAR_KEEP = ("bar_box", "bar_label", "bar_label_size", "bar_label_color",
 # the name its drag goes by
 BAR_LABEL_DRAG = "barlabel"
 RENAME_DELAY = 1500         # milliseconds allowed between the two clicks
+# a diagram window that has been activated takes the keyboard this many
+# milliseconds later, when the system has settled which window is in front;
+# and not within FOCUS_CLAIM_GAP seconds after another window took it so
+FOCUS_SETTLE_MS = 60
+FOCUS_CLAIM_GAP = 0.4
 INLINE_PAD = 3              # pixels of air around the text in the editor
 INLINE_MIN_WIDTH = 48       # pixels: an empty editor is still usable
 INLINE_FAMILY = "DejaVu Sans"
@@ -4972,6 +4977,135 @@ def picture_from_text(text):
     return np.asarray(picture, dtype=np.uint8)
 
 
+class MacPasteboard:
+    """The clipboard of macOS, read inside the program (through ctypes).
+
+    Nothing outside the program is asked, so nothing can wait for the
+    program while the program waits for it.  Without pyobjc: the Objective-C
+    runtime itself is called.  Every answer is None where it cannot be read.
+    """
+
+    PICTURE_TYPES = ("public.png", "public.tiff")
+
+    def __init__(self):
+        self._ready = None            # not tried yet
+
+    def _load(self):
+        if self._ready is not None:
+            return self._ready
+        self._ready = False
+        if sys.platform != "darwin":
+            return False
+        try:
+            import ctypes
+            import ctypes.util
+            objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+            ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/AppKit.framework/AppKit")
+            objc.objc_getClass.restype = ctypes.c_void_p
+            objc.objc_getClass.argtypes = [ctypes.c_char_p]
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+            self._ctypes = ctypes
+            self._objc = objc
+            self._send = ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+            self._ready = bool(self._send)
+        except (OSError, AttributeError, TypeError, ValueError):
+            self._ready = False
+        return self._ready
+
+    def available(self):
+        return self._load()
+
+    def _call(self, restype, target, selector, *args):
+        # objc_msgSend is called with the exact types of every message (an
+        # Apple silicon Mac needs that)
+        ctypes = self._ctypes
+        prototype = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p,
+                                     *[type(one) for one in args])
+        return prototype(self._send)(
+            target, self._objc.sel_registerName(selector.encode()), *args)
+
+    def _board(self):
+        ctypes = self._ctypes
+        return self._call(ctypes.c_void_p,
+                          self._objc.objc_getClass(b"NSPasteboard"),
+                          "generalPasteboard")
+
+    def change_count(self):
+        """The counter macOS raises at every copy, anywhere."""
+        if not self._load():
+            return None
+        try:
+            board = self._board()
+            if not board:
+                return None
+            return int(self._call(self._ctypes.c_long, board, "changeCount"))
+        except (OSError, AttributeError, TypeError, ValueError):
+            return None
+
+    def picture_bytes(self):
+        """A PNG or TIFF on the clipboard, as bytes - or None."""
+        if not self._load():
+            return None
+        ctypes = self._ctypes
+        try:
+            board = self._board()
+            if not board:
+                return None
+            for kind in self.PICTURE_TYPES:
+                name = self._call(ctypes.c_void_p,
+                                  self._objc.objc_getClass(b"NSString"),
+                                  "stringWithUTF8String:",
+                                  ctypes.c_char_p(kind.encode()))
+                data = self._call(ctypes.c_void_p, board, "dataForType:",
+                                  ctypes.c_void_p(name))
+                if not data:
+                    continue
+                size = self._call(ctypes.c_ulong, data, "length")
+                where = self._call(ctypes.c_void_p, data, "bytes")
+                if where and size:
+                    return ctypes.string_at(where, size)
+        except (OSError, AttributeError, TypeError, ValueError):
+            return None
+        return None
+
+
+MAC_PASTEBOARD = MacPasteboard()
+
+
+def osascript_clipboard_png(timeout=3.0):
+    """The PNG of the clipboard through `osascript` - only where the
+    clipboard cannot be read inside the program, and never for longer than
+    `timeout` seconds."""
+    try:
+        done = subprocess.run(
+            ["osascript", "-e", "get the clipboard as «class PNGf»"],
+            capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = done.stdout.strip()
+    if done.returncode != 0 or not text.startswith(b"\xc2\xabdata PNGf"):
+        return None
+    try:
+        return bytes.fromhex(text[len(b"\xc2\xabdata PNGf"):-len(b"\xc2\xbb")]
+                             .decode("ascii"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def owns_clipboard(widget=None):
+    """True when this program holds the clipboard of X11 (the text it
+    copied itself).  Elsewhere Tk does not tell: False."""
+    if widget is None or sys.platform in ("darwin", "win32"):
+        return False
+    try:
+        return bool(str(widget.tk.call("selection", "own",
+                                       "-selection", "CLIPBOARD")))
+    except tk.TclError:
+        return False
+
+
 def clipboard_picture(widget=None):
     """The picture on the clipboard, or None.
 
@@ -4981,11 +5115,23 @@ def clipboard_picture(widget=None):
     selection - both are taken as well.
     """
     grabbed = None
-    try:
-        from PIL import ImageGrab
-        grabbed = ImageGrab.grabclipboard()
-    except (ImportError, OSError, NotImplementedError, AttributeError):
-        grabbed = None
+    if sys.platform == "darwin":
+        # read here, in the program itself: Pillow asks `osascript`, and
+        # when the clipboard holds text this program copied (cells, a
+        # field) macOS asks the program for it - which is waiting for
+        # osascript: both waited for ever and the program froze (1.6.9)
+        grabbed = MAC_PASTEBOARD.picture_bytes()
+        if grabbed is None and not MAC_PASTEBOARD.available():
+            grabbed = osascript_clipboard_png()
+    elif not owns_clipboard(widget):
+        # the same trap on X11: `xclip` would ask this very program for
+        # the text it copied.  What it copied itself is never a picture.
+        try:
+            from PIL import ImageGrab
+            grabbed = ImageGrab.grabclipboard()
+        except (ImportError, OSError, NotImplementedError, AttributeError,
+                subprocess.SubprocessError):
+            grabbed = None
     if isinstance(grabbed, list):            # names of files, not pixels
         for one in grabbed:
             picture = open_picture(one)
@@ -5297,11 +5443,9 @@ def clipboard_serial(widget=None):
     neither way works, and then nothing is assumed.
     """
     if sys.platform == "darwin":
-        try:
-            from AppKit import NSPasteboard  # type: ignore
-            return f"count:{int(NSPasteboard.generalPasteboard().changeCount())}"
-        except (ImportError, AttributeError, ValueError, TypeError):
-            pass
+        count = MAC_PASTEBOARD.change_count()
+        if count is not None:
+            return f"count:{count}"
     picture = clipboard_picture(widget)
     if picture is None:
         return "empty" if Image is not None else None
@@ -6741,7 +6885,10 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self.label_entry = ttk.Entry(box, textvariable=self.label_var, width=30)
         self.label_entry.grid(row=0, column=1, columnspan=3, sticky="ew",
                               pady=3)
-        self.label_var.trace_add("write", self._apply)
+        self.label_var.trace_add("write", self._label_written)
+        # an empty text gets the name of the column - when the field is
+        # left so, not while a new text is being written over the old one
+        self.label_entry.bind("<FocusOut>", self._label_left, add="+")
         # the size of the text and its colour stand side by side
         self.legend_color = ColorSwatch(box, self._legend_color,
                                         command=lambda _c: self._apply())
@@ -7626,6 +7773,23 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         self.err_color.set_color(color)
         self._apply()
 
+    def _label_written(self, *_args):
+        """A key in the legend text: applied at once, like every field."""
+        self._writing_label = True
+        try:
+            self._apply()
+        finally:
+            self._writing_label = False
+
+    def _label_left(self, _event=None):
+        """The legend text was left empty: the column name takes its place."""
+        if not self.label_var.get().strip():
+            self._apply()
+
+    def close(self):
+        self._label_left()
+        super().close()
+
     def _apply(self, *_args):
         if self._loading:
             return
@@ -7651,12 +7815,21 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
 
         text = self.label_var.get().strip()
         if self.legend_on_var.get():
-            if not text and self.column:     # switched on with an empty text
-                self._loading = True         # the column name is a good start
-                self.label_var.set(str(self.column))
-                self._loading = False
-                text = str(self.column)
-            line.set_label(text if text else "_nolegend_")
+            if not text and self.column:
+                if getattr(self, "_writing_label", False):
+                    # the field is empty for a moment only: the old text
+                    # was selected (Cmd/Ctrl+A) and the first key of the
+                    # new one has just taken its place.  Filling in the
+                    # column name now would put it after what is typed
+                    # ("HelloY1"): the legend keeps its text meanwhile.
+                    text = None
+                else:                        # switched on with an empty text
+                    self._loading = True     # the column name is a good start
+                    self.label_var.set(str(self.column))
+                    self._loading = False
+                    text = str(self.column)
+            if text is not None:
+                line.set_label(text if text else "_nolegend_")
         else:
             line.set_label("_nolegend_")
         if self.on_legend_style:
@@ -14687,6 +14860,9 @@ class PlotWindow(tk.Toplevel):
     # what the clipboard of the system looked like when this program last
     # copied something: anything else there now came from another program
     _clipboard_serial = None
+    # which diagram window last took the keyboard on being activated, and
+    # when (see `_window_focused`)
+    _keyboard_claim = (None, 0.0)
 
     HINT = ("One click selects (a text turns blue), a slow second click "
             "writes the text, a double click opens its properties   |   "
@@ -15887,7 +16063,45 @@ class PlotWindow(tk.Toplevel):
         cursor.  The keyboard is taken back from anything else that belongs
         to another window: after a property dialog was used, its own field
         may still be holding it.
+
+        It is done a moment later, not at once, and only by the window that
+        is still in front then.  Taking the keyboard makes a window the
+        active one on a Mac, and that is a FocusIn of its own: two diagrams
+        whose activations crossed took it from each other for ever, and the
+        program froze (1.6.9).  For the same reason a window never takes it
+        right after another one has.
         """
+        try:
+            # where the keyboard is now: if anything moves it before the
+            # look below (a property window opening with its field, a
+            # click), that was meant, and this window leaves it there
+            self._focus_seen = self.focus_displayof()
+        except (tk.TclError, KeyError):
+            self._focus_seen = None
+        if getattr(self, "_focus_check", None) is not None:
+            return None                # one look is on its way already
+        try:
+            self._focus_check = self.after(FOCUS_SETTLE_MS,
+                                           self._claim_keyboard)
+        except tk.TclError:
+            self._focus_check = None
+        return None
+
+    def _claim_keyboard(self):
+        """The second half of `_window_focused`, once activation settled."""
+        self._focus_check = None
+        seen, self._focus_seen = getattr(self, "_focus_seen", None), None
+        try:
+            if not self.winfo_exists():
+                return None
+        except tk.TclError:
+            return None
+        if not self.is_active():
+            return None                # another window is in front by now
+        now = time.monotonic()
+        last_owner, last_time = PlotWindow._keyboard_claim
+        if last_owner is not self and now - last_time < FOCUS_CLAIM_GAP:
+            return None                # no tug of war between two windows
         app = getattr(self, "app", None)
         if app is not None:
             app.plot_used(self)
@@ -15895,20 +16109,21 @@ class PlotWindow(tk.Toplevel):
             current = self.focus_displayof()
         except (tk.TclError, KeyError):
             current = None
-        if current is None or current is self:
-            self.take_focus()
-            return None
-        try:
-            if current.winfo_toplevel() is self:
-                return None            # a widget of this window: it keeps it
-        except tk.TclError:
-            current = None
-        if app is not None and current is not None:
+        if current is not seen:
+            return None                # moved on purpose meanwhile
+        if current is not None and current is not self:
+            try:
+                if current.winfo_toplevel() is self:
+                    return None        # a widget of this window: it keeps it
+            except tk.TclError:
+                current = None
+        if app is not None and current is not None and current is not self:
             try:
                 if app.keyboard_busy(current):
                     return None        # a cell is being written: leave it
             except (tk.TclError, AttributeError):
                 pass
+        PlotWindow._keyboard_claim = (self, now)
         self.take_focus()
         return None
 

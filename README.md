@@ -1,3 +1,5 @@
+<img src="icon.png" width="96" alt="APlot graphing with a broadened spectra icon.">
+
 # APlot - Data Visualizer
 
 APlot is a small desktop program for typing or loading tabular data and
