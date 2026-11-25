@@ -31,7 +31,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.8 (2026-11-24)**.  The number is written in one place
+This is **APlot 1.6.9 (2026-11-25)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -203,9 +203,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.8_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.6.9_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.8-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.6.9-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -269,8 +269,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.8 -m "APlot 1.6.8"
-        git push origin v1.6.8
+        git tag -a v1.6.9 -m "APlot 1.6.9"
+        git push origin v1.6.9
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases

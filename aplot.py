@@ -111,7 +111,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.8 (2026-11-24) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+1.6.9 (2026-11-25) - see `APP_VERSION` below and VERSION_HISTORY.md (the
 same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -304,8 +304,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.8"
-APP_VERSION_DATE = "2026-11-24"
+APP_VERSION = "1.6.9"
+APP_VERSION_DATE = "2026-11-25"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -22281,6 +22281,11 @@ class PlotWindow(tk.Toplevel):
             label = line.get_label()
             if not label or label.startswith("_") or not line.get_visible():
                 continue
+            # a column emptied in the sheet keeps its curve (and its style,
+            # for when numbers come back) but has nothing drawn: no legend
+            # box either, just as a diagram opened afresh shows none for it
+            if not self.has_numbers(self.df, y_col):
+                continue
             state = self.legend_state.get(y_col)
             if state is None:
                 state = self.default_legend_state(index)
@@ -27541,7 +27546,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.8 (2026-11-24)**.  The number is written in one place
+This is **APlot 1.6.9 (2026-11-25)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27713,9 +27718,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.8_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.6.9_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.8-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.6.9-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -27779,8 +27784,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.8 -m "APlot 1.6.8"
-        git push origin v1.6.8
+        git tag -a v1.6.9 -m "APlot 1.6.9"
+        git push origin v1.6.9
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -31267,6 +31272,7 @@ The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.6.9 | 2026-11-25 | **No more freezing on a Mac**: pasting a picture into a diagram while the clipboard held text copied in APlot itself (cells, a field) froze the program - the clipboard was read through `osascript`, macOS asked APlot for its text, and each waited for the other for ever.  The clipboard of macOS is now read inside the program; on Linux the text APlot copied itself is no longer handed to `xclip` either.  Two diagram windows activated at the same moment no longer take the keyboard from each other endlessly, which froze the program as well: a window takes it a moment later, only if it is still in front then, and never right after another window has.  **Writing over a legend text** (`Cmd/Ctrl+A`, then typing) gives the new text alone: the field was empty for a moment and the column name was filled in, so the legend read `HelloY1`; the column name now comes in only when the field is left empty.  **A column emptied in the sheet leaves no legend box behind**: when every number of a drawn column was deleted while the diagram was open, its legend box stayed.  The legend now has a box only for the curves that have something to draw, just as a diagram opened afresh; the curve keeps its settings, and when numbers come back it is drawn - with its legend box - as before. |
 | 1.6.8 | 2026-11-24 | **Renaming a sheet of a group drawn together (`Plot with previous tab`) keeps its curves as they are**: a curve of that sheet carries the name of the sheet (`Y1 (Data 2)`), and the diagram took the curve under the new name for a new one - the legend text written for it was lost and it was drawn in the next colour and marker of the cycle, so the curves of the sheets added after it were out of order as well.  The diagram now follows the new name of the sheet, as it does when a column is renamed: the legend text, colour, marker and every other setting of the curve stay. |
 | 1.6.7 | 2026-11-23 | **Sheets drawn together (`Plot with previous tab`) whose first row holds the column titles are drawn right**: a word in the X column made the whole column text, so the X values were sorted alphabetically (`-0.0, -179, -180, ..., 195, 25`) and the curves ran back and forth across the diagram.  The X values are now matched up as numbers whenever every sheet has numbers there; a word in X carries no point, as it does when the sheet is drawn alone.  **Faster too**: the empty rows at the end of the sheets were paired with each other - two sheets of a thousand rows made a table of almost a million rows for the diagram; rows without X are now left out before the sheets are matched up. |
 | 1.6.6 | 2026-11-23 | **A diagram copied on Windows (`Ctrl+C`) pastes into PowerPoint with a white page, not a grey one**: the picture is put on the clipboard of Windows as a PNG - what PowerPoint, Word and the browsers take, a see-through page and all, as on a Mac - and as a bitmap laid on white for the programs that know no PNG.  The .NET way used before laid the picture on light grey, so a diagram with a white or a see-through page arrived grey.  **The version history has a file of its own**, `VERSION_HISTORY.md`, instead of being a part of the README; `Help > Version history` shows it, and `Check for updates` reads what is new from it.  **Updates of the packages made safer**: the helper that installs the `.msi` waits until APlot has closed and works outside the folder of APlot (as FSP Viewer showed, Windows cannot replace a folder that a process stands in), and it is a batch file again that gets its paths in environment variables - a graph whose path had a space or a bracket in it kept the old helper from starting at all; the `.dmg` copies the new APlot.app beside the old one and puts it in place only when APlot has closed, instead of replacing the bundle of the running APlot; the new APlot starts afresh, in the home folder; and when the new version could not be put in place, the old one says so at its next start, with the reason, instead of starting as if it had been updated. |
