@@ -31,7 +31,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.9 (2026-11-25)**.  The number is written in one place
+This is **APlot 1.7.0 (2026-11-26)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -203,9 +203,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.9_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.7.0_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.9-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.7.0-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -269,8 +269,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.9 -m "APlot 1.6.9"
-        git push origin v1.6.9
+        git tag -a v1.7.0 -m "APlot 1.7.0"
+        git push origin v1.7.0
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -690,7 +690,7 @@ sheets together:
 
 | Button | Row | What it does |
 | --- | --- | --- |
-| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 14 styles. |
+| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 15 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting.  The diagrams come to the front, and the one used last **gets the keyboard** as well - the arrow keys move its selected object at once (a click into the sheet gives the keyboard back to the sheet). |
 | Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
 | Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
@@ -703,6 +703,7 @@ sheets together:
 | Gear (Settings) | first | Opens the settings editor (see section 5). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
 | **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
+| **`#` (Exclude values)** | second, under `Add row` | Leaves the selected values **out of the diagrams and the analysis** - they stay in the sheet, written `#value` in grey italics.  Pressed again on them, it takes them back in.  See `Leaving values out (the # button)`. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`) or with the `Edit` menu, which
@@ -1069,6 +1070,13 @@ an immediate action with a style menu:
     The surface is turned with the pointer, each of its three axes can be
     made longer or shorter, and it is coloured by its height - see
     `3D surface properties` under `Curve properties`.
+  * **3D Wireframe**: The same x, y, z columns as a **net of lines in
+    space** (`ax.plot_wireframe`), on the very axes of the 3D Surface: it is
+    turned, sized and given its axes, ranges and ticks the same way.  The
+    lines are drawn in one colour, or each piece of a line in the colour of
+    its height (with a colour bar); their number, width and style are set
+    in its curve properties.  Points that stand on no grid are joined into
+    the edges of triangles.
   * **Pie Chart**: The values of **one** column as slices of a circle
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
@@ -1332,8 +1340,8 @@ about:
 
 Right-clicking inside the table opens a context menu:
 * On any **cell**: `Cut`, `Copy`, `Paste`, `Fill Down`, `Duplicate`,
-  `Column Math...`, `Clear Cells`, `Insert Row Above`, `Insert Row Below`,
-  `Delete Row(s)`.
+  `Column Math...`, `Clear Cells`, `Exclude / Include Values (#)`,
+  `Insert Row Above`, `Insert Row Below`, `Delete Row(s)`.
 * On any **column header**: `Calculate Column '<name>'...`, `Sort Ascending`,
   `Sort Descending`, `Fill Down`, `Insert Column Before...`,
   `Insert Column After...`, `Rename '<name>'...`, `Delete Column '<name>'`.
@@ -1687,6 +1695,37 @@ of the data is enough to cut the curve in two.
 
 The only case with no curve at all is a column that is empty from top to
 bottom.
+
+### Leaving values out (the # button)
+
+A value that should not count - an outlier, a reading that went wrong - does
+not have to be deleted.  Select it (or a block of cells) and press the **`#`
+button**, the one under `Add row` (or `Exclude / Include Values (#)` in the
+right click menu of a cell):
+
+* the value **stays in the sheet**, written as **`#value` in grey
+  italics** - `#100.0` - so it is plain to see which values are left out,
+  and nothing is lost;
+* the **diagrams do not draw it** (after `Update`, as after any edit): the
+  point is simply not there, and the line runs on from the point before it
+  to the point after it - unlike an empty cell, which cuts the curve (see
+  `Leaving a gap in a curve`).  A left out **X value** takes the whole row
+  with it: that point is gone from every curve;
+* the **regression does not fit it** (section 1.2);
+* a **formula** that reads it gets `#N/A`, and a range goes without it:
+  `SUM(B1:B10)` and `AVERAGE(B1:B10)` count only the values that are in.
+  (`Column Math` works on the values as they stand.)
+
+**Pressing `#` again** on values that are all left out takes them back in.
+For a block that is partly in and partly out, the first press leaves all of
+it out and the second one takes all of it back.  Empty cells are never left
+out.
+
+The values left out move with their rows and columns - a row inserted above
+them, a column deleted beside them, the sheet sorted - as the formulas do.
+`Undo` takes the step back, and the `.aplt` file keeps them.  Typing a new
+value into such a cell keeps it left out; copying it copies the value
+itself.
 
 ### Column names
 
@@ -2074,6 +2113,13 @@ All four sides work, each with the points on its own line:
 * Everything in the diagram - the curves, the legend boxes, the text
   boxes, the drawings and the arrows - keeps its place inside the plot
   area and follows it.
+* **While an end is pulled, its length is written beside it**: a small
+  label next to the control point that moves gives the length of the axis
+  in centimetres, in inches and in per cent of the page (`7.97 cm · 3.14 in
+  · 26.8 %`), and the message line of the toolbar says it in full.  These
+  are the units of `Frame and origin`, so the same size can be typed into
+  another diagram exactly.  The label is gone when the button is let go -
+  it is never part of the picture - and the message stays a moment.
 * **Double clicking** an axis line opens `Frame and origin`, where the same
   numbers can be typed in fractions, centimetres or inches; the dialog
   always shows what the pointer has made.
@@ -2454,6 +2500,33 @@ So copying an ellipse here, then a picture in another program, and pressing
 so until something is copied here again, which puts the object back in
 front.
 
+### Copying the style of a graph to another one
+
+When many diagrams have to look alike, one of them is set up and its look
+is carried over to the others.  **Right click on the background** of the
+finished graph (anywhere no object is) and choose **`Copy graph style`**;
+then right click on the background of another graph and choose **`Paste
+graph style`**.  The other graph takes over:
+
+* the page and its size, the frame and its line, the **lengths and the
+  place of the axes**;
+* every axis: its line, thickness, ticks, numbers, **range** (or the
+  automatic range), scale, direction, grid, its **label** and the fonts;
+* the **title**, the legend settings and the font of the diagram;
+* the **curves, one by one in their order** - the first curve takes the
+  style of the first curve of the copied graph, the second that of the
+  second, and so on: the plot style, the line, the marker, the colours, the
+  fill, the error bars, the bars, the colour scale and the font size,
+  colour and place of the legend box.
+
+What the other graph **shows stays its own**: its columns, the legend texts,
+its text boxes, drawings, arrows and pictures, and every setting that names
+a column (the Z column of a surface, the error column).  A curve it has
+beyond the curves of the copied graph keeps its own style; the message line
+says how many curves took the copied one.  `Paste graph style` is greyed
+out until a style was copied, it can be pasted onto any number of graphs,
+and `Undo` takes a paste back in one step.
+
 ### Writing a text in place
 
 The title, both axis labels, the label of a colour bar, the legend boxes
@@ -2671,12 +2744,20 @@ staircase - anything drawn for that column.  A single click grabs the graph
 and moves it (see `Moving the whole graph`), so the properties need the
 second click, exactly like a text box or a drawing.
 
+**One window for every curve.**  The very top of the window, `Curve`, lists
+every curve of the diagram - by its legend text, with its column in
+brackets where the two differ.  Choosing another one shows that curve in
+the window: its own window opens in the same place, and the one before
+closes.  So the curves of a diagram are set one after the other without
+opening a window for each of them; the title of the window names the curve
+it shows.
+
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 14 styles: **Line +
+representation of any individual curve between all 15 styles: **Line +
 Symbol**, **Line**, **Scatter**, **Bar Chart**, **Error Bar (Median, SD)**,
 **Error Bar (Median, +error, -error)**, **Histogram**, **Stairs**,
 **2D Histogram**, **Colour Surface (pcolor)**, **Contour Lines**,
-**Filled Contours**, **3D Surface** and **Pie Chart**.  A single curve switched to an error
+**Filled Contours**, **3D Surface**, **3D Wireframe** and **Pie Chart**.  A single curve switched to an error
 bar style by hand reads the column after it (or the two columns after it)
 for its errors, and one switched to a surface or contour style reads the
 column after it for its Z values.  The dialog shows exactly
@@ -2697,6 +2778,7 @@ the sections that style can use, and nothing else:
 | Contour Lines | Legend, Colour scale (Z values), Contour properties |
 | Filled Contours | Legend, Colour scale (Z values), Contour properties |
 | 3D Surface | Legend, Colour scale (Z values), 3D surface properties |
+| 3D Wireframe | Legend, Colour scale (Z values), 3D wireframe properties |
 | Pie Chart | Legend, Pie properties |
 
 The dialog sections each have **their own check button as the title**: switched
@@ -2868,10 +2950,18 @@ switched on in `Curve properties` like any other.
   * `Shading`: `Flat` paints one cell of one colour around every point,
     `Smooth` blends the colours from point to point.
   * `Draw the edges of the cells`: a thin black line around every cell.
-* **3D surface properties** (visible for 3D Surfaces).  The surface is
-  drawn on **axes of its own**, laid over the plot area; the title, the
-  legend boxes, the text boxes, the drawings and the colour bar stay where
-  they are and lie in front of it.
+* **3D surface properties** (visible for 3D Surfaces; **3D wireframe
+  properties** for a 3D Wireframe, with the same view and axes).  The
+  surface is drawn on **axes of its own**, laid over the plot area; the
+  title, the legend boxes, the text boxes, the drawings and the colour bar
+  stay where they are and lie in front of it.
+  * A **3D Wireframe** has, instead of the shading, the light and the
+    edges of the cells: `Lines along a side` (40 to begin with; a grid of
+    fewer points draws all of its own lines - matplotlib takes every n-th
+    row, so the number may come out one less), `Line width`, `Line style`,
+    `Line colour`, and `Draw every line in one colour` - switched off, every
+    piece of a line takes the colour of its height from `Colour scale (Z
+    values)`, and the colour bar can be switched on there.
   * `Elevation [deg]` and `Azimuth [deg]`: the two angles of the view -
     how high the eye stands over the X/Y plane (-90 to 90), and how far it
     has walked around the Z axis (-180 to 180).  30 and -60 to begin with.
@@ -2886,7 +2976,9 @@ switched on in `Curve properties` like any other.
     each of its ends; dragging a control point makes that axis longer or
     shorter, exactly as an axis of any other diagram is resized.  The box
     is always drawn as large as the plot area allows, so a longer axis
-    makes the other two look shorter.
+    makes the other two look shorter.  While an end is pulled, a label
+    beside the pointer tells the three lengths (`X : Y : Z = 6 : 4 : 3`),
+    as this field writes them.
   * **Dragging the line of an axis** carries the whole graph on the page,
     and the arrow keys move it by small steps while an axis is selected.
     The size of the graph on the page is set by `Plot > Resize graph` and

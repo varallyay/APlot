@@ -111,7 +111,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.6.9 (2026-11-25) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+1.7.0 (2026-11-26) - see `APP_VERSION` below and VERSION_HISTORY.md (the
 same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -304,8 +304,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.6.9"
-APP_VERSION_DATE = "2026-11-25"
+APP_VERSION = "1.7.0"
+APP_VERSION_DATE = "2026-11-26"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -373,6 +373,8 @@ PLOT_STYLES = [
      "x, y, z: the bands between the lines of equal Z (ax.contourf)"),
     ("3D Surface", "surface3d",
      "x, y, z: the Z values as a surface in space (ax.plot_surface)"),
+    ("3D Wireframe", "wireframe3d",
+     "x, y, z: the Z values as a net of lines in space (ax.plot_wireframe)"),
     ("Pie Chart", "pie", "The values of one column as slices (ax.pie)"),
 ]
 
@@ -386,10 +388,15 @@ ERROR_STYLES = ("errorbar", "errorbar_pm")
 # columns are read in pairs - x, y, z, y, z, ... - and everything that is
 # true of one of them (the Z column, the colour scale, the colour bar) is
 # true of all three, so they share one group of settings.
-SURFACE_STYLES = ("pcolor", "contour", "contourf", "surface3d")
-# ... the one of them that is drawn in space, on axes of its own that can
-# be turned with the pointer, and the three that lie flat on the X/Y plane
+SURFACE_STYLES = ("pcolor", "contour", "contourf", "surface3d",
+                  "wireframe3d")
+# ... the two of them that are drawn in space, on axes of their own that
+# can be turned with the pointer - a painted surface and a net of lines
+# (everything about the box, the view and the axes is the same for both) -
+# and the three that lie flat on the X/Y plane
 SURFACE3D = "surface3d"
+WIREFRAME3D = "wireframe3d"
+SPACE_STYLES = (SURFACE3D, WIREFRAME3D)
 FLAT_SURFACE_STYLES = ("pcolor", "contour", "contourf")
 # a flat surface fills its plot area to the very edge, so a diagram that
 # opens with one gets a closed frame with the ticks pointing outwards
@@ -409,6 +416,10 @@ SURFACE3D_FRAME = "box"
 # a surface of very many cells turns slowly: at most this many are drawn
 # along each of its two sides
 SURFACE3D_CELLS = 150
+# a net of lines in space: how many lines run along each of its two sides
+# to begin with (a grid of fewer points draws all of its own), and at most
+WIREFRAME_LINES = 40
+MAX_WIREFRAME_LINES = 200
 # matplotlib leaves much air around the box: it is drawn this much larger
 VIEW3D_ZOOM = 1.2
 # the room one number takes along an axis in space, in heights of its font
@@ -595,6 +606,14 @@ Z_PICTURE_GAP = 0.004       # the frame of a picture is just above its pixels
 # an empty cell of a sheet that is drawn together with another one: a real
 # hole in the curve, not a row the other sheet brought along
 GAP_MARK = "<GAP>"
+# A cell of the sheet can be left out of the diagrams and of the analysis
+# (the `#` button): it keeps its value and is shown as `#value` in italics.
+# On its way to a group of sheets drawn together it carries this mark (an
+# empty cell is a hole in the curve; a value left out is not there at all,
+# and the curve runs on from its neighbours).
+EXCLUDED_MARK = "<EXCLUDED>"
+EXCLUDED_PREFIX = "#"
+EXCLUDED_INK = "#7d848e"     # the grey of a value left out
 # One curve is drawn with several artists - the line, the filled area under
 # it, its error bars - which matplotlib lays at distances of a few tenths
 # from each other.  Those distances are squeezed into this much, so that a
@@ -3855,6 +3874,24 @@ def _paint_surface3d(draw, box):
                          outline=ICON_INK)
 
 
+def _paint_wireframe3d(draw, box):
+    """A net of lines in space: the same sheet as the surface, unpainted."""
+    cells = 3
+    width = max(1, int(round(0.03 * box)))
+
+    def corner(column, row):
+        lift = 0.10 * math.sin((column + row) * 0.9)
+        return ((0.14 + column * 0.19 + row * 0.07) * box,
+                (0.78 - row * 0.17 - column * 0.05 - lift) * box)
+
+    for row in range(cells + 1):
+        draw.line([corner(column, row) for column in range(cells + 1)],
+                  fill=ICON_BLUE, width=width)
+    for column in range(cells + 1):
+        draw.line([corner(column, row) for row in range(cells + 1)],
+                  fill=ICON_INK, width=width)
+
+
 def _paint_pie(draw, box):
     low, high = 0.11 * box, 0.89 * box
     draw.pieslice([low, low, high, high], 0, 360, fill=ICON_BLUE,
@@ -3879,6 +3916,7 @@ PLOT_ICON_PAINTERS = {
     "contour": _paint_contour,
     "contourf": _paint_contourf,
     "surface3d": _paint_surface3d,
+    "wireframe3d": _paint_wireframe3d,
     "pie": _paint_pie,
 }
 
@@ -3959,8 +3997,22 @@ def _paint_settings(draw, box):
                  width=max(1, int(round(0.026 * box))))
 
 
+def _paint_exclude(draw, box):
+    """A hash mark on a sheet: the values left out of plots and analysis."""
+    _bar(draw, box, 0.06, 0.06, 0.94, 0.94, ICON_PAPER, ICON_EDGE, 0.026,
+         radius=0.08)
+    width = max(2, int(round(0.085 * box)))
+    for x in (0.40, 0.62):          # the two leaning strokes
+        draw.line([((x + 0.05) * box, 0.20 * box), ((x - 0.05) * box, 0.80 * box)],
+                  fill=ICON_ROSE, width=width)
+    for y in (0.39, 0.61):          # the two cross strokes
+        draw.line([(0.22 * box, y * box), (0.80 * box, y * box)],
+                  fill=ICON_ROSE, width=width)
+
+
 FILE_ICON_PAINTERS = {"open": _paint_open, "save": _paint_save,
-                      "import": _paint_import, "settings": _paint_settings}
+                      "import": _paint_import, "settings": _paint_settings,
+                      "exclude": _paint_exclude}
 
 
 # -- the tools of a diagram window, in the very same shades ----------------
@@ -5671,7 +5723,18 @@ class ToolDialog(tk.Toplevel):
         then is the window shown, so it appears right there at once.
         """
         try:
-            self._place_beside_parent()
+            spot = getattr(self, "place_at", None)
+            if spot is not None:
+                # it takes the place of a window of its kind that was there
+                self.update_idletasks()
+                x, y = fit_on_screen(self, spot[0], spot[1],
+                                     self.winfo_reqwidth(),
+                                     self.winfo_reqheight())
+                self.geometry(f"+{int(x)}+{int(y)}")
+            else:
+                self._place_beside_parent()
+        except tk.TclError:
+            pass
         finally:
             self.show_placed()
         # once it is on the screen, a last look: a window that has grown
@@ -5751,15 +5814,18 @@ class ToolDialog(tk.Toplevel):
         nudge(sx * step, sy * step)
         return "break"
 
-    def close(self):
+    def close(self, give_focus=True):
         if self._on_close:
             self._on_close(self)
         self.destroy()
+        if not give_focus:
+            return             # another window takes this one's place
         # the diagram gets the keyboard back, so the arrow keys and the
         # copy/paste shortcuts keep working after a property window was used
+        # - with force where Tk has lost it with the window that is gone
         take_focus = getattr(self.master, "take_focus", None)
         if callable(take_focus):
-            take_focus()
+            take_focus(insist=True)
 
     @staticmethod
     def field(parent, row, text, widget, pady=2):
@@ -6625,9 +6691,12 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                  pie_cfg=None, on_pie_cfg=None,
                  surface_cfg=None, on_surface_cfg=None,
                  view3d=None, on_view3d=None,
-                 available_columns=None):
+                 available_columns=None, on_curve=None):
         super().__init__(master, "Curve properties", on_close=on_close)
         self.line = line
+        # another curve of the diagram chosen at the top of the window: the
+        # diagram opens its window in the place of this one
+        self.on_curve = on_curve
         self.on_change = on_change
         self.on_legend_style = on_legend_style
         self.on_fill = on_fill
@@ -6692,6 +6761,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
             value=str(self._fill.get("base", "bottom")) == "zero")
 
         line_color = safe_hex(line.get_color())
+        self._build_curve_box()
         self._build_style_box()
         self._build_legend_box()
         self._build_line_box(line_color)
@@ -6862,6 +6932,55 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         return box
 
     # -- construction ------------------------------------------------------
+    def curve_choices(self):
+        """(column, name in the list) of every curve of the diagram."""
+        chooser = getattr(self.master, "curve_choices", None)
+        try:
+            return list(chooser()) if callable(chooser) else []
+        except (tk.TclError, AttributeError, TypeError, ValueError):
+            return []
+
+    def _build_curve_box(self):
+        """Which curve the window shows: all curves of the diagram, one
+        after the other, from one window."""
+        box = ttk.LabelFrame(self.body, text="Curve", padding=8)
+        self.curve_box = box
+        box.pack(fill="x", pady=(0, 10))
+        self.curve_var = tk.StringVar()
+        self.curve_combo = ttk.Combobox(
+            box, textvariable=self.curve_var, state="readonly", width=24,
+            postcommand=self._fill_curve_list)
+        self.curve_combo.pack(fill="x")
+        self.curve_combo.bind("<<ComboboxSelected>>", self._curve_chosen)
+        try:
+            Tooltip(self.curve_combo, "Choose the curve (data set) whose "
+                                      "properties this window shows")
+        except Exception:
+            pass
+        self._fill_curve_list()
+
+    def _fill_curve_list(self):
+        """The names of the curves as they are now (renamed, added...)."""
+        choices = self.curve_choices()
+        self._curve_names = {text: column for column, text in choices}
+        self.curve_combo.configure(values=[text for _column, text in choices])
+        mine = next((text for column, text in choices
+                     if column == self.column), str(self.column or ""))
+        self.curve_var.set(mine)
+        try:
+            self.title(f"Curve properties - {mine}" if mine
+                       else "Curve properties")
+        except tk.TclError:
+            pass
+
+    def _curve_chosen(self, _event=None):
+        column = getattr(self, "_curve_names", {}).get(self.curve_var.get())
+        if column is None or column == self.column or not self.on_curve:
+            self._fill_curve_list()
+            return None
+        self.on_curve(column, self)
+        return None
+
     def _build_style_box(self):
         box = ttk.LabelFrame(self.body, text="Plot Style", padding=8)
         self.style_box = box
@@ -7400,6 +7519,67 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                                    command=self._apply), 7, pady=(2, 0))
         for variable in [self.v3_elev_var, self.v3_azim_var] + self.v3_box_vars:
             variable.trace_add("write", self._apply)
+        self._build_wire3d_rows(box)
+
+    # the lines of the 3D section that only a painted surface has, and the
+    # ones that only a net of lines has
+    PAINT3D_ROWS = (5, 6, 7)
+    WIRE3D_ROWS = (8, 9, 10)
+
+    def _build_wire3d_rows(self, box):
+        """A net of lines in space: how many lines, and how they look."""
+        cfg = self.surface_cfg
+        self.sf_wires_var = tk.StringVar(
+            value=str(PlotWindow.wire_count(cfg)))
+        self.sf_wire_width_var = tk.StringVar(
+            value=field_number(to_float(cfg.get("wire_width"), 0.8), "0.8"))
+        self.sf_wire_style_var = tk.StringVar(
+            value=name_of(LINE_STYLES[:-1], cfg.get("wire_style", "-"),
+                          "Solid"))
+        self.sf_wire_onecolor_var = tk.BooleanVar(
+            value=bool(cfg.get("wire_onecolor", True)))
+        self.sf_wire_color = ColorSwatch(
+            box, safe_hex(cfg.get("wire_color"), "#1f4e79"),
+            command=lambda _c: self._apply())
+        self._pair(box, 8,
+                   "Lines along a side:",
+                   ttk.Spinbox(box, from_=2, to=MAX_WIREFRAME_LINES,
+                               increment=1, width=SPIN_WIDTH,
+                               textvariable=self.sf_wires_var,
+                               command=self._apply),
+                   "Line width:",
+                   ttk.Spinbox(box, from_=0.1, to=10, increment=0.1,
+                               width=SPIN_WIDTH,
+                               textvariable=self.sf_wire_width_var,
+                               command=self._apply))
+        combo = ttk.Combobox(box, textvariable=self.sf_wire_style_var,
+                             state="readonly", width=SPIN_WIDTH + 4,
+                             values=names(LINE_STYLES[:-1]))
+        combo.bind("<<ComboboxSelected>>", self._apply)
+        self._pair(box, 9, "Line style:", combo,
+                   "Line colour:", self.sf_wire_color)
+        self._wide(ttk.Checkbutton(
+            box, text="Draw every line in one colour (off: the colour "
+                      "scale, by height)",
+            variable=self.sf_wire_onecolor_var, command=self._apply),
+            10, pady=(4, 0))
+        for variable in (self.sf_wires_var, self.sf_wire_width_var):
+            variable.trace_add("write", self._apply)
+
+    def _show_space_fields(self, wire):
+        """A painted surface and a net of lines share the view and the
+        axes of the 3D section; each has lines of its own below them."""
+        box = self.surface3d_box
+        box.configure(text="3D wireframe properties" if wire
+                      else "3D surface properties")
+        for rows, shown in ((self.PAINT3D_ROWS, not wire),
+                            (self.WIRE3D_ROWS, wire)):
+            for row in rows:
+                for widget in box.grid_slaves(row=row):
+                    if shown:
+                        widget.grid()
+                    else:
+                        widget.grid_remove()
 
     def _build_contour_box(self):
         """Contours: the levels, the lines and the numbers written on them."""
@@ -7672,6 +7852,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         "contour": ("surface_box", "contour_box"),
         "contourf": ("surface_box", "contour_box"),
         "surface3d": ("surface_box", "surface3d_box"),
+        "wireframe3d": ("surface_box", "surface3d_box"),
         "pie": ("pie_box",),
     }
 
@@ -7687,6 +7868,8 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
             self._show_bar_fields(st == "histogram")
         if st in ("contour", "contourf"):
             self._show_contour_fields(st == "contourf")
+        if st in SPACE_STYLES:
+            self._show_space_fields(st == WIREFRAME3D)
         for name in self.SECTIONS.get(st, self.SECTIONS["line_symbol"]):
             getattr(self, name).pack(fill="x", pady=(10, 0))
         # a pie has one legend row per slice: a single text would be a lie
@@ -7786,9 +7969,9 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
         if not self.label_var.get().strip():
             self._apply()
 
-    def close(self):
+    def close(self, give_focus=True):
         self._label_left()
-        super().close()
+        super().close(give_focus)
 
     def _apply(self, *_args):
         if self._loading:
@@ -7892,7 +8075,7 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                 "vmin": self._limit_value(self.h2_vmin_var.get()),
                 "vmax": self._limit_value(self.h2_vmax_var.get()),
             })
-        if self.on_view3d and self.style_code() == SURFACE3D:
+        if self.on_view3d and self.style_code() in SPACE_STYLES:
             view = {}
             # a number that is only half typed changes nothing yet
             for key, variable in (("elev", self.v3_elev_var),
@@ -7933,6 +8116,15 @@ class SeriesStyleDialog(DiagramMirror, PairedFields, ToolDialog):
                 "color": self.sf_line_color.color,
                 "labels": bool(self.sf_labels_var.get()),
                 "label_size": max(4, to_int(self.sf_label_size_var.get(), 9)),
+                "wires": max(2, min(to_int(self.sf_wires_var.get(),
+                                           WIREFRAME_LINES),
+                                    MAX_WIREFRAME_LINES)),
+                "wire_width": max(0.1, to_float(self.sf_wire_width_var.get(),
+                                                0.8)),
+                "wire_style": code_of(LINE_STYLES,
+                                      self.sf_wire_style_var.get(), "-"),
+                "wire_color": self.sf_wire_color.color,
+                "wire_onecolor": bool(self.sf_wire_onecolor_var.get()),
             })
         if self.on_pie_cfg:
             self.on_pie_cfg({
@@ -9154,9 +9346,13 @@ class FormulaEvaluator:
     # other functions because their number depends on the cell they stand in.
     RANDOM_FUNCS = ('rand', 'randn')
 
-    def __init__(self, df: pd.DataFrame, cell_formulas: dict, seed=0):
+    def __init__(self, df: pd.DataFrame, cell_formulas: dict, seed=0,
+                 excluded=None):
         self.df = df
         self.cell_formulas = cell_formulas
+        # the cells left out of the analysis: a formula that reads one gets
+        # #N/A, and a range (SUM, AVERAGE...) simply goes without it
+        self.excluded = excluded or set()
         self._eval_stack = set()
         # every sheet has a seed of its own: RAND() in a cell is drawn from
         # the seed, the row, the column and which RAND() of the formula it
@@ -9199,6 +9395,8 @@ class FormulaEvaluator:
             raise ValueError("#CYCLE!")
         if not (0 <= row < len(self.df) and 0 <= col < len(self.df.columns)):
             raise ValueError("#REF!")
+        if (row, col) in self.excluded:
+            raise ValueError("#N/A")
 
         if (row, col) in self.cell_formulas:
             formula = self.cell_formulas[(row, col)]
@@ -10825,7 +11023,8 @@ class RegressionDialog(ToolDialog):
                                 parent=self)
             return None
 
-        frame = table.df
+        # the values left out of the analysis (the # button) are not fitted
+        frame = table.analysis_frame()
         x_name = self.x_name()
         x_values = pd.to_numeric(frame[x_name], errors="coerce").to_numpy(float)
         if not np.isfinite(x_values).any():
@@ -11014,6 +11213,11 @@ class DataTable(ttk.Frame):
         self._heading_editor = None
         self.cell_formulas: dict = {}   # (row, col) -> formula string (e.g. "=A1+B1")
         self.random_seed = new_random_seed()   # what RAND() of this sheet draws from
+        # the cells left out of the diagrams and the analysis, as (row,
+        # column) places; they move with their rows and columns as the
+        # stored formulas do
+        self.excluded = set()
+        self._excluded_labels = []      # the italic #values laid over them
         self.plot_with_previous_var = tk.BooleanVar(value=False)
         # the highlighted block of cells: (row0, col0, row1, col1)
         self.block = None
@@ -11329,17 +11533,175 @@ class DataTable(ttk.Frame):
                 sides[name] = Y_SIDES[code]
         return {"x": x_name, "x_side": x_side, "y": sides}
 
-    def plot_dataframe(self, least=1):
+    def plot_dataframe(self, least=1, excluded=np.nan):
         """The data of the ticked columns only.
 
         `least` is how many columns the diagram needs.  One is enough for
         every style now: a histogram counts a single column of raw values,
-        and every other diagram draws it against the row numbers.
+        and every other diagram draws it against the row numbers.  A cell
+        left out of the analysis arrives as `excluded` (see
+        `analysis_frame`).
         """
         columns = self.plot_columns()
         if len(columns) < max(1, int(least)):
             return self.df.iloc[:, :0]
-        return self.df[columns].copy()
+        return self.analysis_frame(excluded)[columns].copy()
+
+    # -- cells left out of the diagrams and of the analysis ------------------
+    @staticmethod
+    def _empty_value(value):
+        if value is None:
+            return True
+        if isinstance(value, float) and math.isnan(value):
+            return True
+        return isinstance(value, str) and not value.strip()
+
+    def is_excluded(self, row, col):
+        return (int(row), int(col)) in self.excluded
+
+    def analysis_frame(self, marker=np.nan):
+        """The sheet as the diagrams and the regression see it: every cell
+        left out holds `marker` (not a number) instead of its value.  A
+        left out X value takes its whole row with it - a point without its
+        X is no point of any curve."""
+        frame = self.df.copy()
+        if not self.excluded or frame.empty:
+            return frame
+        rows, columns = frame.shape
+        cells = {(r, c) for r, c in self.excluded if r < rows and c < columns}
+        x_columns = [index for index, name in enumerate(frame.columns)
+                     if self._is_x_column(name)]
+        for r, c in list(cells):
+            if c in x_columns:
+                cells.update((r, other) for other in range(columns))
+        for c in sorted({c for _r, c in cells}):
+            name = frame.columns[c]
+            if pd.api.types.is_numeric_dtype(frame[name]) \
+                    and isinstance(marker, float):
+                frame[name] = frame[name].astype(float)
+            else:
+                frame[name] = frame[name].astype(object)
+            for r in sorted(r for r, cc in cells if cc == c):
+                frame.iat[r, c] = marker
+        return frame
+
+    def exclusion_targets(self):
+        """The cells the `#` button works on: those of the highlighted
+        block (or the selected cell) that hold something."""
+        bounds = self.block_bounds()
+        if bounds is None:
+            return []
+        r0, c0, r1, c1 = bounds
+        found = []
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                if not self._empty_value(self.df.iat[r, c]):
+                    found.append((r, c))
+        return found
+
+    def toggle_exclusion(self):
+        """The `#` button: leave the selected values out of the diagrams
+        and the analysis - or, when every one of them is left out already,
+        take them all back in.  Returns "excluded", "included" or None."""
+        self._commit_edit()
+        cells = self.exclusion_targets()
+        if not cells:
+            return None
+        if all(cell in self.excluded for cell in cells):
+            self.excluded.difference_update(cells)
+            done = "included"
+        else:
+            self.excluded.update(cells)
+            done = "excluded"
+        self.recalculate_all()        # a formula reading one of them changes
+        self._draw_excluded(force=True)
+        self._changed()
+        return done
+
+    def _excluded_font(self):
+        size = max(6, int(self.config_obj.get("table", "font_size")))
+        font = getattr(self, "_excluded_font_obj", None)
+        if font is None:
+            try:
+                font = tkfont.nametofont("TkDefaultFont").copy()
+            except tk.TclError:
+                font = tkfont.Font()
+            self._excluded_font_obj = font
+        try:
+            font.configure(size=size, slant="italic")
+        except tk.TclError:
+            pass
+        return font
+
+    def _excluded_label(self):
+        """One italic #value, lying on the table like a line of the net:
+        a click on it reaches the cell under it."""
+        tree = self.tree
+        label = tk.Label(tree, borderwidth=0, highlightthickness=0,
+                         padx=2, pady=0, anchor="center",
+                         foreground=EXCLUDED_INK)
+        try:
+            label.configure(cursor=tree.cget("cursor"))
+        except tk.TclError:
+            pass
+        label.lower()
+        for sequence in ("<ButtonPress>", "<ButtonRelease>", "<Motion>",
+                         "<MouseWheel>", "<TouchpadScroll>"):
+            try:
+                label.bind(sequence, lambda event, w=label, q=sequence:
+                           self._pass_to_table(event, tree, w, q))
+            except tk.TclError:
+                pass
+        return label
+
+    def _draw_excluded(self, force=False):
+        """Lay an italic `#value` over every left out cell on the screen."""
+        pool = self._excluded_labels
+        places = []
+        rows = len(self.df.index)
+        if self.excluded and rows:
+            tree = self.tree
+            try:
+                height = tree.winfo_height()
+                top, bottom = tree.yview()
+            except tk.TclError:
+                return 0
+            first = max(0, int(top * rows) - 1)
+            last = min(rows - 1, int(bottom * rows) + 1)
+            columns = list(tree["columns"])
+            for r, c in sorted(self.excluded):
+                if not (first <= r <= last) or c >= len(columns):
+                    continue
+                try:
+                    box = tree.bbox(str(r), f"#{c + 1}")
+                except tk.TclError:
+                    box = None
+                if not box or box[1] >= height:
+                    continue
+                try:
+                    shown = str(tree.set(str(r), columns[c]))
+                except tk.TclError:
+                    shown = ""
+                block = "block" in (tree.item(str(r), "tags") or ())
+                places.append((box, f"{EXCLUDED_PREFIX}{shown}", block))
+        wanted = [(tuple(box), text, block) for box, text, block in places]
+        if not force and wanted == getattr(self, "_excluded_drawn", None):
+            return len(wanted)
+        font = self._excluded_font() if wanted else None
+        paper = self.table_background() if wanted else None
+        while len(pool) < len(places):
+            pool.append(self._excluded_label())
+        for label, (box, text, block) in zip(pool, places):
+            x, y, width, height_ = box
+            label.configure(text=text, font=font,
+                            background=BLOCK_TINT if block else paper)
+            # clear of the lines of the net at its right and bottom
+            label.place(x=x, y=y, width=max(1, width - 1),
+                        height=max(1, height_ - 1))
+        for label in pool[len(places):]:
+            label.place_forget()
+        self._excluded_drawn = wanted
+        return len(wanted)
 
     def set_plot_column(self, name, plotted=True):
         """Plot this column on its first axis, or not at all."""
@@ -11940,6 +12302,11 @@ class DataTable(ttk.Frame):
             shape = self._grid_shape()
         except tk.TclError:
             return 0
+        # the values left out lie on the cells too, and move with them
+        try:
+            self._draw_excluded(force=force)
+        except tk.TclError:
+            pass
         if not force and shape == getattr(self, "_grid_drawn", None):
             return sum(len(one) for one in shape.values())
         if not hasattr(self, "_grid_lines"):
@@ -13039,6 +13406,7 @@ class DataTable(ttk.Frame):
         self.df.columns = self._unique_columns(self.df.columns)
         if not keep_formulas:
             self.cell_formulas = {}
+            self.excluded = set()
         self.auto_columns = bool(blank)
         self.refresh(check_all=check_all)
         if self.auto_columns:
@@ -13283,16 +13651,21 @@ class DataTable(ttk.Frame):
 
     # -- rows and columns around the selected cell --------------------------
     def shift_row_formulas(self, at, delta=1):
-        """Make room: the formulas of the rows from `at` on move by `delta`."""
+        """Make room: the formulas of the rows from `at` on move by `delta`
+        (and so do the cells left out of the analysis)."""
         self.cell_formulas = {((row + delta) if row >= at else row, col): formula
                               for (row, col), formula
                               in self.cell_formulas.items()}
+        self.excluded = {((row + delta) if row >= at else row, col)
+                         for row, col in self.excluded}
 
     def shift_column_formulas(self, at, delta=1):
         """The same for the columns from `at` on."""
         self.cell_formulas = {(row, (col + delta) if col >= at else col): formula
                               for (row, col), formula
                               in self.cell_formulas.items()}
+        self.excluded = {(row, (col + delta) if col >= at else col)
+                         for row, col in self.excluded}
 
     def remap_row_formulas(self, old_rows):
         """`old_rows[i]` is the row that becomes row `i`."""
@@ -13300,6 +13673,8 @@ class DataTable(ttk.Frame):
         self.cell_formulas = {(place[row], col): formula
                               for (row, col), formula
                               in self.cell_formulas.items() if row in place}
+        self.excluded = {(place[row], col) for row, col in self.excluded
+                         if row in place}
 
     def renumber_formulas(self, rows=None, columns=None):
         """Rewrite the *text* of every formula after a move of the table.
@@ -13390,6 +13765,8 @@ class DataTable(ttk.Frame):
         self.cell_formulas = {(row, col - 1 if col > at else col): formula
                               for (row, col), formula
                               in self.cell_formulas.items() if col != at}
+        self.excluded = {(row, col - 1 if col > at else col)
+                         for row, col in self.excluded if col != at}
         self.renumber_formulas(columns=(at, -1))
         growing = getattr(self, "auto_columns", False)
         self.current_column = None
@@ -14464,7 +14841,8 @@ class DataTable(ttk.Frame):
 
     def eval_formula(self, formula_str, row, col):
         evaluator = FormulaEvaluator(self.df, self.cell_formulas,
-                                     seed=self.random_seed)
+                                     seed=self.random_seed,
+                                     excluded=self.excluded)
         return evaluator.evaluate(formula_str, row, col)
 
     def new_random_numbers(self):
@@ -14487,7 +14865,8 @@ class DataTable(ttk.Frame):
         if not self.cell_formulas:
             return
         evaluator = FormulaEvaluator(self.df, self.cell_formulas,
-                                     seed=self.random_seed)
+                                     seed=self.random_seed,
+                                     excluded=self.excluded)
         for (r, c), formula in list(self.cell_formulas.items()):
             if r < len(self.df) and c < len(self.df.columns):
                 val = evaluator.evaluate(formula, r, c)
@@ -14585,8 +14964,12 @@ class DataTable(ttk.Frame):
         # every single cell makes a large selection crawl)
         nums = []
         part = self.df.iloc[r0:r1 + 1, c0:c1 + 1]
-        for line in part.itertuples(index=False, name=None):
-            for val in line:
+        left_out = {(r - r0, c - c0) for r, c in self.excluded
+                    if r0 <= r <= r1 and c0 <= c <= c1}
+        for row_at, line in enumerate(part.itertuples(index=False, name=None)):
+            for col_at, val in enumerate(line):
+                if left_out and (row_at, col_at) in left_out:
+                    continue          # a value left out of the analysis
                 if isinstance(val, (int, float)):
                     if math.isfinite(val):
                         nums.append(float(val))
@@ -14692,6 +15075,8 @@ class DataTable(ttk.Frame):
         menu.add_command(label="Column Math...", command=self.open_column_math)
         menu.add_separator()
         menu.add_command(label="Clear Cells (Delete)", command=self.clear_block)
+        menu.add_command(label="Exclude / Include Values (#)",
+                         command=self.toggle_exclusion)
         menu.add_separator()
         menu.add_command(label="Insert Row Above",
                          command=lambda: self.insert_row(self.cursor[0]))
@@ -14863,6 +15248,8 @@ class PlotWindow(tk.Toplevel):
     # which diagram window last took the keyboard on being activated, and
     # when (see `_window_focused`)
     _keyboard_claim = (None, 0.0)
+    # the style of a whole graph, copied for `Paste graph style`
+    _style_clipboard = None
 
     HINT = ("One click selects (a text turns blue), a slow second click "
             "writes the text, a double click opens its properties   |   "
@@ -14978,6 +15365,9 @@ class PlotWindow(tk.Toplevel):
         # the four sides of the plot area can be selected and pulled
         self.frame_sides = {name: name for name in FRAME_ENDS}
         self._inline = None             # the in-place text editor, while open
+        # the length of an axis, written beside its end while it is pulled
+        self._length_label = None
+        self._length_note = ""
         self._rename_click = None       # (kind, key, time) of the last click
         self._rename_prev = None        # the same, one click earlier
         self._pending_rename = None     # a slow second click, waiting for the
@@ -15049,7 +15439,7 @@ class PlotWindow(tk.Toplevel):
         self.axis_cfg["y2"]["direction"] = "off"
         # the third axis of a surface in space has a page like the others
         self.axis_cfg["z"] = self.default_z_cfg()
-        if self.plot_style == SURFACE3D:
+        if self.plot_style in SPACE_STYLES:
             # the walls of a box in space carry a net to begin with
             for which in ("x", "y", "z"):
                 self.axis_cfg[which]["grid"]["major"] = True
@@ -15089,7 +15479,7 @@ class PlotWindow(tk.Toplevel):
         }
         if self.plot_style in FLAT_SURFACE_STYLES:
             self.frame_cfg["style"] = FLAT_SURFACE_FRAME
-        elif self.plot_style == SURFACE3D:
+        elif self.plot_style in SPACE_STYLES:
             self.frame_cfg["style"] = SURFACE3D_FRAME
 
         self._build_widgets()
@@ -15925,26 +16315,47 @@ class PlotWindow(tk.Toplevel):
                 continue
         return self._tool_icons
 
-    def take_focus(self, _event=None):
+    def take_focus(self, _event=None, insist=None):
         """Give the keyboard to the diagram canvas.
 
         matplotlib runs the canvas clicks through its own event loop, which
         does not always hand the focus back to Tk - and after a property
         window has been used, the keyboard belongs to that window.  Setting
         the focus natively keeps the arrow keys, Delete and copy/paste alive.
+
+        On a Mac Tk can lose track of the keyboard altogether - the window
+        in front loses it for a moment, and the system never says that it
+        has it back - and then `focus` only remembers the canvas for later:
+        every key, the arrows too, is thrown away until another program
+        has been in front.  A click in the diagram (and the other callers
+        that know the program is in front, `insist`) takes the keyboard
+        then with force.  The rest - a text editor closed because another
+        program came in front, say - must not pull the program forward.
         """
         if self._inline is not None:
             return None        # the keyboard belongs to the little text editor
+        if insist is None:
+            insist = _event is not None        # a click: this program is in front
         try:
             widget = self.canvas.get_tk_widget()
             if widget.winfo_exists():
                 widget.focus_set()
+                if insist and self._keyboard_holder() is not widget:
+                    widget.focus_force()
         except (tk.TclError, AttributeError):
             pass
         app = getattr(self, "app", None)
         if app is not None:
             app.plot_used(self)
         return None            # never "break": matplotlib needs the click too
+
+    def _keyboard_holder(self):
+        """The widget Tk gives the keys to now (None: to nobody, or to a
+        widget tkinter does not know)."""
+        try:
+            return self.focus_displayof()
+        except (tk.TclError, KeyError):
+            return None
 
     def take_keyboard(self):
         """Become the active window, with the keyboard on the diagram.
@@ -16105,12 +16516,12 @@ class PlotWindow(tk.Toplevel):
         app = getattr(self, "app", None)
         if app is not None:
             app.plot_used(self)
-        try:
-            current = self.focus_displayof()
-        except (tk.TclError, KeyError):
-            current = None
-        if current is not seen:
+        current = self._keyboard_holder()
+        if current is not None and current is not seen:
             return None                # moved on purpose meanwhile
+        # (moved to nobody is no purpose: a Mac takes the keyboard away from
+        # the window in front for a moment, now and then, and the window
+        # that is still in front takes it back)
         if current is not None and current is not self:
             try:
                 if current.winfo_toplevel() is self:
@@ -16124,7 +16535,7 @@ class PlotWindow(tk.Toplevel):
             except (tk.TclError, AttributeError):
                 pass
         PlotWindow._keyboard_claim = (self, now)
-        self.take_focus()
+        self.take_focus(insist=True)       # it is in front: see is_active
         return None
 
     def _bind_keys(self):
@@ -17732,7 +18143,7 @@ class PlotWindow(tk.Toplevel):
                 return box
         except (TypeError, ValueError):
             pass
-        if self.series_style.get(column, self.plot_style) == SURFACE3D:
+        if self.series_style.get(column, self.plot_style) in SPACE_STYLES:
             return tuple(BAR_BOX_3D)   # clear of the Z axis and its label
         return tuple(BAR_BOX)
 
@@ -18334,7 +18745,7 @@ class PlotWindow(tk.Toplevel):
         line = self.series.get(column)
         if st not in SURFACE_STYLES or line is None:
             return None
-        if column not in self.surface_cfg and st == SURFACE3D:
+        if column not in self.surface_cfg and st in SPACE_STYLES:
             # a surface in space shows its heights by itself: its colour
             # bar is there to be switched on, not on to begin with
             self.surface_cfg[column] = {**self.default_surface_cfg(line),
@@ -18372,9 +18783,25 @@ class PlotWindow(tk.Toplevel):
             "labels": bool(cfg.get("labels")),
             "label_size": max(4, int(float(cfg.get("label_size", 9) or 9))),
             "bar": bool(cfg.get("colorbar")) and not (
-                st == "contour" and cfg.get("onecolor")),
+                st == "contour" and cfg.get("onecolor")) and not (
+                st == WIREFRAME3D and cfg.get("wire_onecolor", True)),
             "bar_label": str(cfg.get("bar_label") or ""),
+            # a net of lines in space: how many lines, how they are drawn,
+            # and whether they take the colour of their height
+            "wires": self.wire_count(cfg),
+            "wire_width": max(0.1, to_float(cfg.get("wire_width"), 0.8)),
+            "wire_style": (str(cfg.get("wire_style", "-"))
+                           if str(cfg.get("wire_style", "-")) in
+                           ("-", "--", "-.", ":") else "-"),
+            "wire_color": safe_hex(cfg.get("wire_color"), "#1f4e79"),
+            "wire_onecolor": bool(cfg.get("wire_onecolor", True)),
         }
+
+    @staticmethod
+    def wire_count(cfg):
+        """How many lines a net in space has along each of its sides."""
+        return max(2, min(to_int(cfg.get("wires"), WIREFRAME_LINES),
+                          MAX_WIREFRAME_LINES))
 
     def refresh_surface(self, column):
         """Draw the Z column of one curve over its X/Y plane."""
@@ -18386,7 +18813,7 @@ class PlotWindow(tk.Toplevel):
             plan = None
         if plan is None:
             return None
-        if plan["style"] == SURFACE3D:
+        if plan["style"] in SPACE_STYLES:
             return self._refresh_surface3d(column, plan)
         target = line.axes if line.axes is not None else self.ax
         base = float(line.get_zorder())
@@ -18490,12 +18917,13 @@ class PlotWindow(tk.Toplevel):
     # -- x, y, z in space: ax.plot_surface on axes of its own ---------------
     def is_3d(self):
         """True while this diagram draws a surface in space."""
-        return SURFACE3D in self.styles_in_use()
+        return any(style in SPACE_STYLES for style in self.styles_in_use())
 
     def surface3d_columns(self):
         """The curves that are drawn as a surface in space."""
         return [name for name in self.series
-                if self.series_style.get(name, self.plot_style) == SURFACE3D]
+                if self.series_style.get(name, self.plot_style)
+                in SPACE_STYLES]
 
     def apply_3d_axes(self):
         """Give the diagram its axes in space, or take them away again.
@@ -19399,6 +19827,7 @@ class PlotWindow(tk.Toplevel):
                                                        plan["high"])
         edge = (dict(edgecolor="#000000", linewidth=0.3) if plan["edges"]
                 else dict(edgecolor="none", linewidth=0.0))
+        wire = plan["style"] == WIREFRAME3D
         grid = plan["grid"]
         clip = getattr(self, "_clip3d", None)
         # a logarithmic axis: the surface is laid out along the logarithms
@@ -19445,13 +19874,17 @@ class PlotWindow(tk.Toplevel):
                 if heights.size and np.isfinite(heights).any():
                     xs, ys, heights = laid("x", xs), laid("y", ys), \
                         laid("z", heights)
-                    if plan["smooth"]:
+                    if plan["smooth"] and not wire:
                         xs, ys, heights = self.surface3d_finer(xs, ys, heights)
                     # the values the colours are read from
                     values = self.from_space("z", heights, native=False)
                     x_grid, y_grid = np.meshgrid(drawn("x", xs),
                                                  drawn("y", ys))
-                    if plan["light"]:
+                    if wire:
+                        main = self._draw_wireframe(
+                            ax3d, x_grid, y_grid, drawn("z", heights),
+                            plan, norm)
+                    elif plan["light"]:
                         # every cell in the colour of its height, made
                         # lighter or darker by the way it faces the light
                         main = ax3d.plot_surface(
@@ -19497,13 +19930,26 @@ class PlotWindow(tk.Toplevel):
                     # joined the way they lie on the logarithmic axes
                     where["triangles"] = Triangulation(
                         laid("x", x_arr), laid("y", y_arr)).triangles
-                main = ax3d.plot_trisurf(
-                    drawn("x", laid("x", x_arr)), drawn("y", laid("y", y_arr)),
-                    drawn("z", laid("z", z_arr)), cmap=plan["cmap"],
-                    norm=norm, alpha=plan["alpha"],
-                    antialiased=bool(plan["edges"]), **where, **edge)
-                if z_as_log:
-                    self._colour_by_values(main)
+                if wire:
+                    # no grid to run lines along: the net is the edges of
+                    # the triangles that join the points
+                    main = ax3d.plot_trisurf(
+                        drawn("x", laid("x", x_arr)),
+                        drawn("y", laid("y", y_arr)),
+                        drawn("z", laid("z", z_arr)), color=(1, 1, 1, 0),
+                        edgecolor=plan["wire_color"],
+                        linewidth=plan["wire_width"],
+                        linestyle=plan["wire_style"], shade=False,
+                        **where)
+                else:
+                    main = ax3d.plot_trisurf(
+                        drawn("x", laid("x", x_arr)),
+                        drawn("y", laid("y", y_arr)),
+                        drawn("z", laid("z", z_arr)), cmap=plan["cmap"],
+                        norm=norm, alpha=plan["alpha"],
+                        antialiased=bool(plan["edges"]), **where, **edge)
+                    if z_as_log:
+                        self._colour_by_values(main)
         except (ValueError, TypeError, RuntimeError, IndexError):
             return None            # points on one line are no surface
         finally:
@@ -19539,6 +19985,49 @@ class PlotWindow(tk.Toplevel):
             self._add_color_bar(column, getattr(main, "aplot_mappable", main),
                                 self.ax, plan["bar_label"])
         return main
+
+    def _draw_wireframe(self, ax3d, x_grid, y_grid, heights, plan, norm):
+        """A net of lines in space over a grid (ax.plot_wireframe).
+
+        The lines are drawn in one colour, or - with `Draw every line in
+        one colour` off - every piece of a line in the colour of its
+        height, read from the colour scale of the curve like the cells of
+        a painted surface (and with its colour bar, when that is on).
+        """
+        rows, columns = heights.shape
+        main = ax3d.plot_wireframe(
+            x_grid, y_grid, heights,
+            rcount=min(rows, plan["wires"]), ccount=min(columns, plan["wires"]),
+            color=plan["wire_color"], linewidth=plan["wire_width"],
+            linestyles=plan["wire_style"], alpha=plan["alpha"])
+        if plan["wire_onecolor"]:
+            return main
+        pieces, places = [], []
+        for line in getattr(main, "_segments3d", None) or []:
+            line = np.asarray(line, float)
+            for start, end in zip(line[:-1], line[1:]):
+                if np.isfinite(start).all() and np.isfinite(end).all():
+                    pieces.append((start, end))
+                    places.append(0.5 * (start[2] + end[2]))
+        if not pieces:
+            return main
+        try:
+            from mpl_toolkits.mplot3d.art3d import Line3DCollection
+            coloured = Line3DCollection(
+                pieces, cmap=plan["cmap"], norm=norm,
+                linewidths=plan["wire_width"], linestyles=plan["wire_style"],
+                alpha=plan["alpha"])
+            # the colour of a piece is read from its value, not from its
+            # place on a logarithmic Z axis
+            places = np.asarray(places, float)
+            if not SPACE_LOG_NATIVE:
+                places = self.from_space("z", places, native=False)
+            coloured.set_array(np.asarray(places, float))
+            ax3d.add_collection(coloured)
+        except (ImportError, TypeError, ValueError, AttributeError):
+            return main
+        main.remove()
+        return coloured
 
     @staticmethod
     def _colour_by_values(surface):
@@ -20593,6 +21082,7 @@ class PlotWindow(tk.Toplevel):
             "from matplotlib.legend import Legend",
             "from matplotlib.lines import Line2D",
             "from matplotlib.image import BboxImage",
+            "from mpl_toolkits.mplot3d.art3d import Line3DCollection",
             "from matplotlib.patches import Ellipse, Polygon, Rectangle",
             "from matplotlib.ticker import (AutoMinorLocator, FuncFormatter,",
             "                               LogFormatterSciNotation, LogLocator,",
@@ -20987,8 +21477,9 @@ class PlotWindow(tk.Toplevel):
                    f"({exact(plan['low'])}, {exact(plan['high'])})")
         colours = f"cmap={lit(plan['cmap'])}, norm=norm_{tag}"
         main = f"surf_{tag}"
-        if plan["style"] == SURFACE3D:
+        if plan["style"] in SPACE_STYLES:
             target = "ax"              # its colour bar hangs on the flat axes
+            wire = plan["style"] == WIREFRAME3D
             edge = ("edgecolor='#000000', linewidth=0.3" if plan["edges"]
                     else "edgecolor='none', linewidth=0.0")
             clip = next((one.aplot_clip for one
@@ -21050,7 +21541,9 @@ class PlotWindow(tk.Toplevel):
             recolour = [f"{main}.set_array(10.0 ** {main}.get_array())"
                         "    # the colours count in the values"] \
                 if logs["z"] else []
-            if grid:
+            if grid and wire:
+                out += self._script_wireframe(main, tag, plan, logs["z"])
+            elif grid:
                 finer = self.surface3d_finer(
                     np.zeros(len(grid[0])), np.zeros(len(grid[1])),
                     np.zeros((len(grid[1]), len(grid[0]))))
@@ -21102,6 +21595,15 @@ class PlotWindow(tk.Toplevel):
                         f"antialiased={bool(plan['edges'])}, {edge})")
                     out.append(f"{main}.set_clip_on(False)")
                     out += recolour
+            elif wire:
+                out += ["# no grid: the net is the edges of the triangles "
+                        "that join the points",
+                        f"{main} = ax3d.plot_trisurf({where}, "
+                        f"color=(1, 1, 1, 0), "
+                        f"edgecolor={lit(plan['wire_color'])}, "
+                        f"linewidth={exact(plan['wire_width'])}, "
+                        f"linestyle={lit(plan['wire_style'])}, shade=False)",
+                        f"{main}.set_clip_on(False)"]
             else:
                 out.append(
                     f"{main} = ax3d.plot_trisurf({where}, {colours}, "
@@ -21155,6 +21657,37 @@ class PlotWindow(tk.Toplevel):
             out.append(f"cax_{tag}.tick_params(labelsize={size})")
             out += self._script_bar_label(column, tag, plan["bar_label"])
         return out
+
+    def _script_wireframe(self, main, tag, plan, z_log):
+        """A net of lines in space over the grid `gx, gy, gz` of `tag`."""
+        lit = self._literal
+        wires = int(plan["wires"])
+        width = repr(float(plan["wire_width"]))
+        alpha = repr(float(plan["alpha"]))
+        style = lit(plan["wire_style"])
+        call = (f"ax3d.plot_wireframe(*np.meshgrid(gx_{tag}, gy_{tag}), "
+                f"gz_{tag}, rcount=min(len(gy_{tag}), {wires}), "
+                f"ccount=min(len(gx_{tag}), {wires}), "
+                f"color={lit(plan['wire_color'])}, linewidth={width}, "
+                f"linestyles={style}, alpha={alpha})")
+        if plan["wire_onecolor"]:
+            return [f"{main} = {call}", f"{main}.set_clip_on(False)"]
+        middle = "(a[2] + b[2]) / 2"
+        return [
+            f"net_{tag} = {call}",
+            "# every piece of a line in the colour of its height",
+            f"pieces_{tag} = [(a, b) for line in net_{tag}._segments3d",
+            f"             for a, b in zip(line[:-1], line[1:])",
+            f"             if np.isfinite(a).all() and np.isfinite(b).all()]",
+            f"net_{tag}.remove()",
+            f"{main} = Line3DCollection(pieces_{tag}, cmap={lit(plan['cmap'])},"
+            f" norm=norm_{tag}, linewidths={width}, linestyles={style}, "
+            f"alpha={alpha})",
+            f"{main}.set_array(np.array([" + (f"10.0 ** ({middle})"
+                                              if z_log else middle)
+            + f" for a, b in pieces_{tag}]))",
+            f"ax3d.add_collection({main})",
+            f"{main}.set_clip_on(False)"]
 
     def _script_bar_label(self, column, tag, label):
         """The lines that write the label of a colour bar, where it was
@@ -24044,6 +24577,14 @@ class PlotWindow(tk.Toplevel):
             sizes.add_command(label="Fit to page", command=self.fit_to_page)
             menu.add_cascade(label="Resize graph", menu=sizes)
             self._resize_menu = sizes           # kept, or Tk lets it go
+            # the look of the whole graph, carried over to another graph
+            menu.add_separator()
+            menu.add_command(label="Copy graph style",
+                             command=self.copy_graph_style)
+            menu.add_command(
+                label="Paste graph style",
+                state="normal" if PlotWindow._style_clipboard else "disabled",
+                command=self.paste_graph_style)
         self._object_menu = menu                # kept, or Tk lets it go
         if root_x is None or root_y is None:
             widget = self.canvas.get_tk_widget()
@@ -24067,6 +24608,104 @@ class PlotWindow(tk.Toplevel):
         except (ValueError, TypeError):
             return (0.5, 0.5)
         return (float(point[0]), float(point[1]))
+
+    # -- the style of the whole graph, copied onto another graph ----------
+    # what is not style but this graph's own content: kept as it is
+    STYLE_SKIP = ("geometry", "view", "shapes", "arrows", "notes",
+                  "error_partner", "error_partner_low")
+    # what a curve keeps of its own when it takes the style of the curve
+    # in the same place of the copied graph: its data, its legend text and
+    # the side of the Y axis it is drawn on (the sheet decides that)
+    STYLE_CURVE_KEEP = ("column", "label", "auto_label", "axis")
+    # ... and the settings of a curve that name columns of its sheet
+    STYLE_DATA_KEYS = {"surface_cfg": ("zcol",),
+                       "error_cfg": ("type", "column", "value"),
+                       "pie_cfg": ("names",)}
+
+    def graph_style(self):
+        """Everything about how this graph looks, without what it shows:
+        the page, the frame, the axes (lengths, lines, ranges, ticks,
+        labels), the title, the legend, the fonts, and every curve's line,
+        marker, colours and plot style."""
+        state = copy.deepcopy(self.to_state())
+        for name in self.STYLE_SKIP:
+            state.pop(name, None)
+        (state.get("figure") or {}).pop("zoom", None)   # the view is the window's
+        return state
+
+    def copy_graph_style(self):
+        """Keep the style of this graph for `Paste graph style`."""
+        PlotWindow._style_clipboard = {"style": self.graph_style(),
+                                       "curves": len(self.series)}
+        self.flash("Graph style copied - right click another graph and "
+                   "choose Paste graph style")
+        return PlotWindow._style_clipboard
+
+    def styled_state(self, style):
+        """This graph as it is, dressed in the copied `style`.
+
+        The curves take the style of the curves of the copied graph one by
+        one, in their order - the first the first one's - and a curve left
+        over keeps its own.  What a curve shows stays this graph's: its
+        column, its legend text and every setting that names a column.
+        """
+        state = self.to_state()
+        for key, value in style.items():
+            if key in ("figure", "axes", "series") or key in self.STYLE_SKIP:
+                continue
+            state[key] = copy.deepcopy(value)
+        figure = state.setdefault("figure", {})
+        for key in ("width", "height", "dpi"):
+            if key in (style.get("figure") or {}):
+                figure[key] = style["figure"][key]
+        axes = state.setdefault("axes", {})
+        for which, cfg in (style.get("axes") or {}).items():
+            if which in axes:          # an axis this graph has at all
+                axes[which] = copy.deepcopy(cfg)
+        sources = list(style.get("series") or [])
+        curves = state.get("series") or []
+        for index, entry in enumerate(curves):
+            if index >= len(sources):
+                break
+            merged = copy.deepcopy(sources[index])
+            for key in self.STYLE_CURVE_KEEP:
+                if key in entry:
+                    merged[key] = entry[key]
+                else:
+                    merged.pop(key, None)
+            for name, keys in self.STYLE_DATA_KEYS.items():
+                mine = entry.get(name) or {}
+                theirs = dict(merged.get(name) or {})
+                for key in keys:
+                    if key in mine:
+                        theirs[key] = copy.deepcopy(mine[key])
+                    else:
+                        theirs.pop(key, None)
+                merged[name] = theirs
+            curves[index] = merged
+        return state
+
+    def paste_graph_style(self, style=None):
+        """Dress this graph in the style copied from another (or this) one;
+        Undo takes it back as one step."""
+        if style is None:
+            style = (PlotWindow._style_clipboard or {}).get("style")
+        if not style:
+            self.flash("Copy the style of a graph first (right click on its "
+                       "background: Copy graph style)")
+            return False
+        with self.changed("pasting the graph style"):
+            self.apply_state(self.styled_state(style), place=False)
+            self.draw()             # an open property window follows it
+        copied = len(style.get("series") or [])
+        mine = len(self.series)
+        note = "Graph style pasted - Undo takes it back"
+        if mine > copied:
+            note = (f"Graph style pasted: the first {copied} curve(s) took "
+                    f"the copied style, the other {mine - copied} kept "
+                    "their own - Undo takes it back")
+        self.flash(note)
+        return True
 
     # -- copy, cut and paste ----------------------------------------------
     def copy_object(self, kind, key):
@@ -25755,11 +26394,13 @@ class PlotWindow(tk.Toplevel):
                 self.resize_axis(drag["key"], drag["index"],
                                  self._figure_point(event))
                 self._refresh_handles()
+                self.show_axis_length(drag["key"], drag["index"])
                 self.draw()
                 return
             if mode == "axis3d-end":           # an axis in space: its length
                 if self._stretch_3d_axis(drag, event):
                     drag["moved"] = True
+                    self.show_axis3d_lengths(drag["key"], event)
                     self.draw()
                 return
             if mode == "rotate":
@@ -25908,6 +26549,7 @@ class PlotWindow(tk.Toplevel):
         self.draw()
 
     def _on_release(self, event=None):
+        self.hide_axis_length()                # gone before the page is drawn
         self._end_still()                      # the whole page is drawn again
         moved_plot = (self._plot_drag or {}).get("moved", False)
         moved_group = (self._group_drag or {}).get("moved", False)
@@ -27228,6 +27870,108 @@ class PlotWindow(tk.Toplevel):
         self.apply_frame(cfg)
         return cfg
 
+    def axis_length_text(self, which):
+        """The length of one axis as the Frame page of the axes window
+        writes it - in cm, in inches and as a part of the page - for the
+        label beside a pulled end and for the message line."""
+        side = self.axis_side(which) or "bottom"
+        cfg = self.frame_cfg
+        horizontal = side in HORIZONTAL_SIDES
+        part = float(cfg["x_length"] if horizontal else cfg["y_length"])
+        page = self.page_size[0 if horizontal else 1]   # cm
+        cm = part * float(page)
+        short = f"{cm:.2f} cm \u00b7 {cm / 2.54:.2f} in \u00b7 {part * 100.0:.1f} %"
+        what = "Width" if horizontal else "Height"
+        axis = "X" if horizontal else "Y"
+        note = (f"{what} of the plot area ({axis} axis): {cm:.2f} cm = "
+                f"{cm / 2.54:.3f} inch = {part:.4g} of the page "
+                f"({part * 100.0:.1f} %) - Axes properties > Frame sets it "
+                "exactly in any diagram")
+        return short, note
+
+    def show_axis_length(self, which, index):
+        """Write the length of an axis beside the end that is pulled."""
+        side = self.axis_side(which) or "bottom"
+        cfg = self.frame_cfg
+        left, bottom = float(cfg["left"]), float(cfg["bottom"])
+        width, height = float(cfg["x_length"]), float(cfg["y_length"])
+        if side in HORIZONTAL_SIDES:
+            y = bottom if side == "bottom" else bottom + height
+            # beyond the end, along the axis: clear of its numbers
+            if index == 0:
+                point, offset, ha, va = (left, y), (-12, 0), "right", "center"
+            else:
+                point, offset, ha, va = (left + width, y), (12, 0), "left", "center"
+        else:
+            x = left if side == "left" else left + width
+            if index == 0:
+                point, offset, ha, va = (x, bottom), (0, -12), "center", "top"
+            else:
+                point, offset, ha, va = (x, bottom + height), (0, 12), "center", "bottom"
+        short, note = self.axis_length_text(which)
+        self._place_length_label(short, point, self.fig.transFigure, offset,
+                                 ha, va)
+        self._length_note = note
+        try:
+            self.toolbar.set_message(note)
+        except (tk.TclError, AttributeError):
+            pass
+        return short
+
+    def show_axis3d_lengths(self, name, event):
+        """An axis in space pulled longer: the lengths of the three axes
+        compared with one another, as the curve window writes them."""
+        if event is None or event.x is None or event.y is None:
+            return None
+        box = [field_number(round(float(one), 2), "1")
+               for one in self.view3d_box()]
+        short = f"X : Y : Z = {box[0]} : {box[1]} : {box[2]}"
+        self._place_length_label(short, (float(event.x), float(event.y)),
+                                 IdentityTransform(), (14, 14), "left",
+                                 "bottom")
+        self._length_note = (f"Lengths of the axes {short} - the curve "
+                             "properties (Axis lengths X : Y : Z) set them "
+                             "exactly in any diagram")
+        try:
+            self.toolbar.set_message(self._length_note)
+        except (tk.TclError, AttributeError):
+            pass
+        return short
+
+    def _place_length_label(self, text, point, transform, offset, ha, va):
+        """The little label of a pulled axis end (made once, then moved)."""
+        shift = ScaledTranslation(offset[0] / 72.0, offset[1] / 72.0,
+                                  self.fig.dpi_scale_trans)
+        label = self._length_label
+        if label is None:
+            label = self.fig.text(
+                0.0, 0.0, "", fontsize=10, color="#1a1a1a", zorder=1200,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="#fffbe6",
+                          edgecolor=SELECT_EDGE, linewidth=0.8))
+            label.set_in_layout(False)
+            self._length_label = label
+        label.set_text(text)
+        label.set_position(point)
+        label.set_transform(transform + shift)
+        label.set_horizontalalignment(ha)
+        label.set_verticalalignment(va)
+        label.set_visible(True)
+        return label
+
+    def hide_axis_length(self):
+        """The pull is over: the label goes, the message stays a while."""
+        label, self._length_label = self._length_label, None
+        if label is None:
+            return False
+        try:
+            label.remove()
+        except (ValueError, AttributeError):
+            pass
+        if self._length_note:
+            self.flash(self._length_note)
+        self._length_note = ""
+        return True
+
     def move_axes(self, dx_pixels, dy_pixels):
         """Shift the whole plot area, keeping its size (the arrow keys)."""
         cfg = dict(self.frame_cfg)
@@ -27408,7 +28152,59 @@ class PlotWindow(tk.Toplevel):
             on_view3d=set_view3d,
             error_cfg=self.error_cfg.get(column),
             on_error_cfg=set_error_cfg,
-            available_columns=cols))
+            available_columns=cols,
+            on_curve=self.switch_series_dialog))
+
+    def curve_choices(self):
+        """Every curve of the diagram as the curve window lists it: its
+        legend text, and the column it is drawn from where that differs."""
+        choices = []
+        for column, line in self.series.items():
+            if line is None:
+                continue
+            label = str(line.get_label() or "")
+            if not label or label.startswith("_") or label == str(column):
+                text = str(column)
+            else:
+                text = f"{label}  ({column})"
+            choices.append((column, text))
+        # two curves that would read alike are told apart by their column
+        seen = {}
+        for column, text in choices:
+            seen[text] = seen.get(text, 0) + 1
+        return [(column, f"{text}  ({column})"
+                 if seen[text] > 1 and f"({column})" not in text else text)
+                for column, text in choices]
+
+    def switch_series_dialog(self, column, dialog=None):
+        """Show another curve in the curve window: its own window opens
+        where the one of the curve shown so far stood."""
+        line = self.series.get(column)
+        if line is None:
+            return None
+        spot = None
+        if dialog is not None:
+            try:
+                if dialog.winfo_exists():
+                    spot = (dialog.winfo_rootx(),
+                            dialog.winfo_rooty() - TITLE_BAR)
+                    dialog.close(give_focus=False)
+            except tk.TclError:
+                spot = None
+        existing = self._dialogs.get(id(line))
+        if existing is not None and existing.winfo_exists():
+            if spot is not None:
+                try:
+                    existing.geometry(f"+{int(spot[0])}+{int(spot[1])}")
+                except tk.TclError:
+                    pass
+            existing.lift()
+            existing.focus_force()
+            return existing
+        new = self.open_series_dialog(line)
+        if new is not None and spot is not None:
+            new.place_at = spot
+        return new
 
     def open_axes_dialog(self, which="x"):
         existing = self._dialogs.get("axes")
@@ -27546,7 +28342,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.6.9 (2026-11-25)**.  The number is written in one place
+This is **APlot 1.7.0 (2026-11-26)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -27718,9 +28514,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.6.9_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.7.0_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.6.9-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.7.0-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -27784,8 +28580,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.6.9 -m "APlot 1.6.9"
-        git push origin v1.6.9
+        git tag -a v1.7.0 -m "APlot 1.7.0"
+        git push origin v1.7.0
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -28205,7 +29001,7 @@ sheets together:
 
 | Button | Row | What it does |
 | --- | --- | --- |
-| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 14 styles. |
+| Plot (split button) | first | The word `Plot` beside a picture of the style it will draw. Clicking it opens a NEW diagram with that style; clicking the arrow on its right opens the style menu to choose among 15 styles. |
 | Update | first | Sends the current data to the diagrams that are already open, keeping every style setting.  The diagrams come to the front, and the one used last **gets the keyboard** as well - the arrow keys move its selected object at once (a click into the sheet gives the keyboard back to the sheet). |
 | Open graph (folder icon) | first | Opens a `.aplt` file: the data and every diagram in it.  `Cmd/Ctrl+O`. |
 | Import data (arrow icon) | first | Reads a text data file (CSV, TXT, DAT) into the sheet.  `Cmd/Ctrl+I`. |
@@ -28218,6 +29014,7 @@ sheets together:
 | Gear (Settings) | first | Opens the settings editor (see section 5). |
 | **Regression** | second | Fits a curve to the columns of this sheet - see section 1.2.  `Ctrl/Cmd+R`, or `Plot > Regression...`. |
 | **Plot with previous tab** | second | Glues this sheet to the one before it, so that they are drawn in the same diagram (see `Sheets that are drawn together`).  Ticking it redraws nothing by itself: the next `Update` or `Plot` uses it.  It stands beside `Regression` on every sheet; on the first one there is nothing before it, so it cannot be ticked. |
+| **`#` (Exclude values)** | second, under `Add row` | Leaves the selected values **out of the diagrams and the analysis** - they stay in the sheet, written `#value` in grey italics.  Pressed again on them, it takes them back in.  See `Leaving values out (the # button)`. |
 
 Clearing, copying and pasting cells are done with the keys (`Delete`,
 `Ctrl/Cmd+C`, `Ctrl/Cmd+V`, `Ctrl/Cmd+X`) or with the `Edit` menu, which
@@ -28584,6 +29381,13 @@ an immediate action with a style menu:
     The surface is turned with the pointer, each of its three axes can be
     made longer or shorter, and it is coloured by its height - see
     `3D surface properties` under `Curve properties`.
+  * **3D Wireframe**: The same x, y, z columns as a **net of lines in
+    space** (`ax.plot_wireframe`), on the very axes of the 3D Surface: it is
+    turned, sized and given its axes, ranges and ticks the same way.  The
+    lines are drawn in one colour, or each piece of a line in the colour of
+    its height (with a colour bar); their number, width and style are set
+    in its curve properties.  Points that stand on no grid are joined into
+    the edges of triangles.
   * **Pie Chart**: The values of **one** column as slices of a circle
     (`ax.pie`). The first column of the table names the slices, the
     percentages can be written on them, and the pie may be turned, pulled
@@ -28847,8 +29651,8 @@ about:
 
 Right-clicking inside the table opens a context menu:
 * On any **cell**: `Cut`, `Copy`, `Paste`, `Fill Down`, `Duplicate`,
-  `Column Math...`, `Clear Cells`, `Insert Row Above`, `Insert Row Below`,
-  `Delete Row(s)`.
+  `Column Math...`, `Clear Cells`, `Exclude / Include Values (#)`,
+  `Insert Row Above`, `Insert Row Below`, `Delete Row(s)`.
 * On any **column header**: `Calculate Column '<name>'...`, `Sort Ascending`,
   `Sort Descending`, `Fill Down`, `Insert Column Before...`,
   `Insert Column After...`, `Rename '<name>'...`, `Delete Column '<name>'`.
@@ -29202,6 +30006,37 @@ of the data is enough to cut the curve in two.
 
 The only case with no curve at all is a column that is empty from top to
 bottom.
+
+### Leaving values out (the # button)
+
+A value that should not count - an outlier, a reading that went wrong - does
+not have to be deleted.  Select it (or a block of cells) and press the **`#`
+button**, the one under `Add row` (or `Exclude / Include Values (#)` in the
+right click menu of a cell):
+
+* the value **stays in the sheet**, written as **`#value` in grey
+  italics** - `#100.0` - so it is plain to see which values are left out,
+  and nothing is lost;
+* the **diagrams do not draw it** (after `Update`, as after any edit): the
+  point is simply not there, and the line runs on from the point before it
+  to the point after it - unlike an empty cell, which cuts the curve (see
+  `Leaving a gap in a curve`).  A left out **X value** takes the whole row
+  with it: that point is gone from every curve;
+* the **regression does not fit it** (section 1.2);
+* a **formula** that reads it gets `#N/A`, and a range goes without it:
+  `SUM(B1:B10)` and `AVERAGE(B1:B10)` count only the values that are in.
+  (`Column Math` works on the values as they stand.)
+
+**Pressing `#` again** on values that are all left out takes them back in.
+For a block that is partly in and partly out, the first press leaves all of
+it out and the second one takes all of it back.  Empty cells are never left
+out.
+
+The values left out move with their rows and columns - a row inserted above
+them, a column deleted beside them, the sheet sorted - as the formulas do.
+`Undo` takes the step back, and the `.aplt` file keeps them.  Typing a new
+value into such a cell keeps it left out; copying it copies the value
+itself.
 
 ### Column names
 
@@ -29589,6 +30424,13 @@ All four sides work, each with the points on its own line:
 * Everything in the diagram - the curves, the legend boxes, the text
   boxes, the drawings and the arrows - keeps its place inside the plot
   area and follows it.
+* **While an end is pulled, its length is written beside it**: a small
+  label next to the control point that moves gives the length of the axis
+  in centimetres, in inches and in per cent of the page (`7.97 cm · 3.14 in
+  · 26.8 %`), and the message line of the toolbar says it in full.  These
+  are the units of `Frame and origin`, so the same size can be typed into
+  another diagram exactly.  The label is gone when the button is let go -
+  it is never part of the picture - and the message stays a moment.
 * **Double clicking** an axis line opens `Frame and origin`, where the same
   numbers can be typed in fractions, centimetres or inches; the dialog
   always shows what the pointer has made.
@@ -29969,6 +30811,33 @@ So copying an ellipse here, then a picture in another program, and pressing
 so until something is copied here again, which puts the object back in
 front.
 
+### Copying the style of a graph to another one
+
+When many diagrams have to look alike, one of them is set up and its look
+is carried over to the others.  **Right click on the background** of the
+finished graph (anywhere no object is) and choose **`Copy graph style`**;
+then right click on the background of another graph and choose **`Paste
+graph style`**.  The other graph takes over:
+
+* the page and its size, the frame and its line, the **lengths and the
+  place of the axes**;
+* every axis: its line, thickness, ticks, numbers, **range** (or the
+  automatic range), scale, direction, grid, its **label** and the fonts;
+* the **title**, the legend settings and the font of the diagram;
+* the **curves, one by one in their order** - the first curve takes the
+  style of the first curve of the copied graph, the second that of the
+  second, and so on: the plot style, the line, the marker, the colours, the
+  fill, the error bars, the bars, the colour scale and the font size,
+  colour and place of the legend box.
+
+What the other graph **shows stays its own**: its columns, the legend texts,
+its text boxes, drawings, arrows and pictures, and every setting that names
+a column (the Z column of a surface, the error column).  A curve it has
+beyond the curves of the copied graph keeps its own style; the message line
+says how many curves took the copied one.  `Paste graph style` is greyed
+out until a style was copied, it can be pasted onto any number of graphs,
+and `Undo` takes a paste back in one step.
+
 ### Writing a text in place
 
 The title, both axis labels, the label of a colour bar, the legend boxes
@@ -30186,12 +31055,20 @@ staircase - anything drawn for that column.  A single click grabs the graph
 and moves it (see `Moving the whole graph`), so the properties need the
 second click, exactly like a text box or a drawing.
 
+**One window for every curve.**  The very top of the window, `Curve`, lists
+every curve of the diagram - by its legend text, with its column in
+brackets where the two differ.  Choosing another one shows that curve in
+the window: its own window opens in the same place, and the one before
+closes.  So the curves of a diagram are set one after the other without
+opening a window for each of them; the title of the window names the curve
+it shows.
+
 At the top of the dialog, a **Plot Style** dropdown selector allows switching the
-representation of any individual curve between all 14 styles: **Line +
+representation of any individual curve between all 15 styles: **Line +
 Symbol**, **Line**, **Scatter**, **Bar Chart**, **Error Bar (Median, SD)**,
 **Error Bar (Median, +error, -error)**, **Histogram**, **Stairs**,
 **2D Histogram**, **Colour Surface (pcolor)**, **Contour Lines**,
-**Filled Contours**, **3D Surface** and **Pie Chart**.  A single curve switched to an error
+**Filled Contours**, **3D Surface**, **3D Wireframe** and **Pie Chart**.  A single curve switched to an error
 bar style by hand reads the column after it (or the two columns after it)
 for its errors, and one switched to a surface or contour style reads the
 column after it for its Z values.  The dialog shows exactly
@@ -30212,6 +31089,7 @@ the sections that style can use, and nothing else:
 | Contour Lines | Legend, Colour scale (Z values), Contour properties |
 | Filled Contours | Legend, Colour scale (Z values), Contour properties |
 | 3D Surface | Legend, Colour scale (Z values), 3D surface properties |
+| 3D Wireframe | Legend, Colour scale (Z values), 3D wireframe properties |
 | Pie Chart | Legend, Pie properties |
 
 The dialog sections each have **their own check button as the title**: switched
@@ -30383,10 +31261,18 @@ switched on in `Curve properties` like any other.
   * `Shading`: `Flat` paints one cell of one colour around every point,
     `Smooth` blends the colours from point to point.
   * `Draw the edges of the cells`: a thin black line around every cell.
-* **3D surface properties** (visible for 3D Surfaces).  The surface is
-  drawn on **axes of its own**, laid over the plot area; the title, the
-  legend boxes, the text boxes, the drawings and the colour bar stay where
-  they are and lie in front of it.
+* **3D surface properties** (visible for 3D Surfaces; **3D wireframe
+  properties** for a 3D Wireframe, with the same view and axes).  The
+  surface is drawn on **axes of its own**, laid over the plot area; the
+  title, the legend boxes, the text boxes, the drawings and the colour bar
+  stay where they are and lie in front of it.
+  * A **3D Wireframe** has, instead of the shading, the light and the
+    edges of the cells: `Lines along a side` (40 to begin with; a grid of
+    fewer points draws all of its own lines - matplotlib takes every n-th
+    row, so the number may come out one less), `Line width`, `Line style`,
+    `Line colour`, and `Draw every line in one colour` - switched off, every
+    piece of a line takes the colour of its height from `Colour scale (Z
+    values)`, and the colour bar can be switched on there.
   * `Elevation [deg]` and `Azimuth [deg]`: the two angles of the view -
     how high the eye stands over the X/Y plane (-90 to 90), and how far it
     has walked around the Z axis (-180 to 180).  30 and -60 to begin with.
@@ -30401,7 +31287,9 @@ switched on in `Curve properties` like any other.
     each of its ends; dragging a control point makes that axis longer or
     shorter, exactly as an axis of any other diagram is resized.  The box
     is always drawn as large as the plot area allows, so a longer axis
-    makes the other two look shorter.
+    makes the other two look shorter.  While an end is pulled, a label
+    beside the pointer tells the three lengths (`X : Y : Z = 6 : 4 : 3`),
+    as this field writes them.
   * **Dragging the line of an axis** carries the whole graph on the page,
     and the arrow keys move it by small steps while an axis is selected.
     The size of the graph on the page is set by `Plot > Resize graph` and
@@ -31272,6 +32160,7 @@ The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.7.0 | 2026-11-26 | **The style of a graph is copied onto another one**: a right click on the background of a graph offers `Copy graph style`, and on another graph `Paste graph style`.  The other graph takes over the page, the frame, the lengths and the place of the axes, every axis (line, thickness, ticks, range, scale, label, fonts), the title, the legend settings and - one by one in their order - the plot style, line, marker, colours and legend font and place of its curves; it keeps its own data, legend texts and drawings, a curve beyond those of the copied graph keeps its own style, and `Undo` takes the paste back in one step.  **The length of an axis is written beside the end that is pulled**: in cm, in inches and in per cent of the page - the units of `Frame and origin`, so the same size can be typed into another diagram - with the full numbers in the message line; an axis in space tells the three lengths `X : Y : Z`.  **One curve window for every curve**: the top of `Curve properties` lists the curves of the diagram, and choosing one shows it in the window, in the same place.  **Values are left out of the plots and the analysis without deleting them**: the new `#` button under `Add row` (and `Exclude / Include Values (#)` in the right click menu of a cell) leaves the selected values out - they stay in the sheet as `#value` in grey italics, the diagrams do not draw them (the line runs on from the neighbouring points; a left out X takes its row), the regression does not fit them, a formula reading one gets `#N/A` and a range goes without it; the button again takes them back, they move with their rows and columns, and Undo and the `.aplt` file keep them.  **A new plot style, `3D Wireframe`** (`ax.plot_wireframe`): the x, y, z columns as a net of lines in space, with the view, the axes, the ranges and the ticks of `3D Surface`; the lines in one colour or each piece in the colour of its height (with a colour bar), their number, width and style in the curve properties, the edges of triangles for scattered points, and the same net in the exported matplotlib program.  **The arrow keys keep moving the selected object on a Mac**: after a property window was used (the font size of the legends set smaller, say) and the legend boxes were arranged with the pointer, a legend box selected next did not move with the arrow keys - or with any other key - until another program had been in front and APlot again.  macOS had taken the keyboard from the diagram for a moment and never said that it had given it back, so APlot threw every key away; a click in the diagram, closing a property window and a diagram window brought to the front now take the keyboard back in that case. |
 | 1.6.9 | 2026-11-25 | **No more freezing on a Mac**: pasting a picture into a diagram while the clipboard held text copied in APlot itself (cells, a field) froze the program - the clipboard was read through `osascript`, macOS asked APlot for its text, and each waited for the other for ever.  The clipboard of macOS is now read inside the program; on Linux the text APlot copied itself is no longer handed to `xclip` either.  Two diagram windows activated at the same moment no longer take the keyboard from each other endlessly, which froze the program as well: a window takes it a moment later, only if it is still in front then, and never right after another window has.  **Writing over a legend text** (`Cmd/Ctrl+A`, then typing) gives the new text alone: the field was empty for a moment and the column name was filled in, so the legend read `HelloY1`; the column name now comes in only when the field is left empty.  **A column emptied in the sheet leaves no legend box behind**: when every number of a drawn column was deleted while the diagram was open, its legend box stayed.  The legend now has a box only for the curves that have something to draw, just as a diagram opened afresh; the curve keeps its settings, and when numbers come back it is drawn - with its legend box - as before. |
 | 1.6.8 | 2026-11-24 | **Renaming a sheet of a group drawn together (`Plot with previous tab`) keeps its curves as they are**: a curve of that sheet carries the name of the sheet (`Y1 (Data 2)`), and the diagram took the curve under the new name for a new one - the legend text written for it was lost and it was drawn in the next colour and marker of the cycle, so the curves of the sheets added after it were out of order as well.  The diagram now follows the new name of the sheet, as it does when a column is renamed: the legend text, colour, marker and every other setting of the curve stay. |
 | 1.6.7 | 2026-11-23 | **Sheets drawn together (`Plot with previous tab`) whose first row holds the column titles are drawn right**: a word in the X column made the whole column text, so the X values were sorted alphabetically (`-0.0, -179, -180, ..., 195, 25`) and the curves ran back and forth across the diagram.  The X values are now matched up as numbers whenever every sheet has numbers there; a word in X carries no point, as it does when the sheet is drawn alone.  **Faster too**: the empty rows at the end of the sheets were paired with each other - two sheets of a thousand rows made a table of almost a million rows for the diagram; rows without X are now left out before the sheets are matched up. |
@@ -31506,6 +32395,7 @@ class App:
         for index, table in enumerate(self.tables):   # a clean sheet to fill
             table.plot_with_previous_var.set(False)
             table.cell_formulas = {}
+            table.excluded = set()
             self.set_tab_color(index, None)
         return self.tables
 
@@ -32321,7 +33211,63 @@ class App:
         self.plot_with_previous_cb.pack(side="left", padx=(12, 0))
         Tooltip(self.plot_with_previous_cb,
                 "Draw this sheet and the one before it in the same diagram")
+
+        # the # button: right under the add-row button, among the tools of
+        # the sheet - it leaves the selected values out of the diagrams and
+        # the analysis, and takes them back in
+        self.exclude_btn = ttk.Button(second, text="", width=0,
+                                      style=TOOLBAR_STYLE,
+                                      command=self.toggle_exclusion)
+        if self._set_tool_icon(self.exclude_btn, "exclude", "#") is None:
+            self.as_tall_as_icons(self.exclude_btn)
+        Tooltip(self.exclude_btn,
+                "Exclude selected values (not plotted, not analyzed) - "
+                "press again to include them")
+        for widget in (self.add_row_btn, self.plot_with_previous_cb,
+                       self.regression_btn):
+            widget.bind("<Configure>", lambda _e: self._place_exclude_button(),
+                        add="+")
+        self._place_exclude_button()
         self._follow_active_tab()
+
+    def _place_exclude_button(self):
+        """The # button stands under the add-row button, never over the
+        check button beside it."""
+        button = getattr(self, "exclude_btn", None)
+        if button is None:
+            return None
+        try:
+            # measured on the screen: the two bars need not begin alike
+            x = int(self.add_row_btn.winfo_rootx()
+                    - self.second_bar.winfo_rootx())
+            beside = self.plot_with_previous_cb
+            if beside.winfo_ismapped():
+                x = max(x, beside.winfo_x() + beside.winfo_width() + 12)
+            button.place(x=x, y=0, bordermode="outside")
+        except tk.TclError:
+            return None
+        return x
+
+    def toggle_exclusion(self):
+        """The # button: the selected values of the sheet are left out of
+        the diagrams and the analysis, or taken back in."""
+        table = self.table
+        done = table.toggle_exclusion() if table is not None else None
+        if done is None:
+            note = ("Select the values to leave out first (the # button "
+                    "works on the selected cells)")
+        elif done == "excluded":
+            note = ("Values excluded: not plotted, not analyzed - press "
+                    "Update to redraw; # again takes them back")
+        else:
+            note = "Values included again - press Update to redraw"
+        label = getattr(table, "status_label", None)
+        if label is not None:
+            try:
+                label.configure(text=note)
+            except tk.TclError:
+                pass
+        return done
 
     # -- where a new row or column goes -------------------------------------
     ROW_PLACES = (("Add row above the selected cell", "above"),
@@ -33386,6 +34332,7 @@ class App:
             "axes": {str(name): table.column_axis(name)
                      for name in frame.columns},
             "formulas": dict(getattr(table, "cell_formulas", {})),
+            "excluded": sorted(getattr(table, "excluded", set()) or ()),
             "random_seed": int(getattr(table, "random_seed", 0) or 0),
             "column_widths": dict(getattr(table, "column_widths", {}) or {}),
             "plot_with_previous": bool(
@@ -33410,6 +34357,8 @@ class App:
                                    in snapshot["column_widths"].items()}
         table.set_dataframe(frame)
         table.cell_formulas = dict(snapshot.get("formulas") or {})
+        table.excluded = {(int(r), int(c))
+                          for r, c in snapshot.get("excluded") or ()}
         if snapshot.get("random_seed") is not None:
             table.random_seed = int(snapshot["random_seed"])
         for name, code in (snapshot.get("axes") or {}).items():
@@ -33615,6 +34564,9 @@ class App:
                 "axes": {str(name): tab.column_axis(name)
                          for name in df.columns},
                 "formulas": formulas,
+                # the cells left out of the diagrams and the analysis
+                "excluded": [[int(r), int(c)] for r, c
+                             in sorted(getattr(tab, "excluded", set()) or ())],
                 # what RAND() and RANDN() draw from: the numbers of the
                 # sheet come back the same when the file is opened again
                 "random_seed": int(getattr(tab, "random_seed", 0) or 0),
@@ -33770,6 +34722,15 @@ class App:
                 except (ValueError, IndexError):
                     pass
             table.cell_formulas = loaded_formulas
+            excluded = set()
+            for place in tab_data.get("excluded") or ():
+                try:
+                    excluded.add((int(place[0]), int(place[1])))
+                except (TypeError, ValueError, IndexError):
+                    pass
+            table.excluded = excluded
+            if excluded:        # the italic #values, once the table is laid out
+                table.after(60, lambda one=table: one._draw_gridlines(force=True))
             if tab_data.get("random_seed") is not None:
                 try:
                     table.random_seed = int(tab_data["random_seed"])
@@ -34216,7 +35177,10 @@ class App:
             return self.tables[idx].plot_dataframe(1).copy()
 
         base_x, parts = self.chain_columns(chain)
-        pieces = [(own_x, names, self.tables[number].plot_dataframe(1).copy())
+        # a value left out travels with a mark of its own: an empty cell is
+        # turned into a hole below, a value left out must not be
+        pieces = [(own_x, names, self.tables[number].plot_dataframe(
+                       1, excluded=EXCLUDED_MARK).copy())
                   for number, own_x, names in parts]
         # the whole group is matched up on one kind of X value
         numeric = all(self.has_numbers(frame[own_x])
@@ -34251,6 +35215,8 @@ class App:
                                         kind="stable")
         except (TypeError, ValueError, KeyError):
             pass
+        # ... and is simply not there: the curve runs on from its neighbours
+        merged = merged.mask(merged.isin([EXCLUDED_MARK]), np.nan)
         return merged
 
     def plot_layout(self, index=None):
