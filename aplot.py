@@ -111,7 +111,7 @@ App                      main window, menus, file I/O
 
 Version
 -------
-1.7.0 (2026-11-26) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+1.7.1 (2026-11-27) - see `APP_VERSION` below and VERSION_HISTORY.md (the
 same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -304,8 +304,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.7.0"
-APP_VERSION_DATE = "2026-11-26"
+APP_VERSION = "1.7.1"
+APP_VERSION_DATE = "2026-11-27"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -28347,7 +28347,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.7.0 (2026-11-26)**.  The number is written in one place
+This is **APlot 1.7.1 (2026-11-27)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -28519,9 +28519,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.7.0_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.7.1_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.7.0-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.7.1-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -28585,8 +28585,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.7.0 -m "APlot 1.7.0"
-        git push origin v1.7.0
+        git tag -a v1.7.1 -m "APlot 1.7.1"
+        git push origin v1.7.1
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -32165,6 +32165,7 @@ The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.7.1 | 2026-11-27 | **A legend moved outside the plot area is on the saved picture whole**: a legend box dragged above (or beside) the graph was shown on the screen, but `Save the figure`, `Copy figure` and the thumbnail cut the picture at the edge of the plot area, so the box was cut off or missing.  The picture now takes in every legend box wherever it stands, and the exported Python program does the same. |
 | 1.7.0 | 2026-11-26 | **The style of a graph is copied onto another one**: a right click on the background of a graph offers `Copy graph style`, and on another graph `Paste graph style`.  The other graph takes over the page, the frame, the lengths and the place of the axes, every axis (line, thickness, ticks, range, scale, label, fonts), the title, the legend settings and - one by one in their order - the plot style, line, marker, colours and legend font and place of its curves; it keeps its own data, legend texts and drawings, a curve beyond those of the copied graph keeps its own style, and `Undo` takes the paste back in one step.  **The length of an axis is written beside the end that is pulled**: in cm, in inches and in per cent of the page - the units of `Frame and origin`, so the same size can be typed into another diagram - with the full numbers in the message line; an axis in space tells the three lengths `X : Y : Z`.  **One curve window for every curve**: the top of `Curve properties` lists the curves of the diagram, and choosing one shows it in the window, in the same place.  **Values are left out of the plots and the analysis without deleting them**: the new `#` button under `Add row` (and `Exclude / Include Values (#)` in the right click menu of a cell) leaves the selected values out - they stay in the sheet as `#value` in grey italics, the diagrams do not draw them (the line runs on from the neighbouring points; a left out X takes its row), the regression does not fit them, a formula reading one gets `#N/A` and a range goes without it; the button again takes them back, they move with their rows and columns, and Undo and the `.aplt` file keep them.  **A new plot style, `3D Wireframe`** (`ax.plot_wireframe`): the x, y, z columns as a net of lines in space, with the view, the axes, the ranges and the ticks of `3D Surface`; the lines in one colour or each piece in the colour of its height (with a colour bar), their number, width and style in the curve properties, the edges of triangles for scattered points, and the same net in the exported matplotlib program.  **The arrow keys keep moving the selected object on a Mac**: after a property window was used (the font size of the legends set smaller, say) and the legend boxes were arranged with the pointer, a legend box selected next did not move with the arrow keys - or with any other key - until another program had been in front and APlot again.  macOS had taken the keyboard from the diagram for a moment and never said that it had given it back, so APlot threw every key away; a click in the diagram, closing a property window and a diagram window brought to the front now take the keyboard back in that case. |
 | 1.6.9 | 2026-11-25 | **No more freezing on a Mac**: pasting a picture into a diagram while the clipboard held text copied in APlot itself (cells, a field) froze the program - the clipboard was read through `osascript`, macOS asked APlot for its text, and each waited for the other for ever.  The clipboard of macOS is now read inside the program; on Linux the text APlot copied itself is no longer handed to `xclip` either.  Two diagram windows activated at the same moment no longer take the keyboard from each other endlessly, which froze the program as well: a window takes it a moment later, only if it is still in front then, and never right after another window has.  **Writing over a legend text** (`Cmd/Ctrl+A`, then typing) gives the new text alone: the field was empty for a moment and the column name was filled in, so the legend read `HelloY1`; the column name now comes in only when the field is left empty.  **A column emptied in the sheet leaves no legend box behind**: when every number of a drawn column was deleted while the diagram was open, its legend box stayed.  The legend now has a box only for the curves that have something to draw, just as a diagram opened afresh; the curve keeps its settings, and when numbers come back it is drawn - with its legend box - as before. |
 | 1.6.8 | 2026-11-24 | **Renaming a sheet of a group drawn together (`Plot with previous tab`) keeps its curves as they are**: a curve of that sheet carries the name of the sheet (`Y1 (Data 2)`), and the diagram took the curve under the new name for a new one - the legend text written for it was lost and it was drawn in the next colour and marker of the cycle, so the curves of the sheets added after it were out of order as well.  The diagram now follows the new name of the sheet, as it does when a column is renamed: the legend text, colour, marker and every other setting of the curve stay. |
