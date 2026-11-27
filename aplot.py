@@ -22018,6 +22018,7 @@ class PlotWindow(tk.Toplevel):
                            % lit(0.0 if edge == "none" else 0.8))
                 out.append("legend.get_frame().set_facecolor(%s)" % lit(face))
                 out.append("ax.add_artist(legend)")
+                out.append("legend.set_clip_on(False)")
         return out
 
     def _script_texts(self):
@@ -22843,6 +22844,10 @@ class PlotWindow(tk.Toplevel):
             box.set_linewidth(0.0 if edge == "none" else 0.8)
             box.set_facecolor("none" if face == "none" else face)
             self.ax.add_artist(legend)
+            # add_artist ties the box to the plot area, and a saved or copied
+            # picture is cut to the parts inside it: a legend moved above the
+            # graph would lose its rows there although the screen shows them
+            legend.set_clip_on(False)
             self.legends[y_col] = legend
             index += 1
         if self.selection is not None and self.selection[0] == "legend":
