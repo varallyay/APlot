@@ -91,6 +91,20 @@ The first start of a plain aplot.py on macOS and Linux offers, once, to
 install it - only for this user or for every user (install_program,
 InstallDialog); "Install APlot..." in the menu does it at any time.
 
+Scripting
+---------
+A program draws with APlot without a window (Graph, Diagram):
+
+    import aplot
+    g = aplot.Graph(table, style="line")     # first column = X
+    g.diagram().axis("y", label="T", range=(0, 1)).legend(position="outside right")
+    g.save("graph.aplt"); g.export("graph.pdf")
+
+The same from the command line: aplot.py --export GRAPH.aplt and
+aplot.py --template STYLE.aplt DATA.csv (see --help).  File > Export as
+APlot script... writes a graph as such a program, File > Batch export
+from template... draws other data files with the look of a graph.
+
 Settings
 --------
 The "APlot" menu (and the application menu on macOS) has a Settings dialog
@@ -108,10 +122,13 @@ TitleFontDialog          title text, title / legend font size
 DataTable                spreadsheet-like Treeview with in-place editing
 PlotWindow               the interactive figure window
 App                      main window, menus, file I/O
+Graph / Diagram          the scripting interface: a graph document drawn
+                         by a hidden App (_ScriptSession)
+BatchExportDialog        File > Batch export from template...
 
 Version
 -------
-1.7.1 (2026-11-27) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+1.8.0 (2026-11-28) - see `APP_VERSION` below and VERSION_HISTORY.md (the
 same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -123,6 +140,7 @@ with the help of AI technology (Antigravity, Claude)
 from __future__ import annotations
 
 import ast
+import atexit
 import base64
 import copy
 import hashlib
@@ -138,6 +156,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -304,8 +323,8 @@ APP_NAME = "APlot"
 # Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.7.1"
-APP_VERSION_DATE = "2026-11-27"
+APP_VERSION = "1.8.0"
+APP_VERSION_DATE = "2026-11-28"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
 # own number: it is raised only when that folder changes, so an update of
@@ -28339,6 +28358,10 @@ It also answers a few questions on the command line:
     python3 aplot.py --update        download and install it
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --icon FILE     write the icon into a PNG file
+    python3 aplot.py --export GRAPH.aplt          the pictures of a saved graph
+    python3 aplot.py --template STYLE.aplt DATA.csv
+                                     other data with the look of a saved
+                                     graph (see `Pictures from the command line`)
     python3 aplot.py --make-app      macOS: install APlot.app without the
                                      window (for scripts, see below)
     python3 aplot.py --install-desktop   Linux: the same without the
@@ -28347,7 +28370,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.7.1 (2026-11-27)**.  The number is written in one place
+This is **APlot 1.8.0 (2026-11-28)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -31856,6 +31879,8 @@ belong to the characters of that text, exactly as everywhere else.
 | Export data (CSV, TXT, DAT)... | `Shift+Cmd/Ctrl+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
 | Export figure (image)... | `Cmd/Ctrl+E` | Writes the graph as a picture (PNG, PDF, SVG, ...), cut out of the page. |
 | Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
+| Export as APlot script... | | Writes the whole graph as a Python program that draws it again with APlot (see `APlot from a program`). |
+| Batch export from template... | | Draws other data files with the look of this graph (or of a graph file), one picture each (see `Export as APlot script and Batch export from template`). |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
 
 **With Caps Lock or Num Lock on** every shortcut works the same.  (Up
@@ -32049,6 +32074,120 @@ If a file is unusual, the recognition can be overridden in the settings:
 used when a data file is written.
 
 
+### APlot from a program
+
+A Python program can make a graph with APlot without opening a window:
+
+```python
+import sys
+sys.path.insert(0, "/path/to/the/folder/of/aplot.py")
+import aplot
+
+graph = aplot.Graph(table, style="line")    # a DataFrame, a dict of columns
+d = graph.diagram()                          # or a 2-D array; first column = X
+d.title("")
+d.axis("x", label="Wavelength (nm)", range=(1260, 1360))
+d.axis("y", label="Transmission", range=(0, 1), step=0.2)
+d.curve("TE0", color="#1f77b4", width=2)
+d.curve("fit", linestyle="dashed", legend=False)
+d.legend(position="outside right")
+graph.save("spectra.aplt")                   # opens in APlot as it was made
+graph.export("spectra.pdf")                  # PDF, PNG, SVG... from the ending
+```
+
+**What a graph of a program is.**  It is an `.aplt` document - the sheets
+and, for every diagram, everything the diagram window keeps of its look -
+and APlot itself draws it, in a copy of the program whose windows are
+never shown.  `save` and `export` are the very `Save graph` and `Export
+figure` of the menu, so the picture is the one the program would write,
+and the `.aplt` file opens and can be edited in APlot as if it had been
+made by hand.
+
+| Call | What it does |
+| --- | --- |
+| `aplot.Graph(table, style="line", sheet="Data 1", settings="defaults")` | A graph of a table with one diagram of a plot style (`line`, `line_symbol`, `scatter`, `bar`, `pcolor`, `contour`, ... - the codes of the Plot button). |
+| `aplot.Graph.open("graph.aplt")` | A saved graph. |
+| `graph.data = table`, `graph.set_data(table, sheet=0, allow_missing=False)` | New numbers; every diagram keeps its look, as `Update plot` does.  The curves are matched to the columns by name; a drawn column that is missing is an error unless `allow_missing`. |
+| `graph.diagram(0)`, `graph.diagrams`, `graph.add_diagram("scatter")` | A diagram to change, all of them, one more. |
+| `graph.save("x.aplt")`, `graph.export("x.png", dpi=300)` | The graph file; the pictures (several diagrams give `x_1.png`, `x_2.png`, ...). |
+| `d.title(text, size, color)` | The title. |
+| `d.axis("x" / "y" / "y2", label, range=(low, high) or "auto", step, minor, scale, grid, ...)` | An axis. |
+| `d.curve(column, label, legend, color, width, linestyle, marker, markersize, style, axis, visible, ...)` | A curve; `legend=False` takes its legend box away, `style` gives it a plot style of its own (symbols among lines), `axis="right"` puts it on the right Y axis. |
+| `d.surface(column, style, cmap, range, colorbar, bar_label, shading, levels, color, ...)` | The colour scale of a colour surface or contour plot; `color` draws contour lines in one colour. |
+| `d.legend(visible, position, size, step)` | The legend boxes, stacked from a corner (`"upper right"`, ...) or `"outside right"` of the plot area. |
+| `d.page(width, height, dpi)` | The page in cm. |
+| `d.state` | Everything else of the diagram, as it is written into the `.aplt` file. |
+
+**Your settings stay yours.**  A program draws with the built-in settings
+of APlot, so a script makes the same picture on every computer, and it
+never reads or changes `~/.aplot/config.json`; `settings="user"` takes
+your settings instead, and the path of a settings file takes that one.
+
+**No dialog, a message instead.**  Whatever the program would say in a
+window - a file that cannot be read, a column that is not there, a style
+that does not exist - comes back as an `aplot.APlotError` with the same
+text.  Questions are answered "no", so nothing is overwritten or thrown
+away behind the back of the program.
+
+**Where it runs.**  APlot draws with Tk, so it needs a display: on a Mac
+and on Windows that is always there, on a Linux server the program runs
+under `xvfb-run`.  The hidden APlot is a program of its own, so
+`aplot.Graph` cannot be used inside a program that already has a Tk window
+(APlot itself, for one) - such a program calls `aplot.py --template`
+instead.
+
+### Pictures from the command line
+
+The same without writing a program:
+
+    python3 aplot.py --export GRAPH.aplt ... [--out PATH] [--format pdf] [--dpi N]
+    python3 aplot.py --template STYLE.aplt DATA.csv ... [--out PATH] [--format pdf]
+                     [--dpi N] [--save-graph] [--allow-missing]
+
+* `--export` writes the picture of every diagram of saved graphs: next to
+  each graph, into the folder `PATH`, or - for one graph - into the file
+  `PATH`.  A graph of several diagrams gives `NAME_1.pdf`, `NAME_2.pdf`, ...
+* `--template` draws the numbers of each data file with the look of the
+  graph `STYLE.aplt`: one picture each, named after the data file, and with
+  `--save-graph` an `.aplt` file each too.  The data files are read as by
+  `Import data`; the curves are matched to the columns by name, and
+  `--allow-missing` leaves out a curve whose column a file does not have.
+  This is the way to draw the results of every new run of a measurement
+  or a simulation the same way: style one graph in APlot, save it, and
+  let the script of the measurement call `--template`.
+* Every file written is printed on a line of its own.  A file that fails
+  is reported on stderr and the others are still done; the exit code is
+  0 when everything was done, 1 when a file failed and 2 when the command
+  line itself is wrong.
+* `--settings user` draws new curves with your settings instead of the
+  built-in ones.
+
+### Export as APlot script and Batch export from template
+
+Two commands of the `File` menu bring the same to the windows:
+
+* **Export as APlot script...** writes the whole graph - every sheet and
+  every diagram - as a Python program that draws it again with
+  `aplot.Graph`.  Its numbers and the main settings of each diagram (the
+  title, the axes, the curves, the legend) are written out to be changed;
+  everything else is kept in `LOOK`, the graph as APlot stores it.  Run it
+  with `python3 NAME_aplot.py`: it writes `NAME.aplt` and `NAME.pdf` next
+  to itself, the same picture as the diagram on the screen.  Put other
+  numbers in - `graph.set_data(pd.read_csv("run.csv"))` - and the look
+  stays.  Unlike `Export as matplotlib script`, the program makes an APlot
+  graph again, which opens and can be edited in APlot.
+* **Batch export from template...** opens a window where data files are
+  added (`Add...`), a folder for the pictures is chosen (empty: next to
+  each data file), the format and the resolution are set, and `Run` draws
+  each file with the look of **this graph** - as it is on the screen,
+  saved or not - or of **a graph file**.  `Save a graph (.aplt) for each
+  file too` and `Leave out the curves whose column a file does not have`
+  are the two switches of `--template`, which does the work beside the
+  program: the graph on the screen is not touched, and the window stays
+  usable while the pictures are made.  The files written and the problems
+  are listed in the window.
+
+
 ## 5. Settings
 
 The **gear** at the right end of the toolbar, `Settings...` in the `APlot`
@@ -32165,6 +32304,7 @@ The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.8.0 | 2026-11-28 | **APlot from a program**: `import aplot` and `aplot.Graph(table, style="line")` make a graph without opening a window; `diagram()` changes its look (`title`, `axis`, `curve`, `surface`, `legend`, `page` - or anything of the diagram through `state`), `save` writes the `.aplt` file and `export` the pictures (PDF, PNG, SVG...), with the very code of the menu, so the graph opens in APlot as it was made.  `Graph.open` reads a saved graph, and new numbers (`graph.data = table`) keep its look, as `Update plot` does.  A script draws with the built-in settings and never reads or changes yours (`settings="user"` takes them); a mistake is an `APlotError` with a message instead of a dialog.  **Pictures from the command line**: `aplot.py --export GRAPH.aplt` writes the picture of every diagram of saved graphs, `aplot.py --template STYLE.aplt DATA.csv ...` draws data files with the look of a saved graph - one picture each, and with `--save-graph` an `.aplt` too; a file that does not fit is reported and the others are still drawn.  **Two new commands in the File menu**: `Export as APlot script...` writes the whole graph as a Python program that draws it again with APlot - change its numbers or its look and run it; `Batch export from template...` draws other data files with the look of the graph on the screen (or of a graph file) into a folder, while the window stays usable. |
 | 1.7.1 | 2026-11-27 | **A legend moved outside the plot area is on the saved picture whole**: a legend box dragged above (or beside) the graph was shown on the screen, but `Save the figure`, `Copy figure` and the thumbnail cut the picture at the edge of the plot area, so the box was cut off or missing.  The picture now takes in every legend box wherever it stands, and the exported Python program does the same. |
 | 1.7.0 | 2026-11-26 | **The style of a graph is copied onto another one**: a right click on the background of a graph offers `Copy graph style`, and on another graph `Paste graph style`.  The other graph takes over the page, the frame, the lengths and the place of the axes, every axis (line, thickness, ticks, range, scale, label, fonts), the title, the legend settings and - one by one in their order - the plot style, line, marker, colours and legend font and place of its curves; it keeps its own data, legend texts and drawings, a curve beyond those of the copied graph keeps its own style, and `Undo` takes the paste back in one step.  **The length of an axis is written beside the end that is pulled**: in cm, in inches and in per cent of the page - the units of `Frame and origin`, so the same size can be typed into another diagram - with the full numbers in the message line; an axis in space tells the three lengths `X : Y : Z`.  **One curve window for every curve**: the top of `Curve properties` lists the curves of the diagram, and choosing one shows it in the window, in the same place.  **Values are left out of the plots and the analysis without deleting them**: the new `#` button under `Add row` (and `Exclude / Include Values (#)` in the right click menu of a cell) leaves the selected values out - they stay in the sheet as `#value` in grey italics, the diagrams do not draw them (the line runs on from the neighbouring points; a left out X takes its row), the regression does not fit them, a formula reading one gets `#N/A` and a range goes without it; the button again takes them back, they move with their rows and columns, and Undo and the `.aplt` file keep them.  **A new plot style, `3D Wireframe`** (`ax.plot_wireframe`): the x, y, z columns as a net of lines in space, with the view, the axes, the ranges and the ticks of `3D Surface`; the lines in one colour or each piece in the colour of its height (with a colour bar), their number, width and style in the curve properties, the edges of triangles for scattered points, and the same net in the exported matplotlib program.  **The arrow keys keep moving the selected object on a Mac**: after a property window was used (the font size of the legends set smaller, say) and the legend boxes were arranged with the pointer, a legend box selected next did not move with the arrow keys - or with any other key - until another program had been in front and APlot again.  macOS had taken the keyboard from the diagram for a moment and never said that it had given it back, so APlot threw every key away; a click in the diagram, closing a property window and a diagram window brought to the front now take the keyboard back in that case. |
 | 1.6.9 | 2026-11-25 | **No more freezing on a Mac**: pasting a picture into a diagram while the clipboard held text copied in APlot itself (cells, a field) froze the program - the clipboard was read through `osascript`, macOS asked APlot for its text, and each waited for the other for ever.  The clipboard of macOS is now read inside the program; on Linux the text APlot copied itself is no longer handed to `xclip` either.  Two diagram windows activated at the same moment no longer take the keyboard from each other endlessly, which froze the program as well: a window takes it a moment later, only if it is still in front then, and never right after another window has.  **Writing over a legend text** (`Cmd/Ctrl+A`, then typing) gives the new text alone: the field was empty for a moment and the column name was filled in, so the legend read `HelloY1`; the column name now comes in only when the field is left empty.  **A column emptied in the sheet leaves no legend box behind**: when every number of a drawn column was deleted while the diagram was open, its legend box stayed.  The legend now has a box only for the curves that have something to draw, just as a diagram opened afresh; the curve keeps its settings, and when numbers come back it is drawn - with its legend box - as before. |
@@ -32261,9 +32401,11 @@ class HelpWindow(tk.Toplevel):
 
 class App:
     def __init__(self, root, config: Config | None = None,
-                 check_updates=False):
+                 check_updates=False, hidden=False):
         self.root = root
         self.settings = config or Config()
+        # a script draws with the program but shows no window (`Graph`)
+        self.hidden = bool(hidden)
         # looking for a new version: only the program itself does it (see
         # `main`), never a window built by a test or by another program
         self._update_busy = False
@@ -33403,6 +33545,10 @@ class App:
         file_menu.add_command(label="Export as matplotlib script...",
                               accelerator=f"Shift+{ACCEL_NAME}+E",
                               command=lambda: self.export_script(plot))
+        file_menu.add_command(label=f"Export as {APP_NAME} script...",
+                              command=lambda: self.export_aplot_script(plot))
+        file_menu.add_command(label="Batch export from template...",
+                              command=lambda: self.batch_export(plot))
         file_menu.add_command(label="Copy figure to the clipboard",
                               command=lambda: self.copy_figure(plot))
         file_menu.add_separator()
@@ -34226,6 +34372,41 @@ class App:
             "Run it with:  python3 " + Path(path).name)
         return path
 
+    def export_aplot_script(self, plot=None, *_args):
+        """The whole graph as a Python program that draws it with APlot
+        (`Graph`): run it again with other numbers, it keeps the look."""
+        if not self.open_windows():
+            messagebox.showinfo("Information",
+                                "There is no diagram to export yet.")
+            return None
+        start = Path(self.project_path).stem if self.project_path else "graph"
+        path = filedialog.asksaveasfilename(
+            defaultextension=SCRIPT_SUFFIX, initialfile=start + "_aplot" + SCRIPT_SUFFIX,
+            filetypes=[("Python program", f"*{SCRIPT_SUFFIX}"),
+                       ("All files", "*.*")])
+        if not path:
+            return None
+        name = Path(path).stem
+        name = name[:-len("_aplot")] if name.endswith("_aplot") and len(name) > 6 else name
+        try:
+            text = graph_script(self.project_document(), name, Path(path).name)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as error:
+            messagebox.showerror("Error", f"Could not save the file: {error}")
+            return None
+        messagebox.showinfo(
+            "Successful",
+            f"The graph was written as a program that draws it with {APP_NAME}.\n"
+            "Run it with:  python3 " + Path(path).name + "\n"
+            f"It writes {name}{PROJECT_SUFFIX} and {name}.pdf next to itself.")
+        return path
+
+    def batch_export(self, plot=None, *_args):
+        """File > Batch export from template...: the window of it."""
+        owner = plot if plot is not None else self.root
+        return BatchExportDialog(self, owner=owner)
+
     def copy_figure(self, plot=None, *_args):
         """The diagram as a picture on the clipboard."""
         window = self.active_plot(plot)
@@ -34680,6 +34861,12 @@ class App:
             messagebox.showerror(
                 "Error", f"This is not an {APP_NAME} ({PROJECT_SUFFIX}) file.")
             return False
+        return self.load_document(document, path)
+
+    def load_document(self, document, path=None):
+        """Show a graph document - the contents of an `.aplt` file - in the
+        sheets and the diagrams.  `load_project` reads it from a file; a
+        script (`Graph`) hands over one it has made or changed itself."""
         self.undo.hold()      # opening a file is not a step to be taken back
 
         tabs_data = document.get("tabs")
@@ -34774,7 +34961,8 @@ class App:
             window.source_tab = index
             window.apply_state(state)
             self.plot_windows.append(window)
-            window.deiconify()
+            if not self.hidden:          # a script draws without windows
+                window.deiconify()
         self._remember_saved(path)
         self.undo.release()
         self.forget_undo()            # a fresh file, a fresh list of steps
@@ -35259,6 +35447,8 @@ class App:
         window = PlotWindow(self.root, self.plot_data(index=index), self.settings,
                             app=self, layout=self.plot_layout(index=index),
                             plot_style=style)
+        if self.hidden and window.winfo_exists():
+            window.withdraw()          # a script: drawn, never shown
         if window.winfo_exists():
             window.source_tab = index      # the sheet this diagram draws
             self.plot_windows.append(window)
@@ -36082,6 +36272,1106 @@ def install_own_copy(new_program, platform=None):
 
 
 # --------------------------------------------------------------------------
+# scripting: APlot driven by a program, without its windows
+# --------------------------------------------------------------------------
+# A graph made by a script is the same thing as a graph made by hand: an
+# `.aplt` document - the sheets and, for every diagram, everything that
+# `PlotWindow.to_state` writes.  `Graph` holds such a document and changes
+# it; the program itself draws it, in an `App` whose windows are never
+# shown, and writes the `.aplt` file and the pictures with the very code
+# the menu uses.  A graph written by a script therefore opens in APlot like
+# any other, and the look is the look of the program's own settings.
+#
+#     import aplot
+#     g = aplot.Graph(frame, style="line")       # first column = X
+#     d = g.diagram()
+#     d.axis("x", label="Wavelength (nm)", range=(1260, 1360))
+#     d.curve("TE0", color="#1f77b4", width=2)
+#     d.legend(position="outside right")
+#     g.save("graph.aplt")
+#     g.export("graph.pdf")
+#
+# The same from the command line: `--export` and `--template` (USAGE).
+
+class APlotError(Exception):
+    """Something a script asked of APlot could not be done."""
+
+
+class _QuietDialogs:
+    """While a script works, the dialogs of the program are not shown: an
+    error becomes an `APlotError`, a warning a Python warning, a question
+    is answered "no" (nothing is overwritten, nothing is thrown away)."""
+
+    NAMES = ("showinfo", "showwarning", "showerror", "askyesno",
+             "askyesnocancel", "askokcancel", "askquestion", "askretrycancel")
+
+    def __enter__(self):
+        self.errors, self.notes = [], []
+        self.saved = {name: getattr(messagebox, name) for name in self.NAMES}
+
+        def text(args, kwargs):
+            message = kwargs.get("message", args[1] if len(args) > 1 else "")
+            return str(message).strip()
+
+        def error(*args, **kwargs):
+            self.errors.append(text(args, kwargs))
+
+        def warning(*args, **kwargs):
+            self.notes.append(text(args, kwargs))
+            warnings.warn(f"{APP_NAME}: {text(args, kwargs)}", stacklevel=3)
+
+        def info(*args, **kwargs):
+            self.notes.append(text(args, kwargs))
+
+        messagebox.showerror = error
+        messagebox.showwarning = warning
+        messagebox.showinfo = info
+        messagebox.askyesno = lambda *a, **k: False
+        messagebox.askyesnocancel = lambda *a, **k: None      # Cancel
+        messagebox.askokcancel = lambda *a, **k: False
+        messagebox.askquestion = lambda *a, **k: "no"
+        messagebox.askretrycancel = lambda *a, **k: False
+        return self
+
+    def __exit__(self, kind, value, trace):
+        for name, function in self.saved.items():
+            setattr(messagebox, name, function)
+        if kind is None and self.errors:
+            raise APlotError("; ".join(one for one in self.errors if one))
+        return False
+
+    def fail(self, what):
+        """Raise for an action that did not happen, with what was said."""
+        said = [one for one in self.errors + self.notes if one]
+        raise APlotError(what + (": " + "; ".join(said) if said else ""))
+
+
+class _ScriptSession:
+    """The one hidden program of a script: a Tk root that is never shown
+    and an `App` drawing in it.  Every `Graph` of the script uses it."""
+
+    current = None
+
+    def __init__(self):
+        if getattr(tk, "_default_root", None) is not None:
+            # Tk keeps its pictures with the first window of a program: a
+            # second hidden program beside a running one would lose them
+            raise APlotError(
+                "aplot.Graph runs a hidden APlot of its own and cannot start "
+                "inside a program that already has a Tk window (APlot itself, "
+                "for one). Run the script as a program of its own, or call "
+                "`aplot.py --template` / `--export`.")
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as error:
+            raise APlotError(
+                f"{APP_NAME} draws with Tk, which needs a display ({error}). "
+                "On a computer without one run the script under xvfb-run.") \
+                from error
+        self.root.withdraw()
+        # the built-in settings live in a folder of their own, so a script
+        # never reads or changes the settings of the person running it
+        self.folder = tempfile.mkdtemp(prefix="aplot_script_")
+        self.defaults = Config(os.path.join(self.folder, "settings.json"))
+        with _QuietDialogs():
+            self.app = App(self.root, self.defaults, hidden=True)
+        self.settle()
+        atexit.register(self.close)
+
+    @classmethod
+    def get(cls):
+        session = cls.current
+        if session is None or not session.alive():
+            session = cls.current = cls()
+        return session
+
+    def alive(self):
+        try:
+            return bool(self.root.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def settle(self, times=4):
+        """Let the program finish what it does after a pause (layout)."""
+        for _ in range(times):
+            self.root.update()
+
+    def settings(self, choice):
+        """"defaults" (the built-in settings), "user" (the settings of the
+        person running the script) or the path of a settings file."""
+        if choice in (None, "defaults"):
+            return self.defaults
+        if choice == "user":
+            return Config()
+        return Config(os.fspath(choice))
+
+    def close_windows(self):
+        for window in self.app.open_windows():
+            window.destroy()
+        self.app.plot_windows = []
+        self.settle(2)
+
+    def show(self, document, settings):
+        """Draw a document: its sheets in the table, its diagrams in hidden
+        windows.  Returns the windows, in the order of the document."""
+        self.app.settings = settings
+        self.close_windows()
+        with _QuietDialogs() as quiet:
+            if not self.app.load_document(copy.deepcopy(document)):
+                quiet.fail("The graph could not be drawn")
+        self.settle()
+        return self.app.open_windows()
+
+    def close(self):
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+        shutil.rmtree(self.folder, ignore_errors=True)
+        if _ScriptSession.current is self:
+            _ScriptSession.current = None
+
+
+def close():
+    """End the hidden program of a script (it also ends with Python)."""
+    if _ScriptSession.current is not None:
+        _ScriptSession.current.close()
+
+
+SCRIPT_LEGEND_PLACES = ("outside right",) + tuple(LEGEND_ANCHORS)
+SCRIPT_LINE_STYLES = {"solid": "-", "dashed": "--", "dashdot": "-.",
+                      "dotted": ":", "none": "None", "-": "-", "--": "--",
+                      "-.": "-.", ":": ":", "": "None"}
+
+
+def _sheet_entry(frame, name="Data 1", old=None):
+    """A sheet of a document from a table of numbers (or text).
+
+    Empty cells - NaN or None - stay empty: they break a curve, exactly as
+    an emptied cell of the sheet does.  `old` is the sheet it replaces:
+    its name, colour and the axes of the columns that are still there are
+    kept; its formulas and left-out cells belonged to the old numbers."""
+    frame = _as_frame(frame)
+    rows = frame.astype(object).where(frame.notna(), None).values.tolist()
+    entry = {"name": str(name), "columns": [str(c) for c in frame.columns],
+             "rows": rows, "formulas": {}, "excluded": []}
+    if old:
+        entry["name"] = old.get("name", entry["name"])
+        entry["color"] = old.get("color")
+        entry["plot_with_previous"] = bool(old.get("plot_with_previous"))
+        axes = old.get("axes") or {}
+        entry["axes"] = {c: axes[c] for c in entry["columns"] if c in axes}
+    return entry
+
+
+def _as_frame(data):
+    """A DataFrame from a DataFrame, a dict of columns or a 2-D array."""
+    if isinstance(data, pd.DataFrame):
+        frame = data.copy()
+    elif isinstance(data, dict):
+        frame = pd.DataFrame({str(k): np.asarray(v) for k, v in data.items()})
+    else:
+        array = np.asarray(data)
+        if array.ndim != 2 or array.shape[1] < 1:
+            raise APlotError("the data must be a table: a DataFrame, a dict "
+                             "of columns or a 2-D array")
+        frame = pd.DataFrame(array, columns=["X"] + [
+            f"Y{i}" for i in range(1, array.shape[1])])
+    if frame.shape[1] < 1 or frame.shape[0] < 1:
+        raise APlotError("the data are empty")
+    frame.columns = [str(c) for c in frame.columns]
+    if len(set(frame.columns)) != len(frame.columns):
+        raise APlotError("two columns have the same name: "
+                         + ", ".join(frame.columns))
+    return frame.reset_index(drop=True)
+
+
+class Graph:
+    """A graph made and changed by a program, drawn by APlot.
+
+    It is an `.aplt` document: `Graph.open` reads one, `save` writes one
+    (to be opened and edited in APlot afterwards), `export` writes the
+    pictures.  `diagram(i)` changes the look of a diagram; `data` replaces
+    the numbers and keeps the look, as `Update plot` does."""
+
+    def __init__(self, data=None, style="line", *, sheet="Data 1",
+                 settings="defaults"):
+        self.settings_choice = settings
+        self.document = None
+        if data is None:          # Graph.open fills it
+            return
+        if style not in [code for _, code, _ in PLOT_STYLES]:
+            raise APlotError(f"unknown style {style!r}; one of "
+                             + ", ".join(code for _, code, _ in PLOT_STYLES))
+        session = _ScriptSession.get()
+        document = {"format": "aplot", "version": 2,
+                    "application": APP_NAME,
+                    "tabs": [_sheet_entry(data, sheet)], "plots": []}
+        session.show(document, self._settings(session))
+        with _QuietDialogs() as quiet:
+            window = session.app.open_plot(style)
+            if window is None:
+                quiet.fail(f"The data cannot be drawn as {style!r}")
+        session.settle(6)
+        self.document = session.app.project_document()
+
+    # -- the document ----------------------------------------------------
+    @classmethod
+    def open(cls, path, settings="defaults"):
+        """A graph from an `.aplt` file."""
+        try:
+            document = read_project_document(path)
+        except (OSError, ValueError) as error:
+            raise APlotError(f"{path}: {error}") from error
+        if not isinstance(document, dict) or document.get("format") != "aplot":
+            raise APlotError(f"{path} is not an {APP_NAME} graph")
+        graph = cls(settings=settings)
+        graph.document = document
+        return graph
+
+    @classmethod
+    def from_document(cls, document, settings="defaults"):
+        """A graph from a document - the contents of an `.aplt` file, as
+        `Export as APlot script` writes it into its program."""
+        if not isinstance(document, dict) or document.get("format") != "aplot":
+            raise APlotError(f"this is not an {APP_NAME} graph document")
+        graph = cls(settings=settings)
+        graph.document = copy.deepcopy(document)
+        return graph
+
+    def _settings(self, session):
+        return session.settings(self.settings_choice)
+
+    @property
+    def sheets(self):
+        """The sheets of the document (dicts, as in the `.aplt` file)."""
+        tabs = self.document.get("tabs")
+        if not tabs:                 # a file of the oldest kind
+            data = self.document.get("data") or {}
+            tabs = self.document["tabs"] = [
+                {"name": "Data 1", "columns": data.get("columns") or [],
+                 "rows": data.get("rows") or [],
+                 "formulas": data.get("formulas") or {}}]
+        return tabs
+
+    def table(self, sheet=0):
+        """The numbers of a sheet as a DataFrame (empty cells: NaN)."""
+        tab = self.sheets[sheet]
+        frame = pd.DataFrame(tab.get("rows") or [], columns=tab.get("columns") or [])
+        frame = frame.replace("", np.nan)
+
+        def numbers(column):          # a column of numbers, text stays text
+            if column.dtype != object:
+                return column
+            converted = pd.to_numeric(column, errors="coerce")
+            return converted if converted.notna().sum() == column.notna().sum() \
+                else column
+        return frame.apply(numbers)
+
+    @property
+    def data(self):
+        return self.table(0)
+
+    @data.setter
+    def data(self, frame):
+        self.set_data(frame)
+
+    def set_data(self, frame, sheet=0, allow_missing=False):
+        """New numbers for a sheet; every diagram keeps its look.
+
+        A curve is matched to its column by name.  A column the diagrams
+        draw that the new numbers do not have is an error, unless
+        `allow_missing` (its curve is then left out); a new column is
+        drawn with the look of a new curve."""
+        frame = _as_frame(frame)
+        drawn = self.drawn_columns(sheet)
+        missing = [c for c in drawn if c not in frame.columns]
+        if missing and not allow_missing:
+            raise APlotError("the new data have no column "
+                             + ", ".join(repr(c) for c in missing)
+                             + f" (the columns are: {', '.join(frame.columns)})")
+        tabs = self.sheets
+        tabs[sheet] = _sheet_entry(frame, old=tabs[sheet])
+        if sheet == 0:
+            self.document["data"] = tabs[0]
+
+    def drawn_columns(self, sheet=0):
+        """The columns the diagrams of a sheet draw: the curves, and the
+        columns that go with them - the Z values of a surface (the column
+        chosen for it, or the one after it) and the errors of error bars."""
+        names = []
+        tabs = self.sheets
+        order = [str(c) for c in (tabs[sheet].get("columns") or [])] \
+            if sheet < len(tabs) else []
+
+        def add(name):
+            if name and str(name) not in names:
+                names.append(str(name))
+        for state in self.document.get("plots") or []:
+            if int(state.get("source_tab", 0) or 0) != sheet:
+                continue
+            for curve in state.get("series") or []:
+                column = str(curve.get("column"))
+                add(column)
+                if curve.get("plot_style", state.get("plot_style")) in SURFACE_STYLES:
+                    chosen = (curve.get("surface_cfg") or {}).get("zcol")
+                    if chosen:
+                        add(chosen)
+                    elif column in order and order.index(column) + 1 < len(order):
+                        add(order[order.index(column) + 1])
+            for partners in (state.get("error_partner") or {},
+                             state.get("error_partner_low") or {}):
+                for partner in partners.values():
+                    add(partner)
+        return names
+
+    # -- diagrams ----------------------------------------------------------
+    @property
+    def diagrams(self):
+        return [Diagram(self, i) for i in range(len(self.document.get("plots") or []))]
+
+    def diagram(self, index=0):
+        plots = self.document.get("plots") or []
+        if not -len(plots) <= index < len(plots):
+            raise APlotError(f"the graph has {len(plots)} diagram(s), "
+                             f"not a number {index}")
+        return Diagram(self, index % len(plots))
+
+    def add_diagram(self, style="line", sheet=0):
+        """One more diagram of a sheet, with the look of a new diagram."""
+        session = _ScriptSession.get()
+        session.show(self.document, self._settings(session))
+        app = session.app
+        app.notebook.select(sheet)
+        session.settle(2)
+        with _QuietDialogs() as quiet:
+            if app.open_plot(style) is None:
+                quiet.fail(f"The data cannot be drawn as {style!r}")
+        session.settle(6)
+        self.document = app.project_document()
+        return Diagram(self, len(self.document["plots"]) - 1)
+
+    # -- writing -----------------------------------------------------------
+    def _drawn(self):
+        session = _ScriptSession.get()
+        windows = session.show(self.document, self._settings(session))
+        if not windows:
+            raise APlotError("the graph has no diagram")
+        return session, windows
+
+    def save(self, path):
+        """Write the `.aplt` file - the graph opens in APlot as it is."""
+        session, windows = self._drawn()
+        path = os.fspath(path)
+        if not path.lower().endswith(PROJECT_SUFFIX):
+            path += PROJECT_SUFFIX
+        with _QuietDialogs() as quiet:
+            if not session.app.save_project(path, quiet=True):
+                quiet.fail(f"{path} could not be written")
+        # the program writes what it shows: keep its version of the document
+        self.document = session.app.project_document()
+        return path
+
+    def export(self, path, dpi=None, diagram=None):
+        """Write the picture(s): PDF, PNG, SVG... from the name's ending.
+
+        The picture is what `Export figure` writes: the graph cut out of
+        its page.  A graph with several diagrams writes one picture each,
+        `name_1.pdf`, `name_2.pdf`, ... unless `diagram` picks one.
+        `dpi` defaults to the resolution of the page."""
+        session, windows = self._drawn()
+        if diagram is not None:
+            windows = [windows[diagram]]
+        path = Path(os.fspath(path))
+        if path.suffix == "":
+            raise APlotError(f"{path}: the name needs an ending (.pdf, .png, .svg)")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        written = []
+        for number, window in enumerate(windows, start=1):
+            target = path if len(windows) == 1 else \
+                path.with_name(f"{path.stem}_{number}{path.suffix}")
+            try:
+                window.figure_image(str(target), dpi=dpi)
+            except (OSError, ValueError) as error:
+                raise APlotError(f"{target}: {error}") from error
+            written.append(str(target))
+        return written
+
+
+class Diagram:
+    """One diagram of a `Graph`; every method changes its look and returns
+    the diagram, so the calls can follow each other.  `state` is the whole
+    description (`PlotWindow.to_state`) for anything not offered here."""
+
+    def __init__(self, graph, index):
+        self.graph, self.index = graph, index
+
+    @property
+    def state(self):
+        return self.graph.document["plots"][self.index]
+
+    @property
+    def columns(self):
+        return [str(curve.get("column")) for curve in self.state.get("series") or []]
+
+    def _curve(self, column):
+        for curve in self.state.get("series") or []:
+            if str(curve.get("column")) == str(column):
+                return curve
+        raise APlotError(f"the diagram has no curve {column!r}; it has "
+                         + ", ".join(repr(c) for c in self.columns))
+
+    def title(self, text=None, size=None, color=None):
+        title = self.state.setdefault("title", {})
+        for key, value in (("text", text), ("size", size), ("color", color)):
+            if value is not None:
+                title[key] = value
+        return self
+
+    def axis(self, which="x", *, label=None, range=None, step=None,
+             minor=None, scale=None, grid=None, label_size=None,
+             tick_size=None, ends_on_ticks=None):
+        """`which`: "x", "y" or "y2".  `range` (low, high) or "auto";
+        `step` the distance of the numbered ticks or "auto"; `scale`
+        "linear", "log10", "log2" or "ln"; `grid` True/False (major lines)
+        or a dict of the grid settings."""
+        axes = self.state.get("axes") or {}
+        if which not in axes:
+            raise APlotError(f"the diagram has no {which!r} axis; it has "
+                             + ", ".join(axes))
+        cfg = axes[which]
+        if label is not None:
+            cfg["label"] = str(label)
+        if range is not None:
+            if range == "auto":
+                cfg["auto"] = True
+            else:
+                low, high = (float(v) for v in range)
+                if not high > low:
+                    raise APlotError(f"{which} range: {low} is not below {high}")
+                cfg.update(auto=False, min=low, max=high)
+        if step is not None:
+            cfg["step"] = None if step == "auto" else float(step)
+        if minor is not None:
+            cfg["minor"] = int(minor)
+        if scale is not None:
+            if scale not in ("linear",) + tuple(LOG_BASES):
+                raise APlotError(f"unknown scale {scale!r}")
+            cfg["scale"] = scale
+        if grid is not None:
+            cfg.setdefault("grid", {})
+            cfg["grid"].update(grid if isinstance(grid, dict) else {"major": bool(grid)})
+        for key, value in (("label_size", label_size), ("tick_size", tick_size),
+                           ("ends_on_ticks", ends_on_ticks)):
+            if value is not None:
+                cfg[key] = value
+        return self
+
+    def curve(self, column, *, label=None, legend=None, color=None,
+              width=None, linestyle=None, marker=None, markersize=None,
+              markerfacecolor=None, style=None, axis=None, visible=None,
+              **more):
+        """The look of one curve.  `legend=False` takes its legend box away
+        (the label is kept); `style` is a plot style of its own (a curve of
+        symbols among lines); `axis` "left" or "right"; anything else of
+        the curve's description can be given by its name (`more`)."""
+        curve = self._curve(column)
+        if style is not None:
+            if style not in [code for _, code, _ in PLOT_STYLES]:
+                raise APlotError(f"unknown style {style!r}")
+            curve["plot_style"] = style
+        if label is not None:
+            curve["label"] = str(label)
+            curve["auto_label"] = False
+        if legend is not None:
+            text = str(curve.get("label", column))
+            hidden = text.startswith("_")
+            if legend and hidden:
+                curve["label"] = text[1:] or str(column)
+            elif not legend and not hidden:
+                curve["label"] = "_" + text   # matplotlib: no legend entry
+            curve["auto_label"] = False
+        if color is not None:
+            old = curve.get("color")
+            curve["color"] = color
+            for key in ("markerfacecolor", "markeredgecolor"):
+                if curve.get(key) in (old, None):
+                    curve[key] = color
+        if width is not None:
+            curve["linewidth"] = float(width)
+        if linestyle is not None:
+            code = SCRIPT_LINE_STYLES.get(str(linestyle).lower(), None)
+            if code is None:
+                raise APlotError(f"unknown line style {linestyle!r}")
+            curve["linestyle"] = code
+        if marker is not None:
+            curve["marker"] = str(marker)
+        if markersize is not None:
+            curve["markersize"] = float(markersize)
+        if markerfacecolor is not None:
+            curve["markerfacecolor"] = markerfacecolor
+        if axis is not None:
+            if axis not in ("left", "right"):
+                raise APlotError("axis is 'left' or 'right'")
+            curve["axis"] = axis
+        if visible is not None:
+            curve["visible"] = bool(visible)
+        for key, value in more.items():
+            if key not in curve:
+                raise APlotError(f"a curve has no setting {key!r}")
+            curve[key] = value
+        return self
+
+    def surface(self, column, *, style=None, cmap=None, range=None,
+                colorbar=None, bar_label=None, shading=None, levels=None,
+                color=None, linewidth=None, **more):
+        """The colour scale of a surface (pcolor, contour, contourf, 3D).
+        `range` (low, high) or "auto"; `color` draws contour lines in one
+        colour; `levels` the number of contour lines."""
+        curve = self._curve(column)
+        cfg = curve.setdefault("surface_cfg", {})
+        if style is not None:
+            if style not in SURFACE_STYLES:
+                raise APlotError(f"{style!r} is not a surface style; one of "
+                                 + ", ".join(SURFACE_STYLES))
+            curve["plot_style"] = style
+        if cmap is not None:
+            if cmap not in [code for _, code in COLOR_MAPS]:
+                raise APlotError(f"unknown colour scale {cmap!r}; one of "
+                                 + ", ".join(code for _, code in COLOR_MAPS))
+            cfg["cmap"] = cmap
+        if range is not None:
+            if range == "auto":
+                cfg["vmin"] = cfg["vmax"] = None
+            else:
+                cfg["vmin"], cfg["vmax"] = (float(v) for v in range)
+        if colorbar is not None:
+            cfg["colorbar"] = bool(colorbar)
+        if bar_label is not None:
+            cfg["bar_label"] = str(bar_label)
+        if shading is not None:
+            if shading not in ("flat", "smooth"):
+                raise APlotError("shading is 'flat' or 'smooth'")
+            cfg["shading"] = shading
+        if levels is not None:
+            cfg["levels"] = int(levels)
+        if color is not None:
+            cfg.update(onecolor=True, color=color)
+        if linewidth is not None:
+            cfg["linewidth"] = float(linewidth)
+        cfg.update(more)
+        return self
+
+    def legend(self, visible=None, *, position=None, size=None, step=None):
+        """`position`: a corner ("upper right", "lower left", ...) or
+        "outside right"; the boxes are stacked from there, one per curve
+        that has a legend, `step` (fraction of the plot height) apart."""
+        legend = self.state.setdefault("legend", {})
+        if visible is not None:
+            legend["visible"] = bool(visible)
+        if size is not None:
+            legend["size"] = int(size)
+            for curve in self.state.get("series") or []:
+                curve["legend_size"] = int(size)
+        if position is not None:
+            if position not in SCRIPT_LEGEND_PLACES:
+                raise APlotError(f"unknown legend position {position!r}; one of "
+                                 + ", ".join(SCRIPT_LEGEND_PLACES))
+            step = LEGEND_STACK_STEP if step is None else float(step)
+            if position == "outside right":
+                x, y, loc, direction = 1.03, 1.0, "upper left", -1
+            else:
+                x, y, loc = LEGEND_ANCHORS[position]
+                direction = -1 if y >= 0.5 else 1
+                legend["location"] = position
+            index = 0
+            for curve in self.state.get("series") or []:
+                if str(curve.get("label", "")).startswith("_"):
+                    continue
+                curve["legend_pos"] = [x, y + direction * index * step]
+                curve["legend_loc"] = loc
+                index += 1
+        return self
+
+    def page(self, width=None, height=None, dpi=None):
+        """The page in cm (and its resolution); the graph is cut out of it."""
+        figure = self.state.setdefault("figure", {})
+        for key, value in (("width", width), ("height", height), ("dpi", dpi)):
+            if value is not None:
+                figure[key] = float(value)
+        return self
+
+
+
+# -- a graph written as a program that draws it with APlot -------------------
+def _python_value(value):
+    """A cell as Python source: numbers, text, None for an empty cell."""
+    if value is None or value == "":
+        return "None"
+    if isinstance(value, (bool, np.bool_)):
+        return repr(bool(value))
+    if isinstance(value, (int, np.integer)):
+        return repr(int(value))
+    if isinstance(value, (float, np.floating)):
+        return "None" if not np.isfinite(value) else repr(float(value))
+    return repr(str(value))
+
+
+def _python_column(values, indent, per_line=6):
+    """A list of cells, a few to a line."""
+    cells = [_python_value(v) for v in values]
+    if len(cells) <= per_line:
+        return "[" + ", ".join(cells) + "]"
+    lines = [", ".join(cells[i:i + per_line]) for i in range(0, len(cells), per_line)]
+    pad = " " * indent
+    return "[\n" + ",\n".join(pad + "    " + line for line in lines) + ",\n" + pad + "]"
+
+
+def graph_script(document, name="graph", filename=None, program=None):
+    """The source of a Python program that draws the graph `document` with
+    APlot (`Graph`): the numbers and the main settings written out to be
+    changed, everything else kept in LOOK as APlot stores it."""
+    program = program or os.path.abspath(__file__)
+    look = copy.deepcopy(document)
+    tabs = look.get("tabs") or [look.get("data") or {}]
+    numbers = []
+    for tab in tabs:
+        numbers.append((tab.get("name", "Data"), list(tab.get("columns") or []),
+                        list(tab.get("rows") or [])))
+        tab["rows"] = []                    # the numbers are set below
+    look.pop("data", None)
+    look["tabs"] = tabs
+    look_text = json.dumps(look, indent=1, default=json_default, ensure_ascii=False)
+    look_text = look_text.replace("\\", "\\\\").replace("'''", "\\'\\'\\'")
+    out = [
+        f'"""{name} - an {APP_NAME} {APP_VERSION} graph written as a program.',
+        "",
+        f"Run it with:  python3 {filename or name + '_aplot.py'}",
+        f"It draws the graph with {APP_NAME} - no window opens - and writes "
+        f"{name}.aplt and",
+        f"{name}.pdf next to itself.  Change the numbers or the look below and "
+        "run it again;",
+        "whatever is not written out here is kept in LOOK, the graph as "
+        f"{APP_NAME} stores it.",
+        '"""',
+        "import json",
+        "import os",
+        "import sys",
+        "",
+        "import pandas as pd",
+        "",
+        f"# where {APP_NAME} is (the aplot.py that wrote this program)",
+        f"sys.path.insert(0, {os.path.dirname(program)!r})",
+        "import aplot",
+        "",
+        "HERE = os.path.dirname(os.path.abspath(__file__))",
+        "",
+        "# the graph as APlot stores it; the numbers of the sheets are set below",
+        "LOOK = json.loads(r'''" + look_text + "''')",
+        "",
+        "graph = aplot.Graph.from_document(LOOK)",
+        "",
+    ]
+    for index, (tab_name, columns, rows) in enumerate(numbers):
+        out.append(f"# the numbers of sheet {index + 1}, {tab_name!r} - or your "
+                   "own, the curves are matched")
+        out.append("# to the columns by name, e.g. "
+                   f"graph.set_data(pd.read_csv('run.csv'), sheet={index})")
+        out.append("graph.set_data(pd.DataFrame({")
+        for col_index, column in enumerate(columns):
+            values = [row[col_index] if col_index < len(row) else None for row in rows]
+            out.append(f"    {column!r}: {_python_column(values, 4)},")
+        out.append(f"}}), sheet={index})")
+        out.append("")
+    for index, state in enumerate(look.get("plots") or []):
+        out.append(f"# diagram {index + 1}")
+        out.append(f"d = graph.diagram({index})")
+        title = (state.get("title") or {}).get("text", "")
+        out.append(f"d.title({title!r})")
+        for which in ("x", "y", "y2"):
+            axis = (state.get("axes") or {}).get(which)
+            if not axis:
+                continue
+            span = '"auto"' if axis.get("auto") else \
+                f"({float(axis.get('min')):.6g}, {float(axis.get('max')):.6g})"
+            step = axis.get("step")
+            step = '"auto"' if step in (None, "") else f"{float(step):.6g}"
+            out.append(f"d.axis({which!r}, label={str(axis.get('label', ''))!r}, "
+                       f"range={span}, step={step})")
+        for curve in state.get("series") or []:
+            column = str(curve.get("column"))
+            style = curve.get("plot_style")
+            if style in SURFACE_STYLES:
+                cfg = curve.get("surface_cfg") or {}
+                low, high = cfg.get("vmin"), cfg.get("vmax")
+                span = '"auto"' if low is None or high is None else \
+                    f"({float(low):.6g}, {float(high):.6g})"
+                out.append(f"d.surface({column!r}, style={style!r}, "
+                           f"cmap={str(cfg.get('cmap', 'viridis'))!r}, range={span}, "
+                           f"colorbar={bool(cfg.get('colorbar', True))!r})")
+                continue
+            label = str(curve.get("label", column))
+            out.append(
+                f"d.curve({column!r}, label={label.lstrip('_') or column!r}, "
+                f"legend={not label.startswith('_')!r}, "
+                f"color={str(curve.get('color'))!r}, "
+                f"linestyle={str(curve.get('linestyle', '-'))!r}, "
+                f"width={float(curve.get('linewidth', 1.5)):g}, "
+                f"marker={str(curve.get('marker', 'None'))!r})")
+        legend = state.get("legend") or {}
+        out.append(f"d.legend({bool(legend.get('visible', True))!r})")
+        out.append("")
+    out += [
+        f"graph.save(os.path.join(HERE, {name + PROJECT_SUFFIX!r}))",
+        f"for written in graph.export(os.path.join(HERE, {name + '.pdf'!r})):",
+        "    print(written)",
+        "",
+    ]
+    return "\n".join(out)
+
+
+class BatchExportDialog(tk.Toplevel):
+    """File > Batch export from template...: other data files drawn with the
+    look of this graph (or of a graph file), one picture each.  It runs
+    `aplot.py --template` beside the program, so the graph on the screen is
+    not touched and the window stays usable while the pictures are made."""
+
+    FORMATS = ("pdf", "png", "svg")
+
+    def __init__(self, app, owner=None):
+        super().__init__(app.root)
+        self.app = app
+        self.title("Batch export from template")
+        # it belongs to the window it was asked from and stays in front of it
+        owner = owner if owner is not None and owner.winfo_exists() else app.root
+        if owner.winfo_viewable():
+            self.transient(owner)
+        self.process = None
+        self.result = None
+        self.scratch = None
+        self.lines = []
+        self.template_kind = tk.StringVar(value="this")
+        self.template_file = tk.StringVar(value="")
+        self.out_folder = tk.StringVar(value="")
+        self.format = tk.StringVar(value="pdf")
+        self.dpi = tk.StringVar(value="")
+        self.save_graphs = tk.BooleanVar(value=False)
+        self.allow_missing = tk.BooleanVar(value=False)
+        self.status = tk.StringVar(value="Add the data files to draw.")
+        pad = dict(padx=6, pady=3)
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(body, text="The look of").grid(row=0, column=0, sticky="w", **pad)
+        ttk.Radiobutton(body, text="this graph", value="this",
+                        variable=self.template_kind).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Radiobutton(body, text="a graph file:", value="file",
+                        variable=self.template_kind).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Entry(body, textvariable=self.template_file, width=40).grid(
+            row=1, column=2, sticky="ew", **pad)
+        ttk.Button(body, text="Choose...", command=self.choose_template).grid(
+            row=1, column=3, **pad)
+
+        ttk.Label(body, text="Data files").grid(row=2, column=0, sticky="nw", **pad)
+        self.files = tk.Listbox(body, height=7, width=60, selectmode="extended")
+        self.files.grid(row=2, column=1, columnspan=2, sticky="nsew", **pad)
+        buttons = ttk.Frame(body)
+        buttons.grid(row=2, column=3, sticky="n", **pad)
+        ttk.Button(buttons, text="Add...", command=self.add_files).pack(fill="x", pady=2)
+        ttk.Button(buttons, text="Remove", command=self.remove_files).pack(fill="x", pady=2)
+
+        ttk.Label(body, text="Pictures into").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Entry(body, textvariable=self.out_folder, width=40).grid(
+            row=3, column=1, columnspan=2, sticky="ew", **pad)
+        ttk.Button(body, text="Choose...", command=self.choose_folder).grid(
+            row=3, column=3, **pad)
+        ttk.Label(body, text="(empty: next to each data file)").grid(
+            row=4, column=1, columnspan=2, sticky="w", padx=6)
+
+        line = ttk.Frame(body)
+        line.grid(row=5, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Label(line, text="Format").pack(side="left")
+        ttk.Combobox(line, textvariable=self.format, values=self.FORMATS,
+                     width=5, state="readonly").pack(side="left", padx=(4, 14))
+        ttk.Label(line, text="Resolution (dpi)").pack(side="left")
+        ttk.Entry(line, textvariable=self.dpi, width=6).pack(side="left", padx=4)
+        ttk.Checkbutton(body, text="Save a graph (.aplt) for each file too",
+                        variable=self.save_graphs).grid(
+            row=6, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Checkbutton(body, text="Leave out the curves whose column a file "
+                        "does not have", variable=self.allow_missing).grid(
+            row=7, column=1, columnspan=3, sticky="w", **pad)
+
+        self.log = tk.Text(body, height=7, width=70, state="disabled")
+        self.log.grid(row=8, column=0, columnspan=4, sticky="nsew", **pad)
+        ttk.Label(body, textvariable=self.status).grid(
+            row=9, column=0, columnspan=3, sticky="w", **pad)
+        actions = ttk.Frame(body)
+        actions.grid(row=9, column=3, sticky="e", **pad)
+        self.run_button = ttk.Button(actions, text="Run", command=self.run)
+        self.run_button.pack(side="left", padx=2)
+        ttk.Button(actions, text="Close", command=self.destroy).pack(side="left", padx=2)
+        body.columnconfigure(2, weight=1)
+        body.rowconfigure(2, weight=1)
+        body.rowconfigure(8, weight=1)
+        self.lift()
+        self.after_idle(self.focus_force)
+
+    # -- choosing --------------------------------------------------------
+    def choose_template(self):
+        path = filedialog.askopenfilename(
+            parent=self, filetypes=[(f"{APP_NAME} graph", f"*{PROJECT_SUFFIX}")])
+        if path:
+            self.template_file.set(path)
+            self.template_kind.set("file")
+
+    def add_files(self, paths=None):
+        if paths is None:
+            paths = filedialog.askopenfilenames(
+                parent=self, filetypes=[("Data", "*.csv *.txt *.dat *.tsv *.asc"),
+                                        ("All files", "*.*")])
+        known = set(self.files.get(0, "end"))
+        for path in paths or ():
+            if path not in known:
+                self.files.insert("end", path)
+        self.status.set(f"{self.files.size()} data file(s).")
+
+    def remove_files(self):
+        for index in reversed(self.files.curselection()):
+            self.files.delete(index)
+
+    def choose_folder(self):
+        path = filedialog.askdirectory(parent=self)
+        if path:
+            self.out_folder.set(path)
+
+    # -- running ---------------------------------------------------------
+    def command(self):
+        """The command line of `aplot.py --template` for the choices made."""
+        files = list(self.files.get(0, "end"))
+        if not files:
+            raise APlotError("Add the data files to draw first.")
+        if self.template_kind.get() == "file":
+            template = self.template_file.get().strip()
+            if not template:
+                raise APlotError("Choose the graph file whose look is used.")
+        else:
+            if not self.app.open_windows():
+                raise APlotError("This graph has no diagram to take the look from.")
+            # the graph as it is on the screen now, saved or not
+            folder = self.scratch = tempfile.mkdtemp(prefix="aplot_batch_")
+            template = os.path.join(folder, "template" + PROJECT_SUFFIX)
+            write_project_file(template, self.app.project_document())
+        args = [sys.executable, os.path.abspath(__file__), "--template",
+                template, *files, "--format", self.format.get(),
+                "--settings", "user"]
+        if self.out_folder.get().strip():
+            args += ["--out", self.out_folder.get().strip()]
+        dpi = self.dpi.get().strip()
+        if dpi:
+            try:
+                args += ["--dpi", f"{float(dpi):g}"]
+            except ValueError:
+                raise APlotError(f"The resolution {dpi!r} is not a number.") from None
+        if self.save_graphs.get():
+            args.append("--save-graph")
+        if self.allow_missing.get():
+            args.append("--allow-missing")
+        return args
+
+    def run(self):
+        if self.process is not None:
+            return False
+        try:
+            args = self.command()
+        except APlotError as error:
+            messagebox.showinfo("Batch export", str(error), parent=self)
+            return False
+        self.write_log(None)
+        self.status.set("Drawing...")
+        self.run_button.state(["disabled"])
+        import threading, queue
+        self.queue = queue.Queue()
+
+        def work():
+            try:
+                process = subprocess.Popen(args, stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT, text=True)
+                self.process = process
+                for text in process.stdout:
+                    self.queue.put(text.rstrip("\n"))
+                self.queue.put(("done", process.wait()))
+            except OSError as error:
+                self.queue.put(("done", f"{error}"))
+        self.process = True              # running, the Popen comes in a moment
+        threading.Thread(target=work, daemon=True).start()
+        self.after(100, self.poll)
+        return True
+
+    def poll(self):
+        try:
+            while True:
+                item = self.queue.get_nowait()
+                if isinstance(item, tuple):
+                    self.finish(item[1])
+                    return
+                if item.strip() and "font cache" not in item:
+                    self.lines.append(item)
+                    self.write_log(item)
+        except Exception:                     # queue.Empty: later
+            pass
+        if self.winfo_exists():
+            self.after(150, self.poll)
+
+    def finish(self, code):
+        self.process = None
+        if self.scratch:                 # the copy of the graph it drew from
+            shutil.rmtree(self.scratch, ignore_errors=True)
+            self.scratch = None
+        self.run_button.state(["!disabled"])
+        failed = sum(1 for one in self.lines if one.startswith("aplot.py:"))
+        written = sum(1 for one in self.lines if not one.startswith("aplot.py:"))
+        if code == 0:
+            self.status.set(f"Done: {written} file(s) written.")
+        elif isinstance(code, str):
+            self.status.set(f"Could not start: {code}")
+        else:
+            self.status.set(f"{written} file(s) written, {failed} problem(s) - "
+                            "see above.")
+        self.result = code
+
+    def write_log(self, text):
+        self.log.configure(state="normal")
+        if text is None:
+            self.log.delete("1.0", "end")
+            self.lines = []
+        else:
+            self.log.insert("end", text + "\n")
+            self.log.see("end")
+        self.log.configure(state="disabled")
+
+
+# -- the same from the command line: --export and --template ----------------
+PICTURE_FORMATS = ("pdf", "png", "svg", "eps", "ps", "jpg", "jpeg", "tif", "tiff")
+
+
+def _batch_options(argv, takes_data):
+    """The files and the options of --export / --template (argparse)."""
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog=f"aplot.py {argv[0]}", add_help=False,
+        description="Write pictures of APlot graphs without opening a window.")
+    if takes_data:
+        parser.add_argument("template")
+        parser.add_argument("data", nargs="+")
+        parser.add_argument("--save-graph", action="store_true")
+        parser.add_argument("--allow-missing", action="store_true")
+    else:
+        parser.add_argument("graphs", nargs="+")
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--format", default=None)
+    parser.add_argument("--dpi", type=float, default=None)
+    parser.add_argument("--settings", default="defaults")
+
+    def fail(message):
+        raise _UsageError(f"{argv[0]}: {message} (see aplot.py --help)")
+    parser.error = fail
+    return parser.parse_args(argv[1:])
+
+
+def _picture_targets(sources, out, fmt):
+    """Where the picture of each source goes: next to it, into the folder
+    `out`, or - for a single source - into the file `out`."""
+    if fmt is not None:
+        fmt = fmt.lower().lstrip(".")
+        if fmt not in PICTURE_FORMATS:
+            raise _UsageError(f"unknown picture format {fmt!r}; one of "
+                              + ", ".join(PICTURE_FORMATS))
+    if out is not None and Path(out).suffix and not Path(out).is_dir():
+        if len(sources) > 1:
+            raise _UsageError("--out must be a folder for more than one file")
+        target = Path(out)
+        if fmt is not None and target.suffix.lower().lstrip(".") != fmt:
+            raise _UsageError(f"--out {out} and --format {fmt} disagree")
+        return [target]
+    ending = "." + (fmt or "pdf")
+    folder = Path(out) if out is not None else None
+    if folder is not None:
+        folder.mkdir(parents=True, exist_ok=True)
+    return [(folder or Path(one).parent) / (Path(one).stem + ending)
+            for one in sources]
+
+
+class _UsageError(APlotError):
+    """The command line itself is wrong (exit code 2)."""
+
+
+def _each(sources, work):
+    """Do `work(source)` for every file; a file that fails is reported and
+    the others are still done.  The exit code: 0, or 1 if any failed."""
+    failed = 0
+    for source in sources:
+        try:
+            for written in work(source):
+                print(written, flush=True)
+        except APlotError as error:
+            print(f"aplot.py: {error}", file=sys.stderr, flush=True)
+            failed += 1
+    return 1 if failed else 0
+
+
+def command_line_export(argv):
+    """aplot.py --export GRAPH.aplt ... : the pictures of saved graphs."""
+    options = _batch_options(argv, takes_data=False)
+    targets = dict(zip(options.graphs, _picture_targets(
+        options.graphs, options.out, options.format)))
+
+    def work(source):
+        graph = Graph.open(source, settings=options.settings)
+        return graph.export(targets[source], dpi=options.dpi)
+    return _each(options.graphs, work)
+
+
+def command_line_template(argv):
+    """aplot.py --template STYLE.aplt DATA ... : new numbers, the look of
+    a saved graph - one picture (and graph) per data file."""
+    options = _batch_options(argv, takes_data=True)
+    targets = dict(zip(options.data, _picture_targets(
+        options.data, options.out, options.format)))
+    style = Graph.open(options.template, settings=options.settings)
+
+    def work(source):
+        try:
+            frame, _info = read_table(source)
+        except (OSError, ValueError, UnicodeError) as error:
+            raise APlotError(f"{source}: {error}") from error
+        graph = Graph(settings=options.settings)
+        graph.document = copy.deepcopy(style.document)
+        try:
+            graph.set_data(frame, allow_missing=options.allow_missing)
+        except APlotError as error:
+            raise APlotError(f"{source}: {error}") from error
+        written = graph.export(targets[source], dpi=options.dpi)
+        if options.save_graph:
+            written.append(graph.save(Path(targets[source]).with_suffix(PROJECT_SUFFIX)))
+        return written
+    return _each(options.data, work)
+
+
+def command_line_batch(argv):
+    """Run --export / --template; an error is one line on stderr, exit 1."""
+    command = command_line_export if argv[0] == "--export" else command_line_template
+    try:
+        return command(argv)
+    except APlotError as error:
+        print(f"aplot.py: {error}", file=sys.stderr)
+        return 2 if isinstance(error, _UsageError) else 1
+    finally:
+        close()
+
+
+
+# --------------------------------------------------------------------------
 # installing APlot: for this user, or for every user of the computer
 # --------------------------------------------------------------------------
 # The first start of a plain aplot.py - on a Mac and on Linux alike - opens
@@ -36563,6 +37853,21 @@ USAGE = f"""{APP_NAME} {APP_VERSION} - plotting and editing tabular data
                                    every user, run with sudo)
   python3 aplot.py --uninstall-desktop [--system]
                                    take that away again
+  python3 aplot.py --export GRAPH.aplt ... [--out PATH] [--format pdf]
+                   [--dpi N]       the picture of every diagram of saved
+                                   graphs, next to them or into PATH (a
+                                   folder, or one file); several diagrams
+                                   give NAME_1.pdf, NAME_2.pdf, ...
+  python3 aplot.py --template STYLE.aplt DATA.csv ... [--out PATH]
+                   [--format pdf] [--dpi N] [--save-graph] [--allow-missing]
+                                   the numbers of each data file drawn with
+                                   the look of the graph STYLE.aplt - one
+                                   picture each (--save-graph: and an .aplt);
+                                   curves are matched to the columns by name
+                                   (--allow-missing leaves out the curves
+                                   whose column is not in the data)
+                                   Both take --settings user: new curves get
+                                   your settings instead of the built-in ones
   python3 aplot.py --version       the version of this APlot
   python3 aplot.py --check-update  is there a newer version on GitHub?
   python3 aplot.py --update        download and install it
@@ -36636,6 +37941,8 @@ def run_command(argv):
         return 0
     if first in ("--check-update", "--update"):
         return command_line_update(install=(first == "--update"))
+    if first in ("--export", "--template"):
+        return command_line_batch(argv)
     if first == "--icon":
         path = argv[1] if len(argv) > 1 else f"{APP_NAME.lower()}_icon.png"
         written = write_icon_file(path)

@@ -23,6 +23,10 @@ It also answers a few questions on the command line:
     python3 aplot.py --update        download and install it
     python3 aplot.py FILE.aplt       start with that graph open
     python3 aplot.py --icon FILE     write the icon into a PNG file
+    python3 aplot.py --export GRAPH.aplt          the pictures of a saved graph
+    python3 aplot.py --template STYLE.aplt DATA.csv
+                                     other data with the look of a saved
+                                     graph (see `Pictures from the command line`)
     python3 aplot.py --make-app      macOS: install APlot.app without the
                                      window (for scripts, see below)
     python3 aplot.py --install-desktop   Linux: the same without the
@@ -31,7 +35,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.7.1 (2026-11-27)**.  The number is written in one place
+This is **APlot 1.8.0 (2026-11-28)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -3540,6 +3544,8 @@ belong to the characters of that text, exactly as everywhere else.
 | Export data (CSV, TXT, DAT)... | `Shift+Cmd/Ctrl+S` | Writes the sheet into a text data file (`.csv`, `.txt`, `.dat`). |
 | Export figure (image)... | `Cmd/Ctrl+E` | Writes the graph as a picture (PNG, PDF, SVG, ...), cut out of the page. |
 | Export as matplotlib script... | `Shift+Cmd/Ctrl+E` | Writes the diagram as a Python program. |
+| Export as APlot script... | | Writes the whole graph as a Python program that draws it again with APlot (see `APlot from a program`). |
+| Batch export from template... | | Draws other data files with the look of this graph (or of a graph file), one picture each (see `Export as APlot script and Batch export from template`). |
 | Copy figure to the clipboard | `Cmd/Ctrl+C` | Puts a picture of the diagram on the clipboard. |
 
 **With Caps Lock or Num Lock on** every shortcut works the same.  (Up
@@ -3731,6 +3737,120 @@ If a file is unusual, the recognition can be overridden in the settings:
 `Field separator` accepts `auto`, `comma`, `semicolon`, `tab`, `space` or
 `|`, and `Decimal sign` accepts `auto`, `.` or `,`.  These settings are also
 used when a data file is written.
+
+
+### APlot from a program
+
+A Python program can make a graph with APlot without opening a window:
+
+```python
+import sys
+sys.path.insert(0, "/path/to/the/folder/of/aplot.py")
+import aplot
+
+graph = aplot.Graph(table, style="line")    # a DataFrame, a dict of columns
+d = graph.diagram()                          # or a 2-D array; first column = X
+d.title("")
+d.axis("x", label="Wavelength (nm)", range=(1260, 1360))
+d.axis("y", label="Transmission", range=(0, 1), step=0.2)
+d.curve("TE0", color="#1f77b4", width=2)
+d.curve("fit", linestyle="dashed", legend=False)
+d.legend(position="outside right")
+graph.save("spectra.aplt")                   # opens in APlot as it was made
+graph.export("spectra.pdf")                  # PDF, PNG, SVG... from the ending
+```
+
+**What a graph of a program is.**  It is an `.aplt` document - the sheets
+and, for every diagram, everything the diagram window keeps of its look -
+and APlot itself draws it, in a copy of the program whose windows are
+never shown.  `save` and `export` are the very `Save graph` and `Export
+figure` of the menu, so the picture is the one the program would write,
+and the `.aplt` file opens and can be edited in APlot as if it had been
+made by hand.
+
+| Call | What it does |
+| --- | --- |
+| `aplot.Graph(table, style="line", sheet="Data 1", settings="defaults")` | A graph of a table with one diagram of a plot style (`line`, `line_symbol`, `scatter`, `bar`, `pcolor`, `contour`, ... - the codes of the Plot button). |
+| `aplot.Graph.open("graph.aplt")` | A saved graph. |
+| `graph.data = table`, `graph.set_data(table, sheet=0, allow_missing=False)` | New numbers; every diagram keeps its look, as `Update plot` does.  The curves are matched to the columns by name; a drawn column that is missing is an error unless `allow_missing`. |
+| `graph.diagram(0)`, `graph.diagrams`, `graph.add_diagram("scatter")` | A diagram to change, all of them, one more. |
+| `graph.save("x.aplt")`, `graph.export("x.png", dpi=300)` | The graph file; the pictures (several diagrams give `x_1.png`, `x_2.png`, ...). |
+| `d.title(text, size, color)` | The title. |
+| `d.axis("x" / "y" / "y2", label, range=(low, high) or "auto", step, minor, scale, grid, ...)` | An axis. |
+| `d.curve(column, label, legend, color, width, linestyle, marker, markersize, style, axis, visible, ...)` | A curve; `legend=False` takes its legend box away, `style` gives it a plot style of its own (symbols among lines), `axis="right"` puts it on the right Y axis. |
+| `d.surface(column, style, cmap, range, colorbar, bar_label, shading, levels, color, ...)` | The colour scale of a colour surface or contour plot; `color` draws contour lines in one colour. |
+| `d.legend(visible, position, size, step)` | The legend boxes, stacked from a corner (`"upper right"`, ...) or `"outside right"` of the plot area. |
+| `d.page(width, height, dpi)` | The page in cm. |
+| `d.state` | Everything else of the diagram, as it is written into the `.aplt` file. |
+
+**Your settings stay yours.**  A program draws with the built-in settings
+of APlot, so a script makes the same picture on every computer, and it
+never reads or changes `~/.aplot/config.json`; `settings="user"` takes
+your settings instead, and the path of a settings file takes that one.
+
+**No dialog, a message instead.**  Whatever the program would say in a
+window - a file that cannot be read, a column that is not there, a style
+that does not exist - comes back as an `aplot.APlotError` with the same
+text.  Questions are answered "no", so nothing is overwritten or thrown
+away behind the back of the program.
+
+**Where it runs.**  APlot draws with Tk, so it needs a display: on a Mac
+and on Windows that is always there, on a Linux server the program runs
+under `xvfb-run`.  The hidden APlot is a program of its own, so
+`aplot.Graph` cannot be used inside a program that already has a Tk window
+(APlot itself, for one) - such a program calls `aplot.py --template`
+instead.
+
+### Pictures from the command line
+
+The same without writing a program:
+
+    python3 aplot.py --export GRAPH.aplt ... [--out PATH] [--format pdf] [--dpi N]
+    python3 aplot.py --template STYLE.aplt DATA.csv ... [--out PATH] [--format pdf]
+                     [--dpi N] [--save-graph] [--allow-missing]
+
+* `--export` writes the picture of every diagram of saved graphs: next to
+  each graph, into the folder `PATH`, or - for one graph - into the file
+  `PATH`.  A graph of several diagrams gives `NAME_1.pdf`, `NAME_2.pdf`, ...
+* `--template` draws the numbers of each data file with the look of the
+  graph `STYLE.aplt`: one picture each, named after the data file, and with
+  `--save-graph` an `.aplt` file each too.  The data files are read as by
+  `Import data`; the curves are matched to the columns by name, and
+  `--allow-missing` leaves out a curve whose column a file does not have.
+  This is the way to draw the results of every new run of a measurement
+  or a simulation the same way: style one graph in APlot, save it, and
+  let the script of the measurement call `--template`.
+* Every file written is printed on a line of its own.  A file that fails
+  is reported on stderr and the others are still done; the exit code is
+  0 when everything was done, 1 when a file failed and 2 when the command
+  line itself is wrong.
+* `--settings user` draws new curves with your settings instead of the
+  built-in ones.
+
+### Export as APlot script and Batch export from template
+
+Two commands of the `File` menu bring the same to the windows:
+
+* **Export as APlot script...** writes the whole graph - every sheet and
+  every diagram - as a Python program that draws it again with
+  `aplot.Graph`.  Its numbers and the main settings of each diagram (the
+  title, the axes, the curves, the legend) are written out to be changed;
+  everything else is kept in `LOOK`, the graph as APlot stores it.  Run it
+  with `python3 NAME_aplot.py`: it writes `NAME.aplt` and `NAME.pdf` next
+  to itself, the same picture as the diagram on the screen.  Put other
+  numbers in - `graph.set_data(pd.read_csv("run.csv"))` - and the look
+  stays.  Unlike `Export as matplotlib script`, the program makes an APlot
+  graph again, which opens and can be edited in APlot.
+* **Batch export from template...** opens a window where data files are
+  added (`Add...`), a folder for the pictures is chosen (empty: next to
+  each data file), the format and the resolution are set, and `Run` draws
+  each file with the look of **this graph** - as it is on the screen,
+  saved or not - or of **a graph file**.  `Save a graph (.aplt) for each
+  file too` and `Leave out the curves whose column a file does not have`
+  are the two switches of `--template`, which does the work beside the
+  program: the graph on the screen is not touched, and the window stays
+  usable while the pictures are made.  The files written and the problems
+  are listed in the window.
 
 
 ## 5. Settings
