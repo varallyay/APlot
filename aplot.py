@@ -128,7 +128,7 @@ BatchExportDialog        File > Batch export from template...
 
 Version
 -------
-1.8.0 (2026-11-28) - see `APP_VERSION` below and VERSION_HISTORY.md (the
+1.8.1 (2026-11-28) - see `APP_VERSION` below and VERSION_HISTORY.md (the
 same text as VERSION_HISTORY in this file).  Numbers follow Semantic Versioning: MAJOR.MINOR.PATCH.
 
 Developer
@@ -323,7 +323,7 @@ APP_NAME = "APlot"
 # Each release also gets a line in VERSION_HISTORY (and VERSION_HISTORY.md), the
 # date below, the same number in the description at the top of this file -
 # and, with git, a tag: `git tag -a v1.0.0 -m "APlot 1.0.0"`.
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 APP_VERSION_DATE = "2026-11-28"
 __version__ = APP_VERSION
 # The Quick Look extensions of a Mac (the APlotQuickLook folder) have their
@@ -807,7 +807,9 @@ AXIS_TAGS = {
     "x": (("B", "x_B", "Bottom x-axis"), ("T", "x_T", "Top x-axis")),
     "y": (("L", "y_L", "Left y-axis"), ("R", "y_R", "Right y-axis")),
 }
-X_SIDES = {"B": "bottom", "T": "top"}
+# the X column may tick both of its boxes: the same X scale is then drawn
+# below and above the plot area ("BT")
+X_SIDES = {"B": "bottom", "T": "top", "BT": "both"}
 Y_SIDES = {"L": "left", "R": "right"}
 # the shades every drawn icon of the program is painted with
 ICON_SIZE = 24             # how big a toolbar icon is drawn, in pixels
@@ -9328,6 +9330,100 @@ def new_random_seed():
     return int(np.random.SeedSequence().entropy % (1 << 63))
 
 
+def _formula_numbers(args):
+    """The numbers of the arguments of SUM, MIN, AVERAGE...: a range gives
+    its numbers, a single value itself - so MIN(A1, B2), SUM(A1:A5, C1) and
+    MAX(A1:A5) all work.  Text and empty results are passed over."""
+    found = []
+    for arg in args:
+        for value in (arg if isinstance(arg, (list, tuple)) else (arg,)):
+            if isinstance(value, bool):
+                value = float(value)
+            if isinstance(value, (int, float)):
+                value = float(value)
+                if not math.isnan(value) and not math.isinf(value):
+                    found.append(value)
+    return found
+
+
+def _formula_mean(args):
+    values = _formula_numbers(args)
+    return sum(values) / len(values) if values else 0.0
+
+
+def _formula_stdev(args):
+    values = _formula_numbers(args)
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
+
+
+def _formula_median(args):
+    values = sorted(_formula_numbers(args))
+    if not values:
+        return 0.0
+    half = len(values) // 2
+    return values[half] if len(values) % 2 else (values[half - 1] + values[half]) / 2
+
+
+def _formula_truths(args):
+    """The truth of every argument of AND, OR, XOR (a range: of each cell)."""
+    truths = []
+    for arg in args:
+        for value in (arg if isinstance(arg, (list, tuple)) else (arg,)):
+            if isinstance(value, (bool, int, float)):
+                truths.append(bool(value))
+            else:
+                raise ValueError("#VALUE!")
+    if not truths:
+        raise ValueError("#VALUE!")
+    return truths
+
+
+def _formula_round(value, digits=0):
+    """ROUND as a spreadsheet does it: a 5 goes away from zero (Python's own
+    round makes 2.5 into 2)."""
+    from decimal import Decimal, ROUND_HALF_UP
+    digits = int(digits)
+    result = float(Decimal(repr(float(value))).quantize(
+        Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP))
+    return result
+
+
+# the functions of a spreadsheet whose lower case name is a word of Python
+# itself: `if(A1>0,1,0)` cannot even be read as Python, so they are written
+# in capitals before the formula is read - only where they are called as a
+# function, not where `and` / `or` / `not` stand between two values
+FORMULA_KEYWORD_FUNCS = re.compile(r'(?<![A-Za-z0-9_.])(if|and|or|not|xor)(?=\s*\()',
+                                   re.IGNORECASE)
+# a single "=" is the comparison of a spreadsheet: =IF(A1=1, ...)
+FORMULA_EQUALS = re.compile(r'(?<![<>=!])=(?!=)')
+# a range anywhere in a formula: SUM(A1:A5, C1), MIN(A1:A3, B1:B3)
+FORMULA_RANGE = re.compile(r'(?<![A-Za-z0-9_"\'])(\$?[A-Za-z]+\$?\d+)\s*:\s*'
+                           r'(\$?[A-Za-z]+\$?\d+)(?![A-Za-z0-9_])')
+
+
+def excel_formula_syntax(text):
+    """A formula of a spreadsheet as the evaluator reads it: the functions
+    named by a word of Python (if, and, or, not, xor) in capitals, `;`
+    between the arguments as `,`, `<>` as `!=` and a single `=` as `==`.
+    Quoted text is left as it is."""
+    pieces = re.split(r'("[^"]*"|\'[^\']*\')', str(text))
+    for index in range(0, len(pieces), 2):
+        piece = pieces[index].replace(";", ",").replace("<>", "!=")
+        piece = FORMULA_EQUALS.sub("==", piece)
+
+        def capital(match, piece=piece):
+            before = piece[:match.start()].rstrip()
+            # `A1>0 and (B1>0)` is Python's own `and` between two values
+            if before and (before[-1].isalnum() or before[-1] in "_)]\"'"):
+                return match.group(1)
+            return match.group(1).upper()
+        pieces[index] = FORMULA_KEYWORD_FUNCS.sub(capital, piece)
+    return "".join(pieces)
+
+
 class FormulaEvaluator:
     """Safe AST-based Excel formula evaluator with full mathematical and range support."""
 
@@ -9337,20 +9433,28 @@ class FormulaEvaluator:
         'sinh': math.sinh, 'cosh': math.cosh, 'tanh': math.tanh,
         'sqrt': math.sqrt, 'exp': math.exp,
         'log': math.log, 'ln': math.log, 'log10': math.log10, 'log2': math.log2,
-        'abs': abs, 'round': round, 'floor': math.floor, 'ceil': math.ceil,
+        'abs': abs, 'round': _formula_round, 'floor': math.floor, 'ceil': math.ceil,
+        'int': math.floor,          # as in a spreadsheet: INT(-2.5) is -3
         'mod': lambda a, b: a % b, 'power': pow,
         'pi': lambda: math.pi, 'e': lambda: math.e,
         'radians': math.radians, 'degrees': math.degrees,
-        'if': lambda cond, a, b: a if cond else b,
-        'sum': lambda vals: float(sum(v for v in vals if not math.isnan(v))) if len(vals) else 0.0,
-        'average': lambda vals: (float(sum(v for v in vals if not math.isnan(v))) / len([v for v in vals if not math.isnan(v)])) if any(not math.isnan(v) for v in vals) else 0.0,
-        'mean': lambda vals: (float(sum(v for v in vals if not math.isnan(v))) / len([v for v in vals if not math.isnan(v)])) if any(not math.isnan(v) for v in vals) else 0.0,
-        'min': lambda vals: float(min(v for v in vals if not math.isnan(v))) if any(not math.isnan(v) for v in vals) else 0.0,
-        'max': lambda vals: float(max(v for v in vals if not math.isnan(v))) if any(not math.isnan(v) for v in vals) else 0.0,
-        'count': lambda vals: float(len([v for v in vals if not math.isnan(v)])),
-        'std': lambda vals: float(math.sqrt(sum((x - sum(vals)/len(vals))**2 for x in vals)/(len(vals)-1))) if len(vals) > 1 else 0.0,
-        'stdev': lambda vals: float(math.sqrt(sum((x - sum(vals)/len(vals))**2 for x in vals)/(len(vals)-1))) if len(vals) > 1 else 0.0,
-        'median': lambda vals: float(sorted(vals)[len(vals)//2]) if len(vals) else 0.0,
+        # IF itself is worked out in _eval_ast: only the branch it takes
+        'if': lambda cond, a, b=False: a if cond else b,
+        'and': lambda *args: all(_formula_truths(args)),
+        'or': lambda *args: any(_formula_truths(args)),
+        'xor': lambda *args: sum(_formula_truths(args)) % 2 == 1,
+        'not': lambda value: not value,
+        # every one of these takes ranges and single values, any number
+        'sum': lambda *args: float(sum(_formula_numbers(args))),
+        'average': lambda *args: _formula_mean(args),
+        'avg': lambda *args: _formula_mean(args),
+        'mean': lambda *args: _formula_mean(args),
+        'min': lambda *args: min(_formula_numbers(args), default=0.0),
+        'max': lambda *args: max(_formula_numbers(args), default=0.0),
+        'count': lambda *args: float(len(_formula_numbers(args))),
+        'std': lambda *args: _formula_stdev(args),
+        'stdev': lambda *args: _formula_stdev(args),
+        'median': lambda *args: _formula_median(args),
     }
 
     # names that stand for a number on their own, so that a formula such as
@@ -9472,13 +9576,13 @@ class FormulaEvaluator:
         if broken:
             return broken.group(0).upper()
 
-        # Replace ^ with ** for power, and <> with !=
+        # ^ is the power; if(), and(), or(), not() in small letters, `;`
+        # between the arguments, <> and a single = as a spreadsheet means them
         s = s.replace("^", "**")
-        s = s.replace("<>", "!=")
+        s = excel_formula_syntax(s)
 
-        # Replace range arguments: e.g. SUM(A1:A5) -> SUM(__range__("A1", "A5"))
-        range_re = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*(\$?[A-Za-z]+\$?\d+)\s*:\s*(\$?[A-Za-z]+\$?\d+)\s*\)', re.IGNORECASE)
-        s = range_re.sub(r'\1(__range__("\2", "\3"))', s)
+        # a range anywhere: SUM(A1:A5, C1) -> SUM(__range__("A1", "A5"), C1)
+        s = FORMULA_RANGE.sub(r'__range__("\1", "\2")', s)
 
         # Replace column name references in brackets e.g. [X], [Y1] with cell in current row
         cols = [str(c) for c in self.df.columns]
@@ -9634,6 +9738,19 @@ class FormulaEvaluator:
                     r1 = self._eval_ast(node.args[0], current_row, current_col)
                     r2 = self._eval_ast(node.args[1], current_row, current_col)
                     return self.get_range_values(r1, r2)
+                elif fname == 'if':
+                    # only the branch that is taken is worked out, so
+                    # =IF(A1=0, 0, 1/A1) gives 0 and not #DIV/0!
+                    if len(node.args) not in (2, 3):
+                        raise ValueError("#VALUE!")
+                    cond = self._eval_ast(node.args[0], current_row, current_col)
+                    if isinstance(cond, str) and cond.startswith("#"):
+                        return cond
+                    if cond:
+                        return self._eval_ast(node.args[1], current_row, current_col)
+                    if len(node.args) == 3:
+                        return self._eval_ast(node.args[2], current_row, current_col)
+                    return False
                 elif fname in self.RANDOM_FUNCS:
                     args = [self._eval_ast(a, current_row, current_col)
                             for a in node.args]
@@ -9654,6 +9771,18 @@ class FormulaEvaluator:
                 if isinstance(a, str) and a.startswith("#"):
                     return a
             return func(*args)
+        elif isinstance(node, ast.BoolOp):
+            # `A1>0 and B1>0`, `A1<0 or A1>1` written between the values
+            result = None
+            for operand in node.values:
+                result = self._eval_ast(operand, current_row, current_col)
+                if isinstance(result, str) and result.startswith("#"):
+                    return result
+                if isinstance(node.op, ast.And) and not result:
+                    return False
+                if isinstance(node.op, ast.Or) and result:
+                    return True
+            return bool(result)
         elif isinstance(node, ast.IfExp):
             cond = self._eval_ast(node.test, current_row, current_col)
             if isinstance(cond, str) and cond.startswith("#"):
@@ -11386,7 +11515,8 @@ class DataTable(ttk.Frame):
                 chosen = "B"                   # the X column always feeds one
             variables, widgets = {}, {}
             for code, text, hint in AXIS_TAGS[family]:
-                variable = tk.BooleanVar(value=(code == chosen))
+                # "BT": both X boxes ticked
+                variable = tk.BooleanVar(value=(code in str(chosen or "")))
                 check = ttk.Checkbutton(
                     self.check_bar, variable=variable, text=text,
                     takefocus=False, style="APlot.Axis.TCheckbutton",
@@ -11426,16 +11556,20 @@ class DataTable(ttk.Frame):
             return "#f0f0f0"
 
     def _axis_clicked(self, name, code):
-        """One axis per column: ticking one check button clears the other."""
+        """One axis per Y column: ticking one check button clears the other.
+        The X column may have both (the X scale below and above the plot
+        area), but never neither."""
         variables = self.axis_vars.get(str(name)) or {}
         variable = variables.get(code)
         if variable is None:
             return
+        x_column = self._is_x_column(name)
         if variable.get():                      # it was just switched on
-            for other, one in variables.items():
-                if other != code:
-                    one.set(False)
-        elif self._is_x_column(name):
+            if not x_column:
+                for other, one in variables.items():
+                    if other != code:
+                        one.set(False)
+        elif x_column and not any(one.get() for one in variables.values()):
             variable.set(True)         # the data has to have an X axis
             return                     # nothing changed: no replot needed
         self._changed()
@@ -11500,24 +11634,33 @@ class DataTable(ttk.Frame):
                 int(self.tree.column(columns[index], "width")), 0)
 
     def column_axis(self, name):
-        """"B"/"T" for the X column, "L"/"R" for a Y column, None if unused."""
+        """"B"/"T" (or "BT", both) for the X column, "L"/"R" for a Y column,
+        None if unused."""
+        ticked = ""
         for code, variable in (self.axis_vars.get(str(name)) or {}).items():
             try:
                 if bool(variable.get()):
-                    return code
+                    ticked += code
             except tk.TclError:
                 return None
-        return None
+        if not ticked:
+            return None
+        if self._is_x_column(name):
+            return ticked
+        return ticked[0]
 
     def set_column_axis(self, name, code):
         """Tick one of the two check buttons of a column (None: neither)."""
         variables = self.axis_vars.get(str(name))
         if variables is None:
             return False
-        if code is not None and code not in variables:
+        wanted = set(str(code)) if code else set()
+        if code is not None and (not wanted or not wanted <= set(variables)):
             return False
+        if len(wanted) > 1 and not self._is_x_column(name):
+            return False                   # a Y column has one axis only
         for one, variable in variables.items():
-            variable.set(one == code)
+            variable.set(one in wanted)
         if code is None and self._is_x_column(name):
             variables["B"].set(True)       # the X column keeps an axis
         self._changed()
@@ -14859,10 +15002,17 @@ class DataTable(ttk.Frame):
         self._update_status_bar()
 
     def eval_formula(self, formula_str, row, col):
-        evaluator = FormulaEvaluator(self.df, self.cell_formulas,
-                                     seed=self.random_seed,
-                                     excluded=self.excluded)
+        evaluator = self._formula_evaluator((int(row), int(col)) in self.excluded)
         return evaluator.evaluate(formula_str, row, col)
+
+    def _formula_evaluator(self, for_excluded=False):
+        """The evaluator of this sheet.  A cell that is left out itself is
+        worked out as if nothing were left out: its number is shown as
+        `#value` but used nowhere, and the cells it reads - left out with
+        it when a whole row was - would only turn it into #N/A."""
+        return FormulaEvaluator(self.df, self.cell_formulas,
+                                seed=self.random_seed,
+                                excluded=set() if for_excluded else self.excluded)
 
     def new_random_numbers(self):
         """F9: every RAND() and RANDN() of this sheet draws a new number.
@@ -14883,12 +15033,15 @@ class DataTable(ttk.Frame):
         """Recalculate all formula cells across the table."""
         if not self.cell_formulas:
             return
-        evaluator = FormulaEvaluator(self.df, self.cell_formulas,
-                                     seed=self.random_seed,
-                                     excluded=self.excluded)
+        evaluator = self._formula_evaluator()
+        shown = None                  # for the cells that are left out
         for (r, c), formula in list(self.cell_formulas.items()):
             if r < len(self.df) and c < len(self.df.columns):
-                val = evaluator.evaluate(formula, r, c)
+                if (r, c) in self.excluded:
+                    shown = shown or self._formula_evaluator(True)
+                    val = shown.evaluate(formula, r, c)
+                else:
+                    val = evaluator.evaluate(formula, r, c)
                 col_name = self.df.columns[c]
                 try:
                     self.df.iat[r, c] = val
@@ -16619,7 +16772,8 @@ class PlotWindow(tk.Toplevel):
         """Which axis every column of the data belongs to, safely defaulted."""
         columns = [str(one) for one in df.columns]
         given = layout or {}
-        side = "top" if str(given.get("x_side")) == "top" else "bottom"
+        side = str(given.get("x_side"))
+        side = side if side in ("top", "both") else "bottom"
         raw = given.get("y") or {}
         sides = {name: ("right" if str(raw.get(name, "left")) == "right"
                         else "left")
@@ -16945,7 +17099,10 @@ class PlotWindow(tk.Toplevel):
         # around the plot area, not an axis, and keeps all four of its
         # sides.)
         if self.axis_direction("x") != "off":
-            sides.append("top" if self.x_side == "top" else "bottom")
+            if self.x_side == "both":
+                sides += ["bottom", "top"]
+            else:
+                sides.append("top" if self.x_side == "top" else "bottom")
         right = self.right_axis_active()
         if (self.left_axis_active() or not right) and self.left_axis_shown():
             sides.append("left")
@@ -16967,6 +17124,8 @@ class PlotWindow(tk.Toplevel):
         numbers, tick marks and label together.
         """
         top = self.x_side == "top"
+        # both X boxes ticked: the same scale below and above the plot area
+        twin_x = self.x_side == "both"
         both = self.frame_cfg.get("style") in ("box_in", "box_out")
         # `No X axis` (or no left / right Y axis) takes the line of that
         # axis away as well, so the sides are worked out again here - the
@@ -16994,9 +17153,9 @@ class PlotWindow(tk.Toplevel):
         self.ax.xaxis.set_ticks_position("top" if top else "bottom")
         self.ax.xaxis.set_label_position("top" if top else "bottom")
         self.ax.tick_params(axis="x", which="both",
-                            top=(both or top) and x_ticks,
+                            top=(both or top or twin_x) and x_ticks,
                             bottom=(both or not top) and x_ticks,
-                            labeltop=top and x_tick_labels,
+                            labeltop=(top or twin_x) and x_tick_labels,
                             labelbottom=(not top) and x_tick_labels)
         # with a closed frame the opposite side keeps its tick marks, but not
         # when the right hand Y axis has a scale of its own
@@ -17069,8 +17228,8 @@ class PlotWindow(tk.Toplevel):
         return None
 
     def set_x_side(self, side, redraw=True):
-        """Put the X axis under or above the plot area."""
-        side = "top" if str(side) == "top" else "bottom"
+        """Put the X axis under or above the plot area - or both."""
+        side = str(side) if str(side) in ("top", "both") else "bottom"
         if side == self.x_side:
             return False
         self.x_side = side
@@ -21190,6 +21349,7 @@ class PlotWindow(tk.Toplevel):
         style = cfg.get("style", "none")
         both = style in ("box_in", "box_out")
         top = self.x_side == "top"
+        twin_x = self.x_side == "both"
         right = self.right_axis_active()
         left = self.left_axis_shown()
         used = self.used_sides()
@@ -21282,9 +21442,10 @@ class PlotWindow(tk.Toplevel):
                            % lit("top" if top else "bottom"))
                 out.append("ax.tick_params(axis='x', which='both', top=%s, "
                            "bottom=%s, labeltop=%s, labelbottom=%s)"
-                           % ((both or top) and ticks_on,
+                           % ((both or top or twin_x) and ticks_on,
                               (both or not top) and ticks_on,
-                              top and tick_labels_on, (not top) and tick_labels_on))
+                              (top or twin_x) and tick_labels_on,
+                              (not top) and tick_labels_on))
             elif which == "y":
                 out.append("ax.yaxis.set_visible(%s)" % left)
                 out.append("ax.tick_params(axis='y', which='both', left=%s, "
@@ -22339,7 +22500,7 @@ class PlotWindow(tk.Toplevel):
         self.fonts["legend_color"] = legend.get("color", self.fonts["legend_color"])
 
         side = state.get("x_side")
-        if side in ("bottom", "top"):
+        if side in ("bottom", "top", "both"):
             self.x_side = side
             self.layout["x_side"] = side
 
@@ -27533,8 +27694,9 @@ class PlotWindow(tk.Toplevel):
         if not (box.x0 - tolerance <= x <= box.x1 + tolerance
                 and box.y0 - tolerance <= y <= box.y1 + tolerance):
             return None
-        x_edge = box.y1 if self.x_side == "top" else box.y0
-        if abs(y - x_edge) <= tolerance:
+        x_edges = {"top": (box.y1,), "both": (box.y0, box.y1)}.get(
+            self.x_side, (box.y0,))
+        if any(abs(y - edge) <= tolerance for edge in x_edges):
             return "x"
         if abs(x - box.x0) <= tolerance and self.left_axis_shown():
             return "y"
@@ -28018,10 +28180,10 @@ class PlotWindow(tk.Toplevel):
             return self.numbers3d_at(event.x, event.y)
         box = self.ax.get_window_extent()
         if box.x0 <= event.x <= box.x1:
-            if self.x_side == "top":
-                if box.y1 < event.y <= box.y1 + 80:
-                    return "x"
-            elif box.y0 - 80 <= event.y < box.y0:
+            if self.x_side in ("top", "both") \
+                    and box.y1 < event.y <= box.y1 + 80:
+                return "x"
+            if self.x_side != "top" and box.y0 - 80 <= event.y < box.y0:
                 return "x"
         if box.y0 <= event.y <= box.y1:
             if box.x0 - 90 <= event.x < box.x0 and self.left_axis_shown():
@@ -28370,7 +28532,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.8.0 (2026-11-28)**.  The number is written in one place
+This is **APlot 1.8.1 (2026-11-28)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -28542,9 +28704,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.7.1_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.8.1_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.7.1-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.8.1-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -28608,8 +28770,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.7.1 -m "APlot 1.7.1"
-        git push origin v1.7.1
+        git tag -a v1.8.1 -m "APlot 1.8.1"
+        git push origin v1.8.1
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -29592,11 +29754,17 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
 `B2:D10`) are fully supported:
 
 * **Arithmetic**: `+`, `-`, `*`, `/`, `^` (exponentiation), `%`.
-* **Comparisons**: `=`, `<>`, `<`, `<=`, `>`, `>=`.
-* **Math & Statistics**: `SUM(range)`, `AVERAGE(range)` / `AVG(range)`,
-  `COUNT(range)`, `MIN(...)`, `MAX(...)`, `ABS(x)`, `ROUND(x, decimals)`,
+* **Comparisons**: `=`, `<>`, `<`, `<=`, `>`, `>=` - a single `=` compares,
+  as in Excel (`=IF(A1=0, 1, 2)`); `==` and `!=` work too.
+* **Math & Statistics**: `SUM(...)`, `AVERAGE(...)` / `AVG(...)`,
+  `COUNT(...)`, `MIN(...)`, `MAX(...)`, `MEDIAN(...)`, `STDEV(...)`,
+  `ABS(x)`, `ROUND(x, decimals)`,
   `INT(x)`, `SQRT(x)`, `POWER(base, exp)`, `EXP(x)`, `LN(x)` / `LOG(x)`,
-  `LOG10(x)`, `LOG2(x)`, `MOD(n, d)`.  A function whose name ends in digits
+  `LOG10(x)`, `LOG2(x)`, `MOD(n, d)`.  The statistics take ranges and
+  single values, as many as needed: `=MIN(A1, B2)`, `=SUM(A1:A5, C1)`,
+  `=MAX(A1:A10, C1:C10)`.  `ROUND` takes a 5 away from zero, as Excel does
+  (`ROUND(2.5, 0)` is 3), and `INT` rounds down (`INT(-2.5)` is -3).  A
+  function whose name ends in digits
   is read as a function, never as a cell (`LOG10(A1)` is the base-10
   logarithm of `A1`, not the cell `LOG10`).
 * **Trigonometry**: `SIN(x)`, `COS(x)`, `TAN(x)`, `ASIN(x)`, `ACOS(x)`,
@@ -29606,8 +29774,16 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
   `=B1/e`. `PI()` and `E()` still work as functions as well. A column that
   really carries one of these names (or, for `e`, a sheet wide enough for a
   column `E`) keeps its own meaning: the column always wins over the constant.
-* **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2)`,
-  `OR(c1, c2)`, `NOT(c)`.
+* **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2, ...)`,
+  `OR(c1, c2, ...)`, `XOR(c1, c2, ...)`, `NOT(c)`; `and` and `or` may also
+  stand between two conditions (`=IF(A1>0 and B1>0, 1, 0)`).  `IF` works out
+  only the value it gives back, so `=IF(A1=0, 0, 1/A1)` is 0 and not
+  `#DIV/0!`; without a third value it gives 0 (FALSE).
+* **Small letters or capitals**: every function and every cell can be written
+  in either - `=if(c8<0.5,0,1)` is `=IF(C8<0.5,0,1)`, and `=sum(a1:a5)` is
+  `=SUM(A1:A5)`.  The arguments may be separated by `;` as well, as in a
+  spreadsheet set to a language that writes decimal commas:
+  `=IF(C8<0.5;0;1)`.
 * **Random numbers**: `RAND()` draws a number with a **uniform**
   distribution between 0 and 1, `RAND(low, high)` one between `low` and
   `high`.  `RANDN()` draws one with a **normal** (Gaussian) distribution of
@@ -29833,12 +30009,15 @@ The width follows the column when it is renamed, is copied with
 
 The rules are simple:
 
-* **one axis per column.**  Ticking one of the two boxes clears the other
-  one, so a column is never drawn against both axes at once.
-* the **first column** always feeds one of the two X axes: `x_B` is ticked
-  when the data arrives, and clicking `x_T` moves the whole X scale - its
-  numbers and its label - **above** the plot area.  Clicking the ticked box
-  does not switch it off; the data has to have an X axis.  In a
+* **one axis per Y column.**  Ticking one of the two boxes clears the other
+  one, so a curve is never drawn against both Y axes at once.
+* the **first column** always feeds at least one of the two X axes: `x_B` is
+  ticked when the data arrives, and ticking `x_T` instead moves the whole X
+  scale - its numbers and its label - **above** the plot area.  With
+  **both** boxes ticked the same X scale is drawn **below and above** the
+  plot area: tick marks and numbers on both sides, the axis label below.
+  The last ticked box cannot be switched off; the data has to have an X
+  axis.  In a
   **histogram** that column is a sample like any other and is counted as
   well, while its `x_B` / `x_T` tick still decides whether the value scale
   is drawn below or above the bars.
@@ -30054,6 +30233,10 @@ right click menu of a cell):
 * a **formula** that reads it gets `#N/A`, and a range goes without it:
   `SUM(B1:B10)` and `AVERAGE(B1:B10)` count only the values that are in.
   (`Column Math` works on the values as they stand.)
+* a left out cell that **holds a formula** keeps showing its own number -
+  `#0.5403` - even when the cells it reads are left out with it (a whole
+  row selected and left out, say): it is worked out as if nothing were left
+  out, since its number is shown but used nowhere.
 
 **Pressing `#` again** on values that are all left out takes them back in.
 For a block that is partly in and partly out, the first press leaves all of
@@ -30394,7 +30577,10 @@ plotted, and against which axis`) give the diagram two more axes:
 * the **top X axis** is the same X scale drawn above the plot area instead
   of below it: the numbers and the axis label move up together, and with
   `No frame` the line above the plot area is the one that is drawn while
-  the one below it stays away.
+  the one below it stays away.  With `x_B` and `x_T` **both** ticked the
+  scale is drawn on both sides - tick marks and numbers below and above,
+  the label below - and `No frame` draws both lines; a double click above
+  or below the plot area opens the `X axis` page.
 
 Everything else works exactly as on the two original axes:
 
@@ -30580,6 +30766,7 @@ single step of `Edit > Undo`, sizes included.
 | `x_T` + `y_R` | the top and the right line - and nothing else |
 | `x_B` + `y_R` | the bottom and the right line; the left and the top stay away |
 | `x_B` + `y_L` + `y_R` | the bottom line and **both** vertical lines |
+| `x_B` + `x_T` + `y_L` | **both** horizontal lines and the left one |
 
 An axis that carries no curve is not only left without a frame line: its
 **numbers, tick marks and label disappear** as well, so a diagram whose
@@ -32304,6 +32491,7 @@ The numbers follow Semantic Versioning, `MAJOR.MINOR.PATCH` - see
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 1.8.1 | 2026-11-28 | **Formulas in small letters**: `=if(c8<0.5,0,1)` gave `#ERROR!`, because `if`, `and`, `or` and `not` are words of Python itself - every function now works in small letters as well as in capitals, `;` may separate the arguments (`=IF(C8<0.5;0;1)`) and a single `=` compares (`=IF(A1=1,10,20)`).  `AND`, `OR`, `XOR` and `NOT` work at last (they were in the manual but gave `#NAME?`), as do `AVG` and `INT`, and `and` / `or` may stand between two conditions.  `SUM`, `MIN`, `MAX`, `AVERAGE`, `COUNT`, `MEDIAN` and `STDEV` take single cells and several ranges (`=MIN(A1,B2)`, `=SUM(A1:A5,C1)` gave `#VALUE!`); `IF` works out only the value it gives back (`=IF(A1=0,0,1/A1)` is 0, not `#DIV/0!`); `MEDIAN` of an even number of values is the middle of the two middle ones; `ROUND` takes a 5 away from zero, as Excel does.  **A whole row left out keeps its formula numbers**: with every cell of a row left out by the `#` button, a formula cell of that row (`=cos(A12/10)`) read its left out neighbour and showed `##N/A`; a left out formula cell now shows its own number, `#0.5403`, exactly as when it is left out alone.  **The X scale below and above the plot area**: the X column may tick both `x_B` and `x_T` - tick marks and numbers are drawn on both sides (the label below), `No frame` draws both lines, and the exported matplotlib program and the `.aplt` file keep it; at least one of the two stays ticked. |
 | 1.8.0 | 2026-11-28 | **APlot from a program**: `import aplot` and `aplot.Graph(table, style="line")` make a graph without opening a window; `diagram()` changes its look (`title`, `axis`, `curve`, `surface`, `legend`, `page` - or anything of the diagram through `state`), `save` writes the `.aplt` file and `export` the pictures (PDF, PNG, SVG...), with the very code of the menu, so the graph opens in APlot as it was made.  `Graph.open` reads a saved graph, and new numbers (`graph.data = table`) keep its look, as `Update plot` does.  A script draws with the built-in settings and never reads or changes yours (`settings="user"` takes them); a mistake is an `APlotError` with a message instead of a dialog.  **Pictures from the command line**: `aplot.py --export GRAPH.aplt` writes the picture of every diagram of saved graphs, `aplot.py --template STYLE.aplt DATA.csv ...` draws data files with the look of a saved graph - one picture each, and with `--save-graph` an `.aplt` too; a file that does not fit is reported and the others are still drawn.  **Two new commands in the File menu**: `Export as APlot script...` writes the whole graph as a Python program that draws it again with APlot - change its numbers or its look and run it; `Batch export from template...` draws other data files with the look of the graph on the screen (or of a graph file) into a folder, while the window stays usable. |
 | 1.7.1 | 2026-11-27 | **A legend moved outside the plot area is on the saved picture whole**: a legend box dragged above (or beside) the graph was shown on the screen, but `Save the figure`, `Copy figure` and the thumbnail cut the picture at the edge of the plot area, so the box was cut off or missing.  The picture now takes in every legend box wherever it stands, and the exported Python program does the same. |
 | 1.7.0 | 2026-11-26 | **The style of a graph is copied onto another one**: a right click on the background of a graph offers `Copy graph style`, and on another graph `Paste graph style`.  The other graph takes over the page, the frame, the lengths and the place of the axes, every axis (line, thickness, ticks, range, scale, label, fonts), the title, the legend settings and - one by one in their order - the plot style, line, marker, colours and legend font and place of its curves; it keeps its own data, legend texts and drawings, a curve beyond those of the copied graph keeps its own style, and `Undo` takes the paste back in one step.  **The length of an axis is written beside the end that is pulled**: in cm, in inches and in per cent of the page - the units of `Frame and origin`, so the same size can be typed into another diagram - with the full numbers in the message line; an axis in space tells the three lengths `X : Y : Z`.  **One curve window for every curve**: the top of `Curve properties` lists the curves of the diagram, and choosing one shows it in the window, in the same place.  **Values are left out of the plots and the analysis without deleting them**: the new `#` button under `Add row` (and `Exclude / Include Values (#)` in the right click menu of a cell) leaves the selected values out - they stay in the sheet as `#value` in grey italics, the diagrams do not draw them (the line runs on from the neighbouring points; a left out X takes its row), the regression does not fit them, a formula reading one gets `#N/A` and a range goes without it; the button again takes them back, they move with their rows and columns, and Undo and the `.aplt` file keep them.  **A new plot style, `3D Wireframe`** (`ax.plot_wireframe`): the x, y, z columns as a net of lines in space, with the view, the axes, the ranges and the ticks of `3D Surface`; the lines in one colour or each piece in the colour of its height (with a colour bar), their number, width and style in the curve properties, the edges of triangles for scattered points, and the same net in the exported matplotlib program.  **The arrow keys keep moving the selected object on a Mac**: after a property window was used (the font size of the legends set smaller, say) and the legend boxes were arranged with the pointer, a legend box selected next did not move with the arrow keys - or with any other key - until another program had been in front and APlot again.  macOS had taken the keyboard from the diagram for a moment and never said that it had given it back, so APlot threw every key away; a click in the diagram, closing a property window and a diagram window brought to the front now take the keyboard back in that case. |

@@ -35,7 +35,7 @@ It also answers a few questions on the command line:
 
 ## Version
 
-This is **APlot 1.8.0 (2026-11-28)**.  The number is written in one place
+This is **APlot 1.8.1 (2026-11-28)**.  The number is written in one place
 only, `APP_VERSION` near the top of `aplot.py` (with `APP_VERSION_DATE`
 beside it); the About window, `python3 aplot.py --version`, APlot.app on a
 Mac and every saved `.aplt` file (`application_version` in
@@ -207,9 +207,9 @@ Installing them:
   (once) - or in Terminal `xattr -dr com.apple.quarantine
   /Applications/APlot.app`.  "Read me first.txt" in the disk image says
   this, and the Quick Look extensions are in it as an optional `.zip`.
-* **.deb**: `sudo apt install ./aplot_1.7.1_amd64.deb` (a double click
+* **.deb**: `sudo apt install ./aplot_1.8.1_amd64.deb` (a double click
   opens it in the software installer too).  **.rpm**: `sudo dnf install
-  ./aplot-1.7.1-1.x86_64.rpm` (openSUSE: `sudo zypper install
+  ./aplot-1.8.1-1.x86_64.rpm` (openSUSE: `sudo zypper install
   --allow-unsigned-rpm ...`).  APlot is then in the applications menu,
   `aplot` starts it in a terminal, and the graph files have their icon and
   picture; it lives in `/usr/lib/aplot`, and even the thumbnailer runs on
@@ -273,8 +273,8 @@ updated with the newest `aplot.py` of the `main` branch, as always.
   the `.rpm` on Fedora and the `.msi` on Windows and tests each, and only
   then publishes the release with every package at once:
 
-        git tag -a v1.7.1 -m "APlot 1.7.1"
-        git push origin v1.7.1
+        git tag -a v1.8.1 -m "APlot 1.8.1"
+        git push origin v1.8.1
 
   (`Actions > Packages > Run workflow` builds and tests everything without
   a release; the packages are then downloads of that run.)  The releases
@@ -1257,11 +1257,17 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
 `B2:D10`) are fully supported:
 
 * **Arithmetic**: `+`, `-`, `*`, `/`, `^` (exponentiation), `%`.
-* **Comparisons**: `=`, `<>`, `<`, `<=`, `>`, `>=`.
-* **Math & Statistics**: `SUM(range)`, `AVERAGE(range)` / `AVG(range)`,
-  `COUNT(range)`, `MIN(...)`, `MAX(...)`, `ABS(x)`, `ROUND(x, decimals)`,
+* **Comparisons**: `=`, `<>`, `<`, `<=`, `>`, `>=` - a single `=` compares,
+  as in Excel (`=IF(A1=0, 1, 2)`); `==` and `!=` work too.
+* **Math & Statistics**: `SUM(...)`, `AVERAGE(...)` / `AVG(...)`,
+  `COUNT(...)`, `MIN(...)`, `MAX(...)`, `MEDIAN(...)`, `STDEV(...)`,
+  `ABS(x)`, `ROUND(x, decimals)`,
   `INT(x)`, `SQRT(x)`, `POWER(base, exp)`, `EXP(x)`, `LN(x)` / `LOG(x)`,
-  `LOG10(x)`, `LOG2(x)`, `MOD(n, d)`.  A function whose name ends in digits
+  `LOG10(x)`, `LOG2(x)`, `MOD(n, d)`.  The statistics take ranges and
+  single values, as many as needed: `=MIN(A1, B2)`, `=SUM(A1:A5, C1)`,
+  `=MAX(A1:A10, C1:C10)`.  `ROUND` takes a 5 away from zero, as Excel does
+  (`ROUND(2.5, 0)` is 3), and `INT` rounds down (`INT(-2.5)` is -3).  A
+  function whose name ends in digits
   is read as a function, never as a cell (`LOG10(A1)` is the base-10
   logarithm of `A1`, not the cell `LOG10`).
 * **Trigonometry**: `SIN(x)`, `COS(x)`, `TAN(x)`, `ASIN(x)`, `ACOS(x)`,
@@ -1271,8 +1277,16 @@ Formulas begin with an equals sign (`=`). Standard Excel cell coordinates (e.g.
   `=B1/e`. `PI()` and `E()` still work as functions as well. A column that
   really carries one of these names (or, for `e`, a sheet wide enough for a
   column `E`) keeps its own meaning: the column always wins over the constant.
-* **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2)`,
-  `OR(c1, c2)`, `NOT(c)`.
+* **Logic**: `IF(condition, value_if_true, value_if_false)`, `AND(c1, c2, ...)`,
+  `OR(c1, c2, ...)`, `XOR(c1, c2, ...)`, `NOT(c)`; `and` and `or` may also
+  stand between two conditions (`=IF(A1>0 and B1>0, 1, 0)`).  `IF` works out
+  only the value it gives back, so `=IF(A1=0, 0, 1/A1)` is 0 and not
+  `#DIV/0!`; without a third value it gives 0 (FALSE).
+* **Small letters or capitals**: every function and every cell can be written
+  in either - `=if(c8<0.5,0,1)` is `=IF(C8<0.5,0,1)`, and `=sum(a1:a5)` is
+  `=SUM(A1:A5)`.  The arguments may be separated by `;` as well, as in a
+  spreadsheet set to a language that writes decimal commas:
+  `=IF(C8<0.5;0;1)`.
 * **Random numbers**: `RAND()` draws a number with a **uniform**
   distribution between 0 and 1, `RAND(low, high)` one between `low` and
   `high`.  `RANDN()` draws one with a **normal** (Gaussian) distribution of
@@ -1498,12 +1512,15 @@ The width follows the column when it is renamed, is copied with
 
 The rules are simple:
 
-* **one axis per column.**  Ticking one of the two boxes clears the other
-  one, so a column is never drawn against both axes at once.
-* the **first column** always feeds one of the two X axes: `x_B` is ticked
-  when the data arrives, and clicking `x_T` moves the whole X scale - its
-  numbers and its label - **above** the plot area.  Clicking the ticked box
-  does not switch it off; the data has to have an X axis.  In a
+* **one axis per Y column.**  Ticking one of the two boxes clears the other
+  one, so a curve is never drawn against both Y axes at once.
+* the **first column** always feeds at least one of the two X axes: `x_B` is
+  ticked when the data arrives, and ticking `x_T` instead moves the whole X
+  scale - its numbers and its label - **above** the plot area.  With
+  **both** boxes ticked the same X scale is drawn **below and above** the
+  plot area: tick marks and numbers on both sides, the axis label below.
+  The last ticked box cannot be switched off; the data has to have an X
+  axis.  In a
   **histogram** that column is a sample like any other and is counted as
   well, while its `x_B` / `x_T` tick still decides whether the value scale
   is drawn below or above the bars.
@@ -1719,6 +1736,10 @@ right click menu of a cell):
 * a **formula** that reads it gets `#N/A`, and a range goes without it:
   `SUM(B1:B10)` and `AVERAGE(B1:B10)` count only the values that are in.
   (`Column Math` works on the values as they stand.)
+* a left out cell that **holds a formula** keeps showing its own number -
+  `#0.5403` - even when the cells it reads are left out with it (a whole
+  row selected and left out, say): it is worked out as if nothing were left
+  out, since its number is shown but used nowhere.
 
 **Pressing `#` again** on values that are all left out takes them back in.
 For a block that is partly in and partly out, the first press leaves all of
@@ -2059,7 +2080,10 @@ plotted, and against which axis`) give the diagram two more axes:
 * the **top X axis** is the same X scale drawn above the plot area instead
   of below it: the numbers and the axis label move up together, and with
   `No frame` the line above the plot area is the one that is drawn while
-  the one below it stays away.
+  the one below it stays away.  With `x_B` and `x_T` **both** ticked the
+  scale is drawn on both sides - tick marks and numbers below and above,
+  the label below - and `No frame` draws both lines; a double click above
+  or below the plot area opens the `X axis` page.
 
 Everything else works exactly as on the two original axes:
 
@@ -2245,6 +2269,7 @@ single step of `Edit > Undo`, sizes included.
 | `x_T` + `y_R` | the top and the right line - and nothing else |
 | `x_B` + `y_R` | the bottom and the right line; the left and the top stay away |
 | `x_B` + `y_L` + `y_R` | the bottom line and **both** vertical lines |
+| `x_B` + `x_T` + `y_L` | **both** horizontal lines and the left one |
 
 An axis that carries no curve is not only left without a frame line: its
 **numbers, tick marks and label disappear** as well, so a diagram whose
